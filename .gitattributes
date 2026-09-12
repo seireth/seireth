@@ -1,0 +1,29 @@
+# Normalize text files to LF in the repository.
+* text=auto eol=lf
+
+# Documentation and configuration are text.
+*.md text
+*.yml text
+*.yaml text
+*.json text
+*.toml text
+*.ini text
+*.cfg text
+*.conf text
+*.txt text
+
+# Do not render common generated or binary files as source text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.woff binary
+*.woff2 binary
+
+# Keep GitHub's language statistics from counting documentation as code.
+*.md linguist-documentation
