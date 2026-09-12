@@ -1,27 +1,27 @@
 name: Feature request
-description: Propose an improvement to Seireth.
+description: Propose a new capability for Seireth.
 title: "[Feature]: "
 labels:
-  - enhancement
+  - feature
 body:
-  - type: textarea
-    id: problem
-    attributes:
-      label: Problem
-      description: What problem would this feature solve, and who experiences it?
-    validations:
-      required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed solution
-      description: Describe the behavior or workflow you are proposing.
+      label: Proposed capability
+      description: What new capability are you proposing?
     validations:
       required: true
   - type: textarea
-    id: security
+    id: problem
     attributes:
-      label: Security and authorization considerations
-      description: Explain any impact on authorization, isolation, sandboxing, evidence, or auditability.
+      label: Problem and use case
+      description: What problem would this solve, and who would use it?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any current workaround or alternative you considered.
     validations:
       required: true

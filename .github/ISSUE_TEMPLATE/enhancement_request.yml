@@ -1,0 +1,34 @@
+name: Enhancement request
+description: Suggest an improvement to an existing Seireth feature.
+title: "[Enhancement]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: existing_behavior
+    attributes:
+      label: Existing feature
+      description: Which existing feature or workflow should be improved?
+    validations:
+      required: true
+  - type: textarea
+    id: limitation
+    attributes:
+      label: Current limitation
+      description: What does not work well today, and who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Describe the improved behavior or workflow you would like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any current workaround or alternative you considered.
+    validations:
+      required: true
