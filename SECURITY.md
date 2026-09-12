@@ -2,36 +2,29 @@
 
 ## Authorized use
 
-Seireth is security-sensitive software. It is designed for authorized security validation in isolated environments.
-
-You must only use Seireth against targets for which you have explicit permission. Do not use it to scan, exploit, disrupt, or access third-party systems, public services, or production environments without written authorization and a defined scope. The project does not authorize activity against any target merely because the target is reachable.
-
-Users are responsible for configuring appropriate isolation, credentials, network restrictions, resource limits, and cleanup verification before running assessments. Automated results are not a guarantee that a target is secure or compliant.
+Seireth is intended for authorized security validation in isolated environments. Use it only against targets for which you have explicit permission and a defined scope. You are responsible for isolation, credentials, network restrictions, resource limits, and cleanup. Seireth's results are not a guarantee that a target is secure or compliant.
 
 ## Reporting a vulnerability in Seireth
 
-Please do not report security vulnerabilities through public GitHub issues.
+Do not disclose vulnerabilities in public issues. Submit them privately through GitHub's [Report a vulnerability](https://github.com/seireth/seireth/security/advisories/new) feature.
 
-Until a dedicated private reporting address is published, report vulnerabilities privately through GitHub's **Report a vulnerability** feature for this repository, if available. Include:
+Include:
 
-- A clear description of the vulnerability and its impact
-- The affected component, version, commit, or configuration
+- Affected component, version, commit, or configuration
+- Impact and security implications
 - Reproduction steps or a minimal proof of concept
-- Any required permissions, assumptions, or environmental conditions
+- Required permissions and environmental conditions
 - Suggested mitigation, if known
-- Whether the issue may expose credentials, target data, or other sensitive information
 
-Please avoid including real secrets, personal data, or unauthorized target information. Use redacted or synthetic examples wherever possible.
+Use redacted or synthetic examples. Do not include real secrets, personal data, or unauthorized target information.
 
 ## Disclosure process
 
-The maintainers will acknowledge a report when practical, investigate its impact, and coordinate a fix and disclosure timeline with the reporter. Reports may be prioritized based on exploitability, affected scope, and impact on assessment isolation, authorization, evidence, or host security.
-
-Do not publicly disclose the vulnerability until a fix or mitigation is available and a coordinated disclosure date has been agreed.
+Maintainers will validate the report, assess its impact, and coordinate remediation and disclosure with the reporter. Do not publicly disclose a vulnerability until a fix or mitigation is available and disclosure has been agreed.
 
 ## Security-sensitive areas
 
-Particular care is required for changes involving:
+Security-sensitive changes include:
 
 - Authorization and target-scope validation
 - Sandbox creation, isolation, networking, and cleanup
@@ -41,7 +34,7 @@ Particular care is required for changes involving:
 - Evidence, reports, and audit-log integrity
 - Dependency, image, and plugin execution
 
-Changes in these areas should include tests for failure paths and should fail closed when a security prerequisite cannot be verified.
+Changes in these areas must include failure-path tests and fail closed when a security prerequisite cannot be verified.
 
 ## Supported versions
 
