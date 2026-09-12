@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose an improvement to Seireth.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem would this feature solve, and who experiences it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or workflow you are proposing.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and authorization considerations
+      description: Explain any impact on authorization, isolation, sandboxing, evidence, or auditability.
+    validations:
+      required: true
