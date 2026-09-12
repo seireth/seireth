@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible problem with Seireth.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private target information, production data, or vulnerability details in this form.
+        For security vulnerabilities in Seireth, follow [SECURITY.md](https://github.com/seireth/seireth/blob/main/SECURITY.md).
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest safe, synthetic reproduction.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include relevant operating system, runtime, and deployment details.
+    validations:
+      required: true

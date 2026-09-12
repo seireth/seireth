@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-checks:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify required project files
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_files=(
+            "README.md"
+            "CONTRIBUTING.md"
+            "SECURITY.md"
+            "LICENSE"
+            ".docs/10-roadmap-and-mvp.md"
+          )
+
+          for file in "${required_files[@]}"; do
+            test -f "$file" || {
+              echo "::error file=$file::Required file is missing"
+              exit 1
+            }
+          done
+
+      - name: Check for accidentally committed environment files
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$'; then
+            echo "::error::A non-example environment file is tracked"
+            exit 1
+          fi
