@@ -1,14 +1,22 @@
 """Authentication dependencies for the HTTP API."""
 
-from fastapi import Header, HTTPException
+import secrets
+
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from .config import settings
 
+bearer_scheme = HTTPBearer(auto_error=False)
 
-def require_auth(authorization: str | None = Header(default=None)) -> str:
+
+def require_auth(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+) -> str:
     """Validate the configured bearer token for protected API operations.
 
     Args:
-        authorization: Value supplied in the HTTP ``Authorization`` header.
+        credentials: Bearer credentials supplied in the HTTP ``Authorization`` header.
 
     Returns:
         An actor label used by the API dependency system.
@@ -18,6 +26,12 @@ def require_auth(authorization: str | None = Header(default=None)) -> str:
     """
     if settings.api_key is None:
         return "local-development"
-    if authorization != f"Bearer {settings.api_key}":
-        raise HTTPException(status_code=401, detail="authentication required")
+    if credentials is None or not secrets.compare_digest(
+        credentials.credentials, settings.api_key
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return "authenticated"
