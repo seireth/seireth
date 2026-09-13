@@ -108,6 +108,13 @@ async def test_configured_api_key_requires_bearer_token(client):
         assert response.status_code == 401
         response = await client.post(
             "/api/v1/projects",
+            headers={"Authorization": "Bearer wrong-key"},
+            json={"name": "protected"},
+        )
+        assert response.status_code == 401
+        assert response.headers["www-authenticate"] == "Bearer"
+        response = await client.post(
+            "/api/v1/projects",
             headers={"Authorization": "Bearer test-key"},
             json={"name": "protected"},
         )
