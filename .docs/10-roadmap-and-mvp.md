@@ -109,6 +109,15 @@ The first MVP is complete when:
 - The platform refuses tests without valid authorization or scope.
 - Tests cover authorization, timeout, cancellation, cleanup, and failure behavior.
 
+MVP-0 now includes an injectable Docker CLI sandbox for owned demo targets.
+Each run creates an internal per-assessment network, starts the target with
+resource and privilege restrictions, uses a short-lived Python runner on the
+same network, and verifies container/network cleanup. The default remains the
+in-memory backend for local tests; Docker execution requires an explicitly
+configured backend and a trusted Docker daemon. The Docker socket is a
+high-privilege deployment boundary and is intentionally not mounted into
+target or runner containers.
+
 ---
 
 

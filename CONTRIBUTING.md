@@ -25,6 +25,8 @@ Changes affecting authorization, sandboxing, network restrictions, cleanup, secr
 As implementation is added:
 
 - Use the repository's configured formatter, linter, type checker, and test commands.
+- Run Python tools through the active environment (`python -m pytest` and
+  `python -m uvicorn ...`) so Windows and Unix setups use the same interpreter.
 - Add or update tests for behavior changes.
 - Keep error handling explicit; do not silently ignore failed authorization, cleanup, or audit operations.
 - Do not weaken secure defaults to make a test or local setup pass.

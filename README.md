@@ -6,7 +6,68 @@ Seireth is an open-source platform for performing authorized security assessment
 
 ## Status
 
-Seireth is currently in the **design and specification phase**. The repository currently contains the platform overview, architecture, security requirements, technology choices, and MVP roadmap. Implementation will be added incrementally.
+Seireth now includes a minimal MVP-0 vertical slice in `app/`.
+
+## Run MVP-0
+
+The commands below are the same on Windows, macOS, and Linux. They do not
+require activating the virtual environment:
+
+```bash
+python -m venv .venv
+python -m pip install -e ".[test]"
+python -m app serve
+python -m app verify
+python -m app test
+```
+
+Runtime settings use the `SEIRETH_` environment-variable prefix and are loaded
+from an uncommitted `.env` file when present. Copy `.env.example` to `.env` for
+local configuration. Explicit CLI options override the corresponding settings.
+For production, inject environment variables through the deployment platform
+or a secret manager instead of committing `.env`.
+
+`python -m app verify` runs the complete reachable API workflow against the
+running server and prints the created resources, findings, JSON result, and
+audit trail. Run it after `python -m app serve`. The OpenAPI UI is also
+available at `/docs`, and results can be retrieved at
+`/api/v1/assessments/{id}/results`.
+
+Docker Compose starts the API and configures the Docker sandbox backend. Build
+the deliberately vulnerable local demo image separately before running a
+Docker-backed verification. The API image uses the Docker CLI and
+the host Docker socket to create a per-assessment internal network; this is a
+privileged deployment decision for trusted development hosts. Assessments are
+restricted to `owned_demo` targets. Outside Compose, the default is the
+deterministic in-memory backend, so tests never access remote targets. Set
+`SEIRETH_SANDBOX_BACKEND=docker` and provide a local Docker CLI and daemon to
+enable it. The runner image (`SEIRETH_DOCKER_RUNNER_IMAGE`, default
+`python:3.12-slim`) must be available or pullable by Docker. The project audit
+trail is available at
+`/api/v1/projects/{id}/audit-events`.
+
+For a Docker-backed run, use a second terminal for the API workflow:
+
+```bash
+docker build -t seireth/demo-target:local ./examples/demo-target
+docker compose up --build
+python -m app verify
+```
+
+The target image is not run as a Compose service. The Docker-backed assessment
+starts a fresh target container and a short-lived
+runner container on a private internal network for each assessment, then
+removes both the target and network during cleanup. The API container requires
+access to the Docker socket to perform this orchestration; do not expose this
+Compose configuration to untrusted users or production hosts.
+
+The `serve` and `test` commands invoke Uvicorn and Pytest through the same
+Python interpreter used to install the project. To pass options through, use
+`python -m app test -k scope` or `python -m app serve --port 8080`.
+
+The virtual environment is ignored by Git. If `python` points to a system
+installation on your machine, use that installation to create and install the
+environment; the Seireth commands remain unchanged.
 
 ## Core workflow
 

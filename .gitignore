@@ -11,13 +11,12 @@
 
 .vscode/
 
-#############################
-# Build files
-#############################
-
 ############################
-# Environment files
+# Python runtime artifacts
 ############################
 
-.env*
-!.env.example
+*.db
+*.egg-info/
+.venv/
+__pycache__/
+.pytest_cache/
