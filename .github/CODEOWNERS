@@ -1,2 +1,6 @@
-# Default ownership for the repository. Update this when component owners are established.
-* @seireth
+# Default ownership for the repository.
+* @Stensgaard
+
+# Repository governance and contribution policies.
+/.github/ @Stensgaard
+/.docs/ @Stensgaard
