@@ -2,6 +2,8 @@
 
 Thank you for helping improve Seireth.
 
+Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
+
 ## Before contributing
 
 Read the project overview and architecture documents in [`.docs/`](.docs/), especially the requirements for authorization, isolation, cleanup, evidence, and auditability. Contributions must preserve the principle that assessments are authorized, scoped, and isolated.
