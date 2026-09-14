@@ -68,9 +68,37 @@ Security-test modules must not directly control the host or create unrestricted 
 
 ## 10. Repository Structure
 
+The repository is built incrementally. The current implementation is kept
+small, while the planned service boundaries are documented separately so the
+tree does not contain empty placeholder directories.
+
+### Current MVP-0 structure
+
 ```text
 seireth/
 |
+|-- app/                      # FastAPI API, models, orchestration, plugins
+|-- examples/
+|   |-- demo-target/          # Project-owned vulnerable target
+|-- tests/                    # Unit and API tests
+|-- Dockerfile
+|-- docker-compose.yml
+|-- pyproject.toml
+|-- README.md
+|-- SECURITY.md
+|-- CONTRIBUTING.md
+|-- LICENSE
+```
+
+This is the implemented source layout for MVP-0. It intentionally keeps the
+first vertical slice in one Python application while preserving clear
+boundaries between the API, persistence, orchestration, plugins, and sandbox
+interfaces.
+
+### Planned expansion
+
+```text
+seireth/
 |-- apps/
 |   |-- api/                  # FastAPI application
 |   |-- worker/               # Background assessment workers
@@ -122,8 +150,9 @@ seireth/
 |   |-- security/
 |   |-- sandboxing/
 |   |-- cra/
-|
 |-- scripts/
+|
+
 |
 |-- docker-compose.yml
 |-- README.md
@@ -132,7 +161,10 @@ seireth/
 |-- LICENSE
 ```
 
-The exact repository structure may change during implementation, but the separation between orchestration, test modules, and sandbox management should remain clear.
+New top-level areas should be introduced when they have a real implementation
+and an owner, not as placeholders. The exact repository structure may change
+during implementation, but the separation between orchestration, test modules,
+and sandbox management should remain clear.
 
 ---
 
