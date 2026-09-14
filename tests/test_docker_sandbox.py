@@ -24,7 +24,9 @@ def test_docker_sandbox_builds_restricted_private_network_commands(monkeypatch):
         return Completed()
 
     monkeypatch.setattr("app.sandbox.subprocess.run", fake_run)
-    sandbox = DockerSandbox("demo:local", target_host="demo-target", target_label="demo-target")
+    sandbox = DockerSandbox(
+        "demo:local", target_host="demo-target", target_label="demo-target"
+    )
 
     assert sandbox.execute("http://demo-target:8080").headers == {"X-Test": "ok"}
     assert sandbox.cleanup()
