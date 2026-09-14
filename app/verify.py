@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import time
 from .config import settings
 
 
@@ -38,7 +39,6 @@ def verify(base_url: str, api_key: str | None = None) -> dict:
                     "project_id": project["id"],
                     "name": "Owned demo target",
                     "url": "http://demo-target:8080",
-                    "owned_demo": True,
                 },
             ),
             200,
@@ -67,12 +67,15 @@ def verify(base_url: str, api_key: str | None = None) -> dict:
                     "profile": "passive",
                 },
             ),
-            200,
+            202,
         )
-        results = require(
-            client.get(f"/api/v1/assessments/{assessment['id']}/results"),
-            200,
-        )
+        for _ in range(50):
+            results = require(
+                client.get(f"/api/v1/assessments/{assessment['id']}/results"), 200
+            )
+            if results["status"] in {"completed", "failed", "cancelled"}:
+                break
+            time.sleep(0.1)
         audit = require(
             client.get(f"/api/v1/projects/{project['id']}/audit-events"),
             200,

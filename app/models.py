@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
-from sqlalchemy import Boolean, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .db import Base
 
@@ -28,6 +28,7 @@ class Project(Base):
     __tablename__ = "projects"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name: Mapped[str] = mapped_column(String(200))
+    owner_actor: Mapped[str] = mapped_column(String(200), default="local-development", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     targets: Mapped[list["Target"]] = relationship(cascade="all, delete-orphan")
     scopes: Mapped[list["AuthorizationScope"]] = relationship(cascade="all, delete-orphan")
@@ -42,7 +43,6 @@ class Target(Base):
     name: Mapped[str] = mapped_column(String(200))
     image: Mapped[str] = mapped_column(String(300))
     url: Mapped[str] = mapped_column(String(500))
-    owned_demo: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class AuthorizationScope(Base):

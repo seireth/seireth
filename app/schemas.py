@@ -13,9 +13,8 @@ class TargetCreate(BaseModel):
 
     project_id: str
     name: str = Field(min_length=1, max_length=200)
-    image: str = "seireth/demo-target:local"
+    image: str | None = None
     url: AnyHttpUrl = "http://demo-target:8080"
-    owned_demo: bool = False
 
 
 class ScopeCreate(BaseModel):

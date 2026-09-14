@@ -24,16 +24,25 @@ def test_docker_sandbox_builds_restricted_private_network_commands(monkeypatch):
         return Completed()
 
     monkeypatch.setattr("app.sandbox.subprocess.run", fake_run)
-    sandbox = DockerSandbox("demo:local", target_host="demo-target")
+    sandbox = DockerSandbox("demo:local", target_host="demo-target", target_label="demo-target")
 
     assert sandbox.execute("http://demo-target:8080").headers == {"X-Test": "ok"}
     assert sandbox.cleanup()
     assert any("--internal" in command for command in calls)
     target = next(command for command in calls if command[1:3] == ["run", "-d"])
+    runner = next(command for command in calls if command[1:3] == ["run", "--rm"])
+    assert "--name" in target
+    assert any(value.startswith("seireth-target-demo-target-") for value in target)
+    assert any(value.startswith("seireth-assessment-runner-") for value in runner)
+    assert "--label" not in target
+    assert "--label" not in runner
     assert "--read-only" in target
     assert "--cap-drop=ALL" in target
     assert "--security-opt=no-new-privileges" in target
     assert "--network=host" not in target
+    removed = [command for command in calls if command[1:3] == ["rm", "-f"]]
+    assert any(sandbox.runner_name in command for command in removed)
+    assert any(sandbox.target_name in command for command in removed)
 
 
 def test_docker_sandbox_cleans_up_when_target_start_fails(monkeypatch):
@@ -59,3 +68,10 @@ def test_docker_sandbox_cleans_up_when_target_start_fails(monkeypatch):
     assert sandbox.cleanup()
     assert any(command[1:3] == ["rm", "-f"] for command in calls)
     assert any(command[1:3] == ["network", "rm"] for command in calls)
+
+
+def test_docker_sandbox_rejects_network_names_that_would_exceed_docker_limit():
+    import pytest
+
+    with pytest.raises(ValueError):
+        DockerSandbox("demo:local", network_prefix="a" * 51)

@@ -11,8 +11,12 @@ class Settings(BaseSettings):
     api_base_url: str = "http://127.0.0.1:8000"
     database_url: str = "sqlite:///./seireth.db"
     api_key: str | None = None
+    environment: str = "local"
+    allow_local_auth: bool = True
     sandbox_backend: str = "inmemory"
     docker_runner_image: str = "python:3.12-slim"
+    docker_target_image: str = "seireth/demo-target:local"
+    docker_allowed_target_images: list[str] = ["seireth/demo-target:local"]
     docker_memory: str = "256m"
     docker_cpus: float = 0.5
     docker_pids_limit: int = 64

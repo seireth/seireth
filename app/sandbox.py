@@ -53,6 +53,7 @@ class InMemorySandbox:
 
 _NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 _IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,254}$")
+_NETWORK_PREFIX = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,49}$")
 _FETCH = """\
 import json, sys, time, urllib.request
 url, timeout = sys.argv[1], float(sys.argv[2])
@@ -86,12 +87,14 @@ class DockerSandbox:
         pids_limit: int = 64,
         network_prefix: str = "seireth-assessment",
         target_host: str | None = None,
+        target_label: str = "target",
+        assessment_id: str | None = None,
         target_user: str = "65532:65532",
         command_timeout: float = 15,
     ):
         if not _IMAGE.fullmatch(image) or not _IMAGE.fullmatch(runner_image):
             raise ValueError("invalid Docker image name")
-        if not _NAME.fullmatch(network_prefix):
+        if not _NETWORK_PREFIX.fullmatch(network_prefix):
             raise ValueError("invalid Docker network prefix")
         self.image, self.runner_image = image, runner_image
         self.memory, self.cpus, self.pids_limit = memory, cpus, pids_limit
@@ -99,7 +102,14 @@ class DockerSandbox:
         self.command_timeout = command_timeout
         suffix = uuid4().hex[:12]
         self.network_name = f"{network_prefix}-{suffix}"
-        self.target_name = f"{self.network_name}-target"
+        label = re.sub(r"[^a-z0-9]+", "-", target_label.lower()).strip("-") or "target"
+        label = label[:24].rstrip("-")
+        assessment_label = re.sub(
+            r"[^a-z0-9]+", "-", (assessment_id or suffix).lower()
+        ).strip("-")[:12]
+        self.assessment_label = assessment_label
+        self.target_name = f"seireth-target-{label}-{assessment_label}"
+        self.runner_name = f"seireth-assessment-runner-{assessment_label}"
         self.target_host = target_host
         self.container_id: str | None = None
         self._network_created = False
@@ -145,7 +155,10 @@ class DockerSandbox:
 
         try:
             target_url = self._target_url(url)
-            created = self._run(["network", "create", "--internal", self.network_name],
+            created = self._run([
+                "network", "create", "--internal",
+                self.network_name,
+            ],
                                 self.command_timeout)
             if created.returncode:
                 raise RuntimeError(created.stderr.strip() or "unable to create sandbox network")
@@ -159,7 +172,8 @@ class DockerSandbox:
                 raise RuntimeError(target.stderr.strip() or "unable to start target container")
             self.container_id = target.stdout.strip()
             runner = self._run([
-                "run", "--rm", "--network", self.network_name, *self._restricted_args(),
+                "run", "--rm", "--name", self.runner_name, "--network", self.network_name,
+                *self._restricted_args(),
                 self.runner_image, "python", "-c", _FETCH, target_url, str(timeout_seconds),
             ], max(self.command_timeout, timeout_seconds + 5))
             if runner.returncode:
@@ -177,10 +191,10 @@ class DockerSandbox:
 
         ok = True
         try:
-            if self.container_id or self.target_name:
-                result = self._run(["rm", "-f", self.target_name], self.command_timeout)
+            for container_name in (self.runner_name, self.target_name):
+                result = self._run(["rm", "-f", container_name], self.command_timeout)
                 ok = ok and result.returncode in (0, 1)
-                self.container_id = None
+            self.container_id = None
             if self._network_created:
                 result = self._run(["network", "rm", self.network_name], self.command_timeout)
                 ok = ok and result.returncode in (0, 1)

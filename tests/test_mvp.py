@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 import pytest_asyncio
+import asyncio
 
 from app.config import settings
 from app.main import app
@@ -25,7 +26,6 @@ async def test_scope_is_required(client):
         "project_id": project["id"],
         "name": "demo",
         "url": "http://demo-target:8080",
-        "owned_demo": True,
     })).json()
     response = await client.post("/api/v1/assessments", json={
         "project_id": project["id"],
@@ -42,7 +42,6 @@ async def test_passive_assessment_returns_json_and_cleanup(client):
         "project_id": project["id"],
         "name": "demo",
         "url": "http://demo-target:8080",
-        "owned_demo": True,
     })).json()
     scope = (await client.post("/api/v1/authorization-scopes", json={
         "project_id": project["id"],
@@ -57,11 +56,16 @@ async def test_passive_assessment_returns_json_and_cleanup(client):
         "target_id": target["id"],
         "scope_id": scope["id"],
     })
-    assert result.status_code == 200
-    assert result.json()["status"] == "completed"
-    report = (
-        await client.get(f"/api/v1/assessments/{result.json()['id']}/results")
-    ).json()
+    assert result.status_code == 202
+    assert result.headers["location"].endswith(result.json()["id"])
+    for _ in range(50):
+        report = (
+            await client.get(f"/api/v1/assessments/{result.json()['id']}/results")
+        ).json()
+        if report["status"] != "queued" and report["status"] != "running":
+            break
+        await asyncio.sleep(0.01)
+    assert report["status"] == "completed"
     assert report["result"]["cleanup_verified"] is True
     assert report["findings"]
     audit = (
@@ -83,7 +87,6 @@ async def test_expired_scope_is_rejected(client):
         "project_id": project["id"],
         "name": "demo",
         "url": "http://demo-target:8080",
-        "owned_demo": True,
     })).json()
     scope = await client.post("/api/v1/authorization-scopes", json={
         "project_id": project["id"],
@@ -121,3 +124,59 @@ async def test_configured_api_key_requires_bearer_token(client):
         assert response.status_code == 200
     finally:
         settings.api_key = original_key
+
+
+@pytest.mark.asyncio
+async def test_project_resources_are_isolated_between_api_keys(client):
+    original_key = settings.api_key
+    settings.api_key = "owner-key"
+    try:
+        project = (
+            await client.post(
+                "/api/v1/projects",
+                headers={"Authorization": "Bearer owner-key"},
+                json={"name": "private"},
+            )
+        ).json()
+        settings.api_key = "other-key"
+        response = await client.get(
+            f"/api/v1/projects/{project['id']}/audit-events",
+            headers={"Authorization": "Bearer other-key"},
+        )
+        assert response.status_code == 403
+    finally:
+        settings.api_key = original_key
+
+
+@pytest.mark.asyncio
+async def test_target_image_must_be_allowlisted(client):
+    project = (await client.post("/api/v1/projects", json={"name": "images"})).json()
+    response = await client.post("/api/v1/targets", json={
+        "project_id": project["id"],
+        "name": "untrusted",
+        "image": "attacker/image:latest",
+        "url": "http://demo-target:8080",
+    })
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_scope_cannot_escape_target_origin_or_path(client):
+    project = (await client.post("/api/v1/projects", json={"name": "scope"})).json()
+    target = (await client.post("/api/v1/targets", json={
+        "project_id": project["id"],
+        "name": "demo",
+        "url": "https://example.test/app",
+    })).json()
+    for allowed_url in (
+        "https://other.example/app",
+        "https://example.test/application",
+        "https://example.test/app/../secret",
+    ):
+        response = await client.post("/api/v1/authorization-scopes", json={
+            "project_id": project["id"],
+            "target_id": target["id"],
+            "allowed_url": allowed_url,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        })
+        assert response.status_code == 400

@@ -20,5 +20,9 @@ SessionLocal = sessionmaker(engine, expire_on_commit=False)
 def get_db() -> Generator[Session, None, None]:
     """Yield a database session and close it after the request completes."""
 
+    # Lifespan startup is used by the server; this lazy fallback also supports
+    # ASGI test transports that do not run lifespan events.
+    from .migration import migrate
+    migrate()
     with SessionLocal() as db:
         yield db

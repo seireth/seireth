@@ -1,6 +1,7 @@
 """Authentication dependencies for the HTTP API."""
 
 import secrets
+import hashlib
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -24,8 +25,10 @@ def require_auth(
     Raises:
         HTTPException: If authentication is configured and the token is invalid.
     """
-    if settings.api_key is None:
+    if settings.api_key is None and settings.environment == "local" and settings.allow_local_auth:
         return "local-development"
+    if settings.api_key is None:
+        raise HTTPException(status_code=503, detail="authentication is not configured")
     if credentials is None or not secrets.compare_digest(
         credentials.credentials, settings.api_key
     ):
@@ -34,4 +37,6 @@ def require_auth(
             detail="authentication required",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return "authenticated"
+    # Keep the bearer secret out of persistence while giving each credential
+    # a stable actor identity for project authorization.
+    return "actor:" + hashlib.sha256(credentials.credentials.encode()).hexdigest()[:24]
