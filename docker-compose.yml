@@ -8,7 +8,7 @@ services:
     environment:
       SEIRETH_DATABASE_URL: sqlite:////data/seireth.db
       SEIRETH_SANDBOX_BACKEND: docker
-      SEIRETH_DOCKER_RUNNER_IMAGE: python:3.12-slim
+      SEIRETH_DOCKER_RUNNER_IMAGE: python:3.14-slim
     ports: ["8000:8000"]
     volumes:
       - seireth-data:/data

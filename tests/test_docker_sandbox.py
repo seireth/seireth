@@ -25,7 +25,10 @@ def test_docker_sandbox_builds_restricted_private_network_commands(monkeypatch):
 
     monkeypatch.setattr("app.sandbox.subprocess.run", fake_run)
     sandbox = DockerSandbox(
-        "demo:local", target_host="demo-target", target_label="demo-target"
+        "demo:local",
+        runner_image="python:3.14-slim",
+        target_host="demo-target",
+        target_label="demo-target",
     )
 
     assert sandbox.execute("http://demo-target:8080").headers == {"X-Test": "ok"}
@@ -59,7 +62,9 @@ def test_docker_sandbox_cleans_up_when_target_start_fails(monkeypatch):
         return Completed()
 
     monkeypatch.setattr("app.sandbox.subprocess.run", fake_run)
-    sandbox = DockerSandbox("demo:local", target_host="demo-target")
+    sandbox = DockerSandbox(
+        "demo:local", runner_image="python:3.14-slim", target_host="demo-target"
+    )
 
     try:
         sandbox.execute("http://demo-target:8080")
@@ -76,4 +81,6 @@ def test_docker_sandbox_rejects_network_names_that_would_exceed_docker_limit():
     import pytest
 
     with pytest.raises(ValueError):
-        DockerSandbox("demo:local", network_prefix="a" * 51)
+        DockerSandbox(
+            "demo:local", runner_image="python:3.14-slim", network_prefix="a" * 51
+        )

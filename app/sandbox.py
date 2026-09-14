@@ -81,7 +81,7 @@ class DockerSandbox:
         self,
         image: str,
         *,
-        runner_image: str = "python:3.12-slim",
+        runner_image: str,
         memory: str = "256m",
         cpus: float = 0.5,
         pids_limit: int = 64,

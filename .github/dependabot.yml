@@ -24,3 +24,11 @@ updates:
     labels:
       - dependencies
       - docker
+  # Docker image used by the example target
+  - package-ecosystem: docker
+    directory: /examples/demo-target
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - docker
