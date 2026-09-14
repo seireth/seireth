@@ -5,7 +5,7 @@ environments. MVP-0 supports passive HTTP security-header checks.
 
 ## Requirements
 
-- Python 3.14
+- Python 3.11+
 - Docker Desktop for Docker-backed assessments
 
 ## Local setup
