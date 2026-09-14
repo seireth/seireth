@@ -24,12 +24,21 @@ def security_headers(sandbox: Sandbox, url: str) -> list[PluginFinding]:
     """
 
     headers = {k.lower(): v for k, v in sandbox.execute(url).headers.items()}
-    required = {"x-content-type-options": "Missing X-Content-Type-Options header",
-                "content-security-policy": "Missing Content-Security-Policy header",
-                "x-frame-options": "Missing X-Frame-Options header"}
+    required = {
+        "x-content-type-options": "Missing X-Content-Type-Options header",
+        "content-security-policy": "Missing Content-Security-Policy header",
+        "x-frame-options": "Missing X-Frame-Options header",
+    }
     return [
-        PluginFinding(f"Missing security header: {name}", "medium", message,
-                      {"header": name, "url": url})
-        for name, message in required.items() if name not in headers
+        PluginFinding(
+            f"Missing security header: {name}",
+            "medium",
+            message,
+            {"header": name, "url": url},
+        )
+        for name, message in required.items()
+        if name not in headers
     ]
+
+
 """Security-test plugins and their normalized finding types."""

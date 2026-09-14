@@ -41,4 +41,6 @@ class AssessmentOut(BaseModel):
     id: str
     status: str
     result: dict | None = None
+
+
 """Pydantic request and response schemas for the API."""

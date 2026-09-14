@@ -26,19 +26,27 @@ class Project(Base):
     """A project groups targets, authorization, and assessment activity."""
 
     __tablename__ = "projects"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
     name: Mapped[str] = mapped_column(String(200))
-    owner_actor: Mapped[str] = mapped_column(String(200), default="local-development", index=True)
+    owner_actor: Mapped[str] = mapped_column(
+        String(200), default="local-development", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     targets: Mapped[list["Target"]] = relationship(cascade="all, delete-orphan")
-    scopes: Mapped[list["AuthorizationScope"]] = relationship(cascade="all, delete-orphan")
+    scopes: Mapped[list["AuthorizationScope"]] = relationship(
+        cascade="all, delete-orphan"
+    )
 
 
 class Target(Base):
     """An authorized software target that may be assessed."""
 
     __tablename__ = "targets"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     image: Mapped[str] = mapped_column(String(300))
@@ -49,7 +57,9 @@ class AuthorizationScope(Base):
     """A time-bounded URL scope authorizing testing of a target."""
 
     __tablename__ = "authorization_scopes"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     target_id: Mapped[str] = mapped_column(ForeignKey("targets.id"))
     allowed_url: Mapped[str] = mapped_column(String(500))
@@ -60,7 +70,9 @@ class Assessment(Base):
     """A single execution of a selected assessment profile."""
 
     __tablename__ = "assessments"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     target_id: Mapped[str] = mapped_column(ForeignKey("targets.id"))
     scope_id: Mapped[str] = mapped_column(ForeignKey("authorization_scopes.id"))
@@ -76,7 +88,9 @@ class Finding(Base):
     """A normalized security finding produced by an assessment."""
 
     __tablename__ = "findings"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
     assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id"), index=True)
     plugin: Mapped[str] = mapped_column(String(100))
     title: Mapped[str] = mapped_column(String(300))
@@ -88,7 +102,9 @@ class Evidence(Base):
     """Evidence captured while validating an assessment finding."""
 
     __tablename__ = "evidence"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
     assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id"), index=True)
     kind: Mapped[str] = mapped_column(String(100))
     data: Mapped[dict] = mapped_column(JSON)
@@ -98,10 +114,14 @@ class AuditEvent(Base):
     """Append-oriented record of a security-sensitive platform action."""
 
     __tablename__ = "audit_events"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
     project_id: Mapped[str] = mapped_column(String(36), index=True)
     action: Mapped[str] = mapped_column(String(100))
     resource_id: Mapped[str] = mapped_column(String(36))
     details: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 """SQLAlchemy persistence models for the MVP-0 domain."""
