@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     environment: str
     sandbox_backend: str
 
-    docker_runner_image: str = "python:3.12-slim"
+    docker_runner_image: str = "python:3.14-slim"
     docker_target_image: str
     docker_allowed_target_images: list[str]
 
