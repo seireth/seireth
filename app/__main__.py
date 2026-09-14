@@ -8,10 +8,8 @@ import sys
 from .config import settings
 from .verify import verify
 
-
 def run(command: list[str]) -> int:
     return subprocess.call([sys.executable, "-m", *command])
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -29,7 +27,6 @@ def main() -> int:
 
     check = subparsers.add_parser("verify", help="Run the MVP-0 API workflow")
     check.add_argument("--base-url", default=None)
-    check.add_argument("--api-key")
 
     args = parser.parse_args()
     if args.command == "serve":
@@ -49,7 +46,6 @@ def main() -> int:
         print(json.dumps(
             verify(
                 args.base_url if args.base_url is not None else settings.api_base_url,
-                args.api_key if args.api_key is not None else settings.api_key,
             ),
             indent=2,
             default=str,
@@ -58,7 +54,6 @@ def main() -> int:
         print(f"verification failed: {error}", file=sys.stderr)
         return 1
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

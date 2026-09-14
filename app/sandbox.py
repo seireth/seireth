@@ -120,16 +120,22 @@ class DockerSandbox:
 
         try:
             return subprocess.run(
-                ["docker", *args], capture_output=True, text=True,
-                timeout=timeout, check=False,
+                ["docker", *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"docker command failed: {exc}") from exc
 
     def _restricted_args(self) -> list[str]:
         return [
-            "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-            f"--memory={self.memory}", f"--cpus={self.cpus}",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            f"--memory={self.memory}",
+            f"--cpus={self.cpus}",
             f"--pids-limit={self.pids_limit}",
             "--tmpfs=/tmp:rw,noexec,nosuid,size=16m",
         ]
@@ -147,35 +153,74 @@ class DockerSandbox:
             self.target_host = parsed.hostname
         if parsed.hostname != self.target_host:
             raise ValueError("URL host is outside the registered target")
-        return urlunsplit((parsed.scheme, f"target:{parsed.port}" if parsed.port else "target",
-                           parsed.path, parsed.query, parsed.fragment))
+        return urlunsplit(
+            (
+                parsed.scheme,
+                f"target:{parsed.port}" if parsed.port else "target",
+                parsed.path,
+                parsed.query,
+                parsed.fragment,
+            )
+        )
 
     def execute(self, url: str, timeout_seconds: float = 5) -> SandboxResult:
         """Create the private network, fetch headers from the target, and retain cleanup state."""
 
         try:
             target_url = self._target_url(url)
-            created = self._run([
-                "network", "create", "--internal",
-                self.network_name,
-            ],
-                                self.command_timeout)
+            created = self._run(
+                [
+                    "network",
+                    "create",
+                    "--internal",
+                    self.network_name,
+                ],
+                self.command_timeout,
+            )
             if created.returncode:
-                raise RuntimeError(created.stderr.strip() or "unable to create sandbox network")
+                raise RuntimeError(
+                    created.stderr.strip() or "unable to create sandbox network"
+                )
             self._network_created = True
-            target = self._run([
-                "run", "-d", "--name", self.target_name, "--network", self.network_name,
-                "--network-alias", "target", *self._restricted_args(),
-                *(["--user", self.target_user] if self.target_user else []), self.image,
-            ], self.command_timeout)
+            target = self._run(
+                [
+                    "run",
+                    "-d",
+                    "--name",
+                    self.target_name,
+                    "--network",
+                    self.network_name,
+                    "--network-alias",
+                    "target",
+                    *self._restricted_args(),
+                    *(["--user", self.target_user] if self.target_user else []),
+                    self.image,
+                ],
+                self.command_timeout,
+            )
             if target.returncode:
-                raise RuntimeError(target.stderr.strip() or "unable to start target container")
+                raise RuntimeError(
+                    target.stderr.strip() or "unable to start target container"
+                )
             self.container_id = target.stdout.strip()
-            runner = self._run([
-                "run", "--rm", "--name", self.runner_name, "--network", self.network_name,
-                *self._restricted_args(),
-                self.runner_image, "python", "-c", _FETCH, target_url, str(timeout_seconds),
-            ], max(self.command_timeout, timeout_seconds + 5))
+            runner = self._run(
+                [
+                    "run",
+                    "--rm",
+                    "--name",
+                    self.runner_name,
+                    "--network",
+                    self.network_name,
+                    *self._restricted_args(),
+                    self.runner_image,
+                    "python",
+                    "-c",
+                    _FETCH,
+                    target_url,
+                    str(timeout_seconds),
+                ],
+                max(self.command_timeout, timeout_seconds + 5),
+            )
             if runner.returncode:
                 raise RuntimeError(runner.stderr.strip() or "runner failed")
             headers = json.loads(runner.stdout)
@@ -196,9 +241,13 @@ class DockerSandbox:
                 ok = ok and result.returncode in (0, 1)
             self.container_id = None
             if self._network_created:
-                result = self._run(["network", "rm", self.network_name], self.command_timeout)
+                result = self._run(
+                    ["network", "rm", self.network_name], self.command_timeout
+                )
                 ok = ok and result.returncode in (0, 1)
-                inspect = self._run(["network", "inspect", self.network_name], self.command_timeout)
+                inspect = self._run(
+                    ["network", "inspect", self.network_name], self.command_timeout
+                )
                 ok = ok and inspect.returncode != 0
                 self._network_created = False
         except RuntimeError:

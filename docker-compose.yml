@@ -3,6 +3,8 @@ name: seireth
 services:
   api:
     build: .
+    env_file:
+      - .env
     environment:
       SEIRETH_DATABASE_URL: sqlite:////data/seireth.db
       SEIRETH_SANDBOX_BACKEND: docker

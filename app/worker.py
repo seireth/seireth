@@ -1,9 +1,5 @@
-"""Process-local assessment dispatcher with persisted lifecycle state.
+"""Process-local assessment dispatcher with persisted lifecycle state."""
 
-The database record is the durable queue entry. A later deployment can replace
-the dispatcher with a separate worker process without changing the API
-contract.
-"""
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from threading import Event, Lock
@@ -25,7 +21,9 @@ class AssessmentWorker:
     def __init__(self, timeout_seconds: float):
         self.timeout_seconds = timeout_seconds
         self.cancel_event = Event()
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="seireth-test")
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="seireth-test"
+        )
 
     def cancel(self) -> None:
         self.cancel_event.set()
@@ -66,7 +64,8 @@ class AssessmentDispatcher:
     def recover(self) -> None:
         with SessionLocal() as db:
             ids = [
-                item.id for item in db.query(models.Assessment)
+                item.id
+                for item in db.query(models.Assessment)
                 .filter(models.Assessment.status.in_(("queued", "running")))
                 .all()
             ]
@@ -77,22 +76,35 @@ class AssessmentDispatcher:
         try:
             with SessionLocal() as db:
                 assessment = db.get(models.Assessment, assessment_id)
-                if not assessment or assessment.status == "cancelled" or cancel_event.is_set():
+                if (
+                    not assessment
+                    or assessment.status == "cancelled"
+                    or cancel_event.is_set()
+                ):
                     return
                 target = db.get(models.Target, assessment.target_id)
                 scope = db.get(models.AuthorizationScope, assessment.scope_id)
                 if not target or not scope:
                     assessment.status = "failed"
-                    assessment.result = {"error": "assessment resources are unavailable"}
+                    assessment.result = {
+                        "error": "assessment resources are unavailable"
+                    }
                     db.commit()
                     return
                 try:
                     run_assessment(
-                        db, assessment, scope.allowed_url, target.image, target.name,
+                        db,
+                        assessment,
+                        scope.allowed_url,
+                        target.image,
+                        target.name,
                         cancel_event=cancel_event,
                     )
                 except Exception:
-                    logger.exception("assessment worker failed", extra={"assessment_id": assessment_id})
+                    logger.exception(
+                        "assessment worker failed",
+                        extra={"assessment_id": assessment_id},
+                    )
                     assessment.status = "failed"
                     assessment.result = {
                         "sandbox_backend": settings.sandbox_backend,
@@ -104,21 +116,26 @@ class AssessmentDispatcher:
                     assessment.result = {
                         "sandbox_backend": settings.sandbox_backend,
                         "cleanup_verified": bool(
-                            assessment.result and assessment.result.get("cleanup_verified")
+                            assessment.result
+                            and assessment.result.get("cleanup_verified")
                         ),
                         "error": "assessment cancelled",
                     }
-                    db.add(models.AuditEvent(
-                        project_id=assessment.project_id,
-                        action="assessment.cancelled",
-                        resource_id=assessment.id,
-                    ))
+                    db.add(
+                        models.AuditEvent(
+                            project_id=assessment.project_id,
+                            action="assessment.cancelled",
+                            resource_id=assessment.id,
+                        )
+                    )
                 else:
-                    db.add(models.AuditEvent(
-                        project_id=assessment.project_id,
-                        action=f"assessment.{assessment.status}",
-                        resource_id=assessment.id,
-                    ))
+                    db.add(
+                        models.AuditEvent(
+                            project_id=assessment.project_id,
+                            action=f"assessment.{assessment.status}",
+                            resource_id=assessment.id,
+                        )
+                    )
                 db.commit()
         finally:
             with self._lock:

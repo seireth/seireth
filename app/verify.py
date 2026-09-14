@@ -22,11 +22,10 @@ def require(response: httpx.Response, expected: int) -> dict:
     return response.json()
 
 
-def verify(base_url: str, api_key: str | None = None) -> dict:
+def verify(base_url: str) -> dict:
     """Run the complete reachable MVP-0 workflow against a running API."""
 
-    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-    with httpx.Client(base_url=base_url, headers=headers, timeout=10) as client:
+    with httpx.Client(base_url=base_url, timeout=10) as client:
         require(client.get("/health"), 200)
         project = require(
             client.post("/api/v1/projects", json={"name": "MVP-0 verification"}),
@@ -109,7 +108,6 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=settings.api_base_url)
-    parser.add_argument("--api-key")
     args = parser.parse_args()
-    print(json.dumps(verify(args.base_url, args.api_key), indent=2, default=str))
+    print(json.dumps(verify(args.base_url), indent=2, default=str))
     return 0
