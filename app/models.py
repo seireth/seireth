@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
-from sqlalchemy import DateTime, ForeignKey, JSON, String, Text
+
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from .db import Base
 
 

@@ -6,7 +6,7 @@ Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 
 ## Before contributing
 
-Read the project overview and architecture documents in [`.docs/`](.docs/), especially the requirements for authorization, isolation, cleanup, evidence, and auditability. Contributions must preserve the principle that assessments are authorized, scoped, and isolated.
+Read the [architecture](docs/architecture.md) and [security model](docs/security-model.md), especially the boundaries around authorization, isolation, cleanup, evidence, and auditability. Contributions must preserve the principle that assessments are authorized, scoped, and isolated.
 
 ## Proposing changes
 
@@ -22,9 +22,45 @@ Changes affecting authorization, sandboxing, network restrictions, cleanup, secr
 
 ## Development expectations
 
-As implementation is added:
+Use Python 3.14 and an activated virtual environment. Install the development tools:
 
-- Use the repository's configured formatter, linter, type checker, and test commands.
+```bash
+python -m pip install -e ".[test,quality,security]"
+```
+
+Run the same fast checks as CI:
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+```
+
+Tests set their own environment and use a temporary SQLite database, independent
+of your `.env` and development data. For automatic import/lint fixes and formatting:
+
+```bash
+python -m ruff check --fix .
+python -m ruff format .
+```
+
+Audit your development environment's installed dependencies with:
+
+```bash
+python -m pip_audit --skip-editable
+```
+
+The security workflow resolves runtime dependencies in a separate environment,
+excluding test and audit tools from its report. It runs on PRs, pushes to `main`,
+weekly, and on demand. Audit errors and known vulnerabilities fail the job.
+
+For sandbox changes, run the [real Docker walkthrough](docs/getting-started.md)
+and check that no assessment containers or networks remain. CI runs this on a
+disposable Docker daemon and uploads verification output and diagnostic logs.
+
+Development expectations:
+
+- Use the repository's configured formatter, linter, and test commands.
 - Run Python tools through the active environment (`python -m pytest` and
   `python -m uvicorn ...`) so Windows and Unix setups use the same interpreter.
 - Add or update tests for behavior changes.

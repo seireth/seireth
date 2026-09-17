@@ -3,4 +3,4 @@
 
 # Repository governance and contribution policies.
 /.github/ @Stensgaard
-/.docs/ @Stensgaard
+/docs/ @Stensgaard

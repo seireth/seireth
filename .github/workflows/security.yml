@@ -1,0 +1,40 @@
+name: Dependency security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependencies:
+    name: Audit Python runtime dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - name: Resolve runtime separately from audit tools
+        run: |
+          python -m venv "$RUNNER_TEMP/seireth-runtime"
+          "$RUNNER_TEMP/seireth-runtime/bin/python" -m pip install .
+          "$RUNNER_TEMP/seireth-runtime/bin/python" -m pip freeze --exclude seireth > "$RUNNER_TEMP/runtime-requirements.txt"
+          python -m pip install ".[security]"
+      - name: Audit resolved dependencies
+        run: python -m pip_audit --no-deps --disable-pip -r "$RUNNER_TEMP/runtime-requirements.txt" --format json --output dependency-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-audit
+          path: dependency-audit.json
+          retention-days: 7

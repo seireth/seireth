@@ -5,8 +5,9 @@ It can later be replaced by Alembic without changing application imports.
 """
 
 from sqlalchemy import inspect, text
-from .db import Base, engine
+
 from . import models  # noqa: F401 - register mapped tables
+from .db import Base, engine
 
 
 def migrate() -> None:
