@@ -1,138 +1,144 @@
-# Seireth
+<p align="center">
+  <img src="docs/assets/seireth-logo.png" alt="SEIRETH" width="240">
+</p>
 
-Seireth runs authorized, bounded security assessments in isolated
-environments. MVP-0 supports passive HTTP security-header checks.
+<h1 align="center">SEIRETH</h1>
 
-## Requirements
+<p align="center">Authorized security checks. Disposable environments. Verified cleanup.</p>
 
-- Python 3.11+
-- Docker Desktop for Docker-backed assessments
+<p align="center">
+  <a href="https://github.com/seireth/seireth/actions/workflows/ci.yml"><img src="https://github.com/seireth/seireth/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/seireth/seireth/actions/workflows/security.yml"><img src="https://github.com/seireth/seireth/actions/workflows/security.yml/badge.svg" alt="Dependency security"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white" alt="Python 3.14"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue" alt="Apache License 2.0"></a>
+</p>
 
-## Local setup
+SEIRETH runs bounded security assessments against authorized containerized
+targets, records findings and audit events, and destroys the assessment
+environment afterward.
 
-Create a virtual environment, install the project, and create the local
-configuration file:
+**MVP-0:** a working local API with one passive HTTP security-header plugin.
+It uses SQLite and a process-local worker. It is not a multi-user production
+service or a general internet scanner.
 
-```bash
-python -m venv .venv
-python -m pip install -e ".[test]"
-copy .env.example .env       # Windows
-cp .env.example .env         # macOS/Linux
+## How it works
+
+```mermaid
+flowchart LR
+    A[Register & authorize] --> B[Queue assessment]
+    B --> C[Run sandbox checks]
+    C --> D[Destroy & verify cleanup]
+    D --> E[Record outcome]
 ```
 
-Run the API:
+- **Bounded requests:** project, target, origin, path, and expiry checks.
+- **Operator-controlled images:** requests select only allowlisted target images.
+- **Disposable Docker resources:** a private network, restricted target, and runner.
+- **Queryable outcomes:** JSON findings, cleanup status, and an audit trail.
+
+## Quick start
+
+Install **Python 3.14**. Create and activate a virtual environment:
+
+**Windows PowerShell**
+
+```powershell
+py -3.14 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+Copy-Item .env.example .env
+```
+
+**macOS / Linux**
 
 ```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
+cp .env.example .env
+```
+
+Install and start the API:
+
+```bash
+python -m pip install -e ".[test,quality,security]"
 python -m app serve
 ```
 
-Run the tests:
+Open [the API explorer](http://127.0.0.1:8000/docs). In a second terminal with
+the same virtual environment activated, run:
 
 ```bash
-python -m app test
+python -m app verify --expected-backend inmemory
 ```
 
-Run the end-to-end verification workflow:
+The default `inmemory` backend **simulates header responses without network
+access**. It verifies the API workflow; it does not assess a real website.
+
+## Run a real Docker assessment
+
+With Docker Desktop or Docker Engine running, stop the local API to free port
+8000. Keep the `.env` file created above, then run:
 
 ```bash
-python -m app verify
+docker build -t seireth/demo-target:local examples/demo-target
+docker pull python:3.14-slim
+docker compose up --build -d
+python -m app verify --expected-backend docker --timeout-seconds 120
 ```
 
-The API listens at `http://127.0.0.1:8000`.
+Compose selects the Docker backend and persists assessment records in a named
+volume. The API uses the host Docker socket, which grants substantial host
+control; see the [security model](docs/security-model.md).
 
-- OpenAPI UI: `http://127.0.0.1:8000/docs`
-- OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
-- Health check: `http://127.0.0.1:8000/health`
-
-## Configuration
-
-Copy `.env.example` to `.env`. The application reads `SEIRETH_` variables from
-`.env`; `.env` is not committed.
-
-Required project settings:
-
-```env
-SEIRETH_API_HOST=127.0.0.1
-SEIRETH_API_PORT=8000
-SEIRETH_ENVIRONMENT=local
-SEIRETH_SANDBOX_BACKEND=inmemory
-SEIRETH_DOCKER_TARGET_IMAGE=seireth/demo-target:local
-SEIRETH_DOCKER_ALLOWED_TARGET_IMAGES=["seireth/demo-target:local"]
-```
-
-`SEIRETH_DOCKER_ALLOWED_TARGET_IMAGES` is the server-side allowlist for target
-images. A target can use only an image listed there. Use immutable image
-digests for deployed environments.
-
-## Docker assessments
-
-Build the example target:
-
-```bash
-docker build -t seireth/demo-target:local ./examples/demo-target
-```
-
-Start the API with Docker Compose:
-
-```bash
-docker compose up --build
-```
-
-Compose requires a project `.env` file and loads it into the API container.
-The Compose service uses the Docker sandbox, stores the SQLite database in a
-volume, and exposes the API on port `8000`.
-
-Docker-backed assessments create and remove:
-
-1. A private assessment network.
-2. A restricted target container.
-3. A short-lived assessment runner.
-
-The API container needs access to the Docker socket for this mode.
-
-## Assessment workflow
-
-1. Create a project.
-2. Register an allowlisted target.
-3. Create a time-bounded authorization scope.
-4. Queue a passive assessment.
-5. Poll the assessment or results endpoint.
-6. Review findings and audit events.
-
-Assessment creation returns `202 Accepted`. The initial status is normally
-`queued` and its `result` is `null`. Poll until the status is `completed`,
-`failed`, or `cancelled`.
-
-Completed results currently contain:
+A successful demo produces this result shape (timestamp varies):
 
 ```json
 {
   "plugin": "security-headers",
   "finding_count": 3,
-  "sandbox_backend": "inmemory",
+  "sandbox_backend": "docker",
   "cleanup_verified": true,
-  "completed_at": "2026-09-14T12:00:00+00:00"
+  "completed_at": "2026-09-17T12:00:00+00:00"
 }
 ```
 
-## Current scope
+Stop the API with `docker compose down`. Assessment resources are removed by
+the worker; the database volume remains for subsequent use.
 
-- One passive security-header plugin.
-- One local-development actor.
-- Process-local assessment worker.
-- In-memory and Docker sandbox backends.
-- Origin-, path-, and time-bounded authorization scopes.
-- Server-controlled Docker image allowlist.
-- Restricted Docker assessment resources with cleanup verification.
+## Understanding assessment responses
 
-MVP-0 is not a general internet scanner or a multi-user production service.
-Only assess systems for which you have explicit authorization.
+Creation returns `202 Accepted` because work runs in the background. An initial
+`result: null` means no execution outcome has been recorded yet. Follow the
+`Location` response header to poll the assessment; append `/results` for findings.
 
-## Project documentation
+Stop polling at `completed`, `failed`, or `cancelled`. A completed assessment
+has a result even when it finds zero issues. An assessment cancelled before
+execution may retain a null result. See [the API walkthrough](docs/assessments.md).
 
-- [Architecture](.docs/03-architecture.md)
-- [Plugins and tests](.docs/04-plugins-and-tests.md)
-- [Sandbox and security](.docs/05-sandbox-and-security.md)
-- [Roadmap and MVP](.docs/10-roadmap-and-mvp.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security reporting](SECURITY.md)
+## Development
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+```
+
+Tests use a temporary database and explicit test settings. CI runs on Python
+3.14 and also checks the real Docker lifecycle. See
+[Contributing](CONTRIBUTING.md) for formatting and dependency-audit commands.
+
+## Documentation
+
+| Guide | What it covers |
+| --- | --- |
+| [Getting started](docs/getting-started.md) | Setup, verification, and troubleshooting |
+| [Architecture](docs/architecture.md) | Current components and data flow |
+| [Configuration](docs/configuration.md) | Settings, defaults, and image policy |
+| [Assessments](docs/assessments.md) | Requests, polling, cancellation, and results |
+| [Security model](docs/security-model.md) | Isolation boundaries and limitations |
+| [Roadmap](docs/roadmap.md) | Implemented capabilities and future work |
+
+Use only targets you are authorized to assess. Report SEIRETH vulnerabilities
+through the process in [SECURITY.md](SECURITY.md).
+
+Licensed under [Apache 2.0](LICENSE). The logo is reused from the
+[SEIRETH GitHub organization](https://github.com/seireth).

@@ -1,6 +1,5 @@
 import pytest
 
-from app.config import settings
 from app.main import bounded_url
 from app.worker import AssessmentWorker
 

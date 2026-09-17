@@ -5,10 +5,10 @@ client library.  This keeps the API process' dependency surface small, while
 still making every privileged operation explicit and easy to audit.
 """
 
-from dataclasses import dataclass
 import json
 import re
 import subprocess
+from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4

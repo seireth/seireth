@@ -1,9 +1,8 @@
 """Process-local assessment dispatcher with persisted lifecycle state."""
 
-from concurrent.futures import ThreadPoolExecutor
 import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from threading import Event, Lock
-from concurrent.futures import TimeoutError
 from typing import Callable, TypeVar
 
 from . import models
