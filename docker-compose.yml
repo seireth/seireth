@@ -16,6 +16,7 @@ services:
       timeout: 5s
       retries: 30
   migrate:
+    profiles: [tools]
     build: .
     env_file: [.env]
     environment:
@@ -36,7 +37,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
 volumes:
   postgres-data:
