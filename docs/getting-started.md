@@ -45,11 +45,14 @@ Stop the local API to free port 8000 and release its dispatcher lock:
 ```bash
 docker build -t seireth/demo-target:local examples/demo-target
 docker pull python:3.14-slim
-docker compose up --build -d
+python -m app docker-up
 python -m app verify --expected-backend docker --timeout-seconds 120
 ```
 
-Compose waits for PostgreSQL, applies migrations, then starts the API. Stop with
+The startup command waits for PostgreSQL, runs migrations in a temporary container
+that removes itself, then starts the API only on success. It stops an existing API
+before migrating. Use this command instead of plain `docker compose up`, which
+does not run migrations. Stop with
 `docker compose down`; the PostgreSQL volume is retained. The owned demo target's
 `/slow` path delays briefly for cancellation and crash-recovery integration tests.
 
@@ -63,8 +66,8 @@ python -m app migrate
 ```
 
 Review generated operations before applying them. Do not edit already deployed
-revisions. API startup checks the revision and fails with migration instructions
-if it is missing or outdated. Request handlers do not modify the schema.
+revisions. Run migrations before starting the API directly; the API does not
+check the schema revision or apply migrations. Request handlers do not modify the schema.
 
 ## Tests
 

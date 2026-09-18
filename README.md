@@ -86,11 +86,12 @@ With Docker Desktop or Docker Engine running, stop the local API to free port
 ```bash
 docker build -t seireth/demo-target:local examples/demo-target
 docker pull python:3.14-slim
-docker compose up --build -d
+python -m app docker-up
 python -m app verify --expected-backend docker --timeout-seconds 120
 ```
 
-Compose starts PostgreSQL, applies migrations, and then starts the Docker-backed API.
+`python -m app docker-up` starts PostgreSQL, applies migrations in a temporary
+container that removes itself, and starts the Docker-backed API only on success.
 PostgreSQL records persist in a named volume. The API uses the host Docker socket, which grants substantial host
 control; see the [security model](docs/security-model.md).
 

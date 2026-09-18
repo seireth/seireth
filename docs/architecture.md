@@ -7,9 +7,9 @@ worker service, frontend, or Go service is required.
 ## Startup and persistence
 
 Alembic revision files create and evolve the schema. Run `python -m app migrate`
-explicitly; Compose runs the migration service after PostgreSQL is healthy and
-before the API. Request handling never runs DDL. API startup refuses an outdated
-schema. One PostgreSQL advisory lock guards the dispatcher for the application
+explicitly for native startup. `python -m app docker-up` stops any existing API,
+waits for PostgreSQL, runs migrations with `docker compose run --rm`, then starts
+the API only on success. The API does not check migration revisions or run DDL. One PostgreSQL advisory lock guards the dispatcher for the application
 lifetime; a second API process refuses to start. Ownership loss interrupts work.
 
 ## Execution
