@@ -32,10 +32,25 @@ def main() -> int:
     check.add_argument("--expected-backend", choices=("inmemory", "docker"))
 
     subparsers.add_parser("migrate", help="Apply versioned database migrations")
+    subparsers.add_parser(
+        "docker-up", help="Build, migrate, and start the Docker stack"
+    )
 
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         return run(["pytest", *sys.argv[2:]])
     args = parser.parse_args()
+    if args.command == "docker-up":
+        for command in (
+            ["build", "api", "migrate"],
+            ["stop", "api"],
+            ["up", "-d", "--wait", "postgres"],
+            ["run", "--rm", "--no-deps", "-T", "migrate"],
+            ["up", "-d", "--no-deps", "api"],
+        ):
+            status = subprocess.call(["docker", "compose", *command])
+            if status:
+                return status
+        return 0
     if args.command == "migrate":
         from .migration import migrate
 
@@ -47,7 +62,7 @@ def main() -> int:
         return run(
             [
                 "uvicorn",
-                "app.main:app",
+                "app.api:app",
                 "--reload",
                 "--host",
                 args.host if args.host is not None else settings.api_host,

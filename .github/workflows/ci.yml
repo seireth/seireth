@@ -87,7 +87,7 @@ jobs:
           mkdir -p artifacts
           docker build -t seireth/demo-target:local examples/demo-target
           docker pull python:3.14-slim
-          docker compose up --build --detach
+          python -m app docker-up
       - name: Wait for API readiness
         # Docker may accept the connection before Uvicorn is ready, then reset it.
         # Retry resets as well as refusals, with bounded individual requests.
