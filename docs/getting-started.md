@@ -1,84 +1,99 @@
 # Getting started
 
-Use Python 3.14 for local development and CI. Docker Desktop (Linux containers)
-or Docker Engine with Compose is needed only for real sandbox execution.
-
-## Install
-
-Clone the repository and enter its root. On Windows PowerShell:
-
-```powershell
-py -3.14 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-Copy-Item .env.example .env
-```
-
-On macOS or Linux:
+Install Python 3.14 and Docker Desktop/Engine. Create and activate `.venv`, copy
+`.env.example` to `.env`, then install the project:
 
 ```bash
-python3.14 -m venv .venv
-source .venv/bin/activate
-cp .env.example .env
-```
-
-Then, on either platform:
-
-```bash
-python --version
 python -m pip install -e ".[test,quality,security]"
-python -m pytest
+docker compose up -d postgres
+python -m app migrate
 python -m app serve
 ```
 
-The API runs at `http://127.0.0.1:8000`. Visit `/health`, `/docs` for the API
-explorer, or `/openapi.json` for the generated contract. Keep this terminal
-running and activate the same environment in a second terminal:
+Use `Copy-Item .env.example .env` in PowerShell or `cp .env.example .env` on Unix.
+The API starts at http://127.0.0.1:8000. In a second activated terminal:
 
 ```bash
 python -m app verify --expected-backend inmemory
 ```
 
-Verification creates a project, target, expiring scope, and assessment; waits
-for completion; and checks findings, cleanup status, and audit ordering. It
-prints the records as JSON. Repeated verification creates additional records.
-The in-memory backend returns empty simulated headers and makes no requests.
+The in-memory backend demonstrates the API lifecycle without assessing a real host.
+PostgreSQL remains required for persistence.
 
-## Docker walkthrough
+## Development without Docker
 
-Stop the development API first so port 8000 is available. From the repository
-root with `.env` present:
+Use a native PostgreSQL 18 installation with a database and login created for
+Seireth. Set the connection URL and select the simulated backend, then run:
+
+```powershell
+$env:SEIRETH_DATABASE_URL='postgresql+psycopg://seireth:YOUR_PASSWORD@127.0.0.1:5432/seireth'
+$env:SEIRETH_SANDBOX_BACKEND='inmemory'
+python -m app migrate
+python -m app serve
+```
+
+In a second terminal, `python -m app verify --expected-backend inmemory` exercises
+the complete API workflow. Docker is not needed for this setup. The in-memory
+backend simulates response headers; real isolated target assessments require
+Docker. Database tests work with native PostgreSQL too: point
+`SEIRETH_TEST_ADMIN_URL` at that server's admin connection.
+
+## Real Docker assessment
+
+Stop the local API to free port 8000 and release its dispatcher lock:
 
 ```bash
-docker version
 docker build -t seireth/demo-target:local examples/demo-target
 docker pull python:3.14-slim
 docker compose up --build -d
-docker compose logs api
 python -m app verify --expected-backend docker --timeout-seconds 120
-docker compose down
 ```
 
-Wait for the API startup message before verification. Compose overrides the
-backend to `docker` and uses a named SQLite volume. Each assessment gets its
-own internal network, target container, and short-lived runner. The worker
-removes those resources after execution. `docker compose down` stops the API
-and retains its data volume; adding `--volumes` deliberately deletes that data.
+Compose waits for PostgreSQL, applies migrations, then starts the API. Stop with
+`docker compose down`; the PostgreSQL volume is retained. The owned demo target's
+`/slow` path delays briefly for cancellation and crash-recovery integration tests.
 
-The verifier waits up to 120 seconds for an assessment outcome by default.
-`--timeout-seconds` changes that polling deadline, not the worker's execution
-limits. A verifier timeout does not cancel an assessment: inspect it using the
-reported ID and [assessment endpoints](assessments.md).
+## Schema changes
 
-## Troubleshooting
+Revision files live under `app/migrations/versions`. To generate the next revision:
 
-| Symptom | Check |
-| --- | --- |
-| Missing configuration fields | Run from the repository root and copy `.env.example` to `.env`. |
-| Wrong Python or missing packages | Check `python --version`; activate `.venv` and install the development extras. |
-| Port already occupied | Stop the local API before starting Compose. For local serving, use `python -m app serve --port 8001` and verify with `--base-url http://127.0.0.1:8001`. |
-| Docker daemon unavailable | Start Docker Desktop, select Linux containers, and confirm `docker version` shows a server. |
-| Target rejected | The default or requested image must appear exactly in the image allowlist. |
-| Docker assessment fails | Build the target, pre-pull the runner, inspect `docker compose logs api`, and retrieve the assessment result. |
-| Cleanup failed | Inspect remaining assessment containers and networks; see the [security model](security-model.md) before removing resources. |
+```bash
+python -m alembic revision --autogenerate -m "describe schema change"
+python -m app migrate
+```
 
-For development checks, see [Contributing](../CONTRIBUTING.md).
+Review generated operations before applying them. Do not edit already deployed
+revisions. API startup checks the revision and fails with migration instructions
+if it is missing or outdated. Request handlers do not modify the schema.
+
+## Tests
+
+Tests create a uniquely named PostgreSQL database and drop only that database.
+Set a test-admin connection explicitly; it needs permission to create databases.
+It must point at a local/disposable server, never a production server.
+
+PowerShell:
+
+```powershell
+$env:SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
+python -m app test
+$env:SEIRETH_DOCKER_TESTS='1'
+python -m pytest tests/test_runtime.py
+```
+
+Unix:
+
+```bash
+export SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
+python -m app test
+SEIRETH_DOCKER_TESTS=1 python -m pytest tests/test_runtime.py
+```
+
+Pure tests can run without PostgreSQL:
+`python -m pytest tests/test_hardening.py tests/test_verify.py tests/test_docker_sandbox.py`.
+The Docker tests require the built demo image and pulled runner image.
+
+If PostgreSQL is unavailable, check `docker compose ps` and database logs. If a
+second API refuses dispatcher ownership, stop the existing API process; do not
+force-unlock a live dispatcher. Docker failures should be investigated using
+assessment labels and API logs.

@@ -18,7 +18,7 @@ targets, records findings and audit events, and destroys the assessment
 environment afterward.
 
 **MVP-0:** a working local API with one passive HTTP security-header plugin.
-It uses SQLite and a process-local worker. It is not a multi-user production
+It uses PostgreSQL 18, versioned Alembic migrations, and a process-local worker. It is not a multi-user production
 service or a general internet scanner.
 
 ## How it works
@@ -60,6 +60,8 @@ Install and start the API:
 
 ```bash
 python -m pip install -e ".[test,quality,security]"
+docker compose up -d postgres
+python -m app migrate
 python -m app serve
 ```
 
@@ -73,6 +75,9 @@ python -m app verify --expected-backend inmemory
 The default `inmemory` backend **simulates header responses without network
 access**. It verifies the API workflow; it does not assess a real website.
 
+For a fully Docker-free setup, use native PostgreSQL and the simulated backend:
+[Docker-free development](docs/getting-started.md#development-without-docker).
+
 ## Run a real Docker assessment
 
 With Docker Desktop or Docker Engine running, stop the local API to free port
@@ -85,8 +90,8 @@ docker compose up --build -d
 python -m app verify --expected-backend docker --timeout-seconds 120
 ```
 
-Compose selects the Docker backend and persists assessment records in a named
-volume. The API uses the host Docker socket, which grants substantial host
+Compose starts PostgreSQL, applies migrations, and then starts the Docker-backed API.
+PostgreSQL records persist in a named volume. The API uses the host Docker socket, which grants substantial host
 control; see the [security model](docs/security-model.md).
 
 A successful demo produces this result shape (timestamp varies):
@@ -122,8 +127,10 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
-Tests use a temporary database and explicit test settings. CI runs on Python
-3.14 and also checks the real Docker lifecycle. See
+Set `SEIRETH_TEST_ADMIN_URL` as shown in [Getting started](docs/getting-started.md)
+before running database tests. Tests create and drop an isolated PostgreSQL database.
+CI runs on Python
+3.14 and also checks real Docker completion, cancellation, and crash recovery. See
 [Contributing](CONTRIBUTING.md) for formatting and dependency-audit commands.
 
 ## Documentation

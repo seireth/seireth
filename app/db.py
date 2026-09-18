@@ -14,20 +14,16 @@ class Base(DeclarativeBase):
     pass
 
 
-connect_args = (
-    {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    connect_args={"connect_timeout": 5, "options": "-c statement_timeout=5000"},
 )
-engine = create_engine(settings.database_url, connect_args=connect_args)
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
 def get_db() -> Generator[Session, None, None]:
     """Yield a database session and close it after the request completes."""
 
-    # Lifespan startup is used by the server; this lazy fallback also supports
-    # ASGI test transports that do not run lifespan events.
-    from .migration import migrate
-
-    migrate()
     with SessionLocal() as db:
         yield db

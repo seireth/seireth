@@ -6,7 +6,6 @@ import argparse
 import subprocess
 import sys
 
-from .config import settings
 from .verify import positive_timeout, verify
 
 
@@ -25,15 +24,25 @@ def main() -> int:
     serve.add_argument("--host", default=None)
     serve.add_argument("--port", type=int, default=None)
 
-    test = subparsers.add_parser("test", help="Run the test suite")
-    test.add_argument("pytest_args", nargs=argparse.REMAINDER)
+    subparsers.add_parser("test", help="Run pytest, forwarding all following arguments")
 
     check = subparsers.add_parser("verify", help="Run the MVP-0 API workflow")
     check.add_argument("--base-url", default=None)
     check.add_argument("--timeout-seconds", type=positive_timeout, default=120)
     check.add_argument("--expected-backend", choices=("inmemory", "docker"))
 
+    subparsers.add_parser("migrate", help="Apply versioned database migrations")
+
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        return run(["pytest", *sys.argv[2:]])
     args = parser.parse_args()
+    if args.command == "migrate":
+        from .migration import migrate
+
+        migrate()
+        return 0
+    from .config import settings
+
     if args.command == "serve":
         return run(
             [
@@ -46,8 +55,6 @@ def main() -> int:
                 str(args.port if args.port is not None else settings.api_port),
             ]
         )
-    if args.command == "test":
-        return run(["pytest", *args.pytest_args])
     try:
         import json
 

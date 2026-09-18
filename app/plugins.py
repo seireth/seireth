@@ -24,7 +24,7 @@ def security_headers(sandbox: Sandbox, url: str) -> list[PluginFinding]:
         One medium-severity finding for each missing required header.
     """
 
-    headers = {k.lower(): v for k, v in sandbox.execute(url).headers.items()}
+    headers = {k.lower(): v for k, v in sandbox.execute(url).items()}
     required = {
         "x-content-type-options": "Missing X-Content-Type-Options header",
         "content-security-policy": "Missing Content-Security-Policy header",
@@ -40,6 +40,3 @@ def security_headers(sandbox: Sandbox, url: str) -> list[PluginFinding]:
         for name, message in required.items()
         if name not in headers
     ]
-
-
-"""Security-test plugins and their normalized finding types."""

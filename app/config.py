@@ -1,5 +1,8 @@
 """Application configuration loaded from environment variables."""
 
+from typing import Literal
+
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,10 +12,9 @@ class Settings(BaseSettings):
     api_host: str
     api_port: int
 
-    database_url: str = "sqlite:///./seireth.db"
-
-    environment: str
-    sandbox_backend: str
+    database_url: str
+    sandbox_backend: Literal["inmemory", "docker"]
+    assessment_timeout_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
 
     docker_runner_image: str = "python:3.14-slim"
     docker_target_image: str
@@ -21,12 +23,20 @@ class Settings(BaseSettings):
     docker_memory: str = "256m"
     docker_cpus: float = 0.5
     docker_pids_limit: int = 64
-    docker_timeout_seconds: float = 15
+    docker_timeout_seconds: float = Field(default=15, gt=0, allow_inf_nan=False)
 
     model_config = SettingsConfigDict(
         env_prefix="SEIRETH_",
         env_file=".env",
+        extra="ignore",  # Compose also reads POSTGRES_* values from this file.
     )
+
+    @field_validator("database_url")
+    @classmethod
+    def require_postgres(cls, value: str) -> str:
+        if not value.startswith("postgresql+psycopg://"):
+            raise ValueError("DATABASE_URL must use postgresql+psycopg://")
+        return value
 
     @property
     def api_base_url(self) -> str:

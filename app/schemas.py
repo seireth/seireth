@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
+from .models import AssessmentStatus
+
 
 class ProjectCreate(BaseModel):
     """Request to create a project."""
@@ -40,8 +42,5 @@ class AssessmentOut(BaseModel):
     """Minimal persisted assessment response."""
 
     id: str
-    status: str
+    status: AssessmentStatus
     result: dict | None = None
-
-
-"""Pydantic request and response schemas for the API."""

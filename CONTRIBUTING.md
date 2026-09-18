@@ -36,8 +36,9 @@ python -m ruff check .
 python -m ruff format --check .
 ```
 
-Tests set their own environment and use a temporary SQLite database, independent
-of your `.env` and development data. For automatic import/lint fixes and formatting:
+Tests set their own environment and create a disposable PostgreSQL database.
+Set `SEIRETH_TEST_ADMIN_URL` following [Getting started](docs/getting-started.md).
+Never use an operator or production database as the test database. For automatic import/lint fixes and formatting:
 
 ```bash
 python -m ruff check --fix .

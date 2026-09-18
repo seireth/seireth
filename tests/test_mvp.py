@@ -10,12 +10,15 @@ from app.main import app
 
 
 @pytest_asyncio.fixture
-async def client():
+async def client(database):
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-    ) as test_client:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as test_client,
+    ):
         yield test_client
 
 
@@ -98,6 +101,7 @@ async def test_passive_assessment_returns_json_and_cleanup(client):
         "target.registered",
         "scope.authorized",
         "assessment.queued",
+        "assessment.running",
         "assessment.completed",
     ]
 
