@@ -78,7 +78,7 @@ PowerShell:
 $env:SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
 python -m app test
 $env:SEIRETH_DOCKER_TESTS='1'
-python -m pytest tests/test_runtime.py
+python -m pytest tests/test_api_process.py
 ```
 
 Unix:
@@ -86,11 +86,11 @@ Unix:
 ```bash
 export SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
 python -m app test
-SEIRETH_DOCKER_TESTS=1 python -m pytest tests/test_runtime.py
+SEIRETH_DOCKER_TESTS=1 python -m pytest tests/test_api_process.py
 ```
 
 Pure tests can run without PostgreSQL:
-`python -m pytest tests/test_hardening.py tests/test_verify.py tests/test_docker_sandbox.py`.
+`python -m pytest tests/test_scope_urls.py tests/test_verify.py tests/test_docker_sandbox.py`.
 The Docker tests require the built demo image and pulled runner image.
 
 If PostgreSQL is unavailable, check `docker compose ps` and database logs. If a
