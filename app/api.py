@@ -8,7 +8,6 @@ from . import models
 from .config import settings
 from .db import get_db
 from .lifecycle import audit, transition
-from .migration import check_schema
 from .policy import ACTOR as MVP_ACTOR
 from .policy import PolicyError, bounded_url, unexpired, validate
 from .schemas import (
@@ -23,8 +22,7 @@ from .worker import dispatcher
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Check schema and hold dispatcher ownership for the application lifetime."""
-    check_schema()
+    """Hold dispatcher ownership for the application lifetime."""
     dispatcher.start()
     try:
         yield
