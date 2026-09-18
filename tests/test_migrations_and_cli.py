@@ -11,13 +11,12 @@ from alembic.migration import MigrationContext
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from app.migration import check_schema, migrate, migration_config
+from app.migration import migrate, migration_config
 
 
 def test_versioned_schema_and_model_agree(database):
     migrate()
     migrate()
-    check_schema()
     with database.engine.connect() as connection:
         assert (
             compare_metadata(
@@ -55,14 +54,33 @@ def test_status_constraint(database):
             )
 
 
-def test_initial_revision_upgrade_and_missing_revision(database):
+def test_initial_revision_upgrade(database):
     # All tables live in this disposable database. This test runs after other
     # database tests; downgrade clears their synthetic records.
     command.downgrade(migration_config(), "base")
-    with pytest.raises(RuntimeError, match="schema is not current"):
-        check_schema()
     command.upgrade(migration_config(), "0001")
     assert "attempts" not in inspect(database.engine).get_table_names()
     migrate()
-    check_schema()
     assert "attempts" in inspect(database.engine).get_table_names()
+
+
+@pytest.mark.parametrize("migration_status", [0, 1])
+def test_docker_startup_gates_api_on_temporary_migration(monkeypatch, migration_status):
+    from app.__main__ import main
+
+    calls = []
+
+    def compose(command):
+        calls.append(command)
+        return migration_status if "run" in command else 0
+
+    monkeypatch.setattr(sys, "argv", ["app", "docker-up"])
+    monkeypatch.setattr(subprocess, "call", compose)
+    assert main() == migration_status
+    migration = next(call for call in calls if "run" in call)
+    assert "--rm" in migration
+    assert any(
+        "stop" in call and "api" in call for call in calls[: calls.index(migration)]
+    )
+    api_started = any("up" in call and "api" in call for call in calls)
+    assert api_started == (migration_status == 0)

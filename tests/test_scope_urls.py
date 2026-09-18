@@ -1,4 +1,4 @@
-from app.main import bounded_url
+from app.api import bounded_url
 
 
 def test_scope_requires_a_path_boundary():

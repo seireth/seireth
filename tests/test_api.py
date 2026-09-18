@@ -5,8 +5,8 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from app.api import app
 from app.config import settings
-from app.main import app
 
 
 @pytest_asyncio.fixture
@@ -191,7 +191,7 @@ async def test_default_image_must_also_be_allowlisted(client, monkeypatch):
 async def test_queued_and_cancelled_before_execution_have_no_result(
     client, monkeypatch
 ):
-    from app.main import dispatcher
+    from app.api import dispatcher
 
     submitted = []
     monkeypatch.setattr(dispatcher, "submit", submitted.append)

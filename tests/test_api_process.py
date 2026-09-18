@@ -63,7 +63,7 @@ def test_real_api_lifecycle(database, tmp_path, backend, action):
                 sys.executable,
                 "-m",
                 "uvicorn",
-                "app.main:app",
+                "app.api:app",
                 "--host",
                 "127.0.0.1",
                 "--port",
