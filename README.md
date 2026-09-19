@@ -60,5 +60,4 @@ for API states and cancellation, and [Contributing](CONTRIBUTING.md) for develop
 Use only targets you are authorized to assess. Report SEIRETH vulnerabilities
 through the process in [SECURITY.md](SECURITY.md).
 
-Licensed under [Apache 2.0](LICENSE). The logo is reused from the
-[SEIRETH GitHub organization](https://github.com/seireth).
+Licensed under [Apache 2.0](LICENSE).
