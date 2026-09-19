@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from .execution import ExecutionContext
 
@@ -19,15 +19,40 @@ class CleanupOutcome:
     reason: str | None = None
 
 
-def new_journal(*, legacy=False):
+def new_journal():
     return {
         "version": 1,
         "owner": str(uuid4()),
         "resources": {
-            kind: {"state": "uncertain" if legacy else "not_requested", "id": None}
+            kind: {"state": "not_requested", "id": None}
             for kind in ("network", "target", "runner")
         },
     }
+
+
+def validate_journal(journal):
+    """Reject corrupt ownership data rather than inventing cleanup history."""
+    try:
+        UUID(journal["owner"])
+        valid = journal["version"] == 1 and set(journal["resources"]) == {
+            "network",
+            "target",
+            "runner",
+        }
+        for entry in journal["resources"].values():
+            state, identity = entry["state"], entry["id"]
+            valid = valid and (
+                (state in {"not_requested", "uncertain"} and identity is None)
+                or (
+                    state in {"created", "removed"}
+                    and isinstance(identity, str)
+                    and re.fullmatch(r"[a-f0-9]{64}", identity)
+                )
+            )
+        if not valid:
+            raise ValueError("invalid journal fields")
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("invalid operation journal") from exc
 
 
 class Sandbox(Protocol):
@@ -92,7 +117,7 @@ class DockerSandbox:
         resources=None,
         command_timeout=15,
         context: ExecutionContext | None = None,
-        operation_journal=None,
+        operation_journal,
         persist_journal=None,
     ):
         if not _IMAGE.fullmatch(image) or not _IMAGE.fullmatch(runner_image):
@@ -101,12 +126,8 @@ class DockerSandbox:
         self.memory, self.cpus, self.pids_limit = memory, cpus, pids_limit
         self.command_timeout, self.context = command_timeout, context
         self.target_host = target_host
-        # Missing journals belong to legacy attempts, never to a new execution.
-        self.journal = (
-            deepcopy(operation_journal)
-            if operation_journal is not None
-            else new_journal(legacy=True)
-        )
+        validate_journal(operation_journal)
+        self.journal = deepcopy(operation_journal)
         self.persist_journal = persist_journal
         self.assessment_id = assessment_id or str(uuid4())
         self.attempt_id = attempt_id or str(uuid4())

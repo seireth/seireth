@@ -8,20 +8,29 @@ from threading import Event, Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 
+from . import db as database
 from . import models
 from .config import settings
-from .db import SessionLocal, engine
 from .execution import Cancelled, ExecutionContext, Interrupted
 from .lifecycle import audit, finish, transition
 from .orchestrator import Outcome, execute, sandbox_for
 from .policy import PolicyError, validate
-from .sandbox import new_journal
+from .sandbox import new_journal, validate_journal
 
 logger = logging.getLogger(__name__)
 OWNER_LOCK = 7342101
 RECONCILE_INTERVAL_SECONDS = 30
+
+
+def latest_attempt(db, assessment_id):
+    return db.scalar(
+        select(models.Attempt)
+        .where(models.Attempt.assessment_id == assessment_id)
+        .order_by(models.Attempt.number.desc())
+        .limit(1)
+    )
 
 
 class AssessmentDispatcher:
@@ -50,7 +59,9 @@ class AssessmentDispatcher:
         self._shutdown.clear()
         self._lost.clear()
         self._monitor_stop.clear()
-        self._owner = engine.connect().execution_options(isolation_level="AUTOCOMMIT")
+        self._owner = database.engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        )
         try:
             if not self._owner.scalar(
                 text("SELECT pg_try_advisory_lock(:key)"), {"key": OWNER_LOCK}
@@ -150,20 +161,11 @@ class AssessmentDispatcher:
 
     def _journal_writer(self, assessment_id, attempt_id, token, *, recovery=False):
         def persist(journal, advancing=False):
-            with SessionLocal() as db:
-                item = db.scalar(
-                    select(models.Assessment)
-                    .where(models.Assessment.id == assessment_id)
-                    .with_for_update()
-                )
+            with database.SessionLocal() as db:
+                item = db.get(models.Assessment, assessment_id, with_for_update=True)
                 self._assert_owner(db)
                 attempt = db.get(models.Attempt, attempt_id)
-                latest = db.scalar(
-                    select(models.Attempt.id)
-                    .where(models.Attempt.assessment_id == assessment_id)
-                    .order_by(models.Attempt.number.desc())
-                    .limit(1)
-                )
+                latest = latest_attempt(db, assessment_id)
                 allowed = (
                     {"recovering", "cancelling", "failed"}
                     if recovery
@@ -172,7 +174,8 @@ class AssessmentDispatcher:
                 if (
                     not item
                     or not attempt
-                    or latest != attempt_id
+                    or not latest
+                    or latest.id != attempt_id
                     or item.status not in allowed
                     or not attempt.operation_journal
                     or attempt.operation_journal["owner"] != token
@@ -204,24 +207,14 @@ class AssessmentDispatcher:
         try:
             if self._shutdown.is_set() or self._lost.is_set():
                 return
-            with SessionLocal() as db:
-                item = db.scalar(
-                    select(models.Assessment)
-                    .where(models.Assessment.id == assessment_id)
-                    .with_for_update()
-                )
+            with database.SessionLocal() as db:
+                item = db.get(models.Assessment, assessment_id, with_for_update=True)
                 if not item or item.status != "queued":
                     return
                 try:
                     target, scope = self._policy(db, item)
-                    number = 1 + (
-                        db.scalar(
-                            select(func.max(models.Attempt.number)).where(
-                                models.Attempt.assessment_id == item.id
-                            )
-                        )
-                        or 0
-                    )
+                    previous = latest_attempt(db, item.id)
+                    number = previous.number + 1 if previous else 1
                     if number > 2:
                         raise PolicyError("crash recovery retry limit reached")
                 except PolicyError as exc:
@@ -273,22 +266,14 @@ class AssessmentDispatcher:
             if self._lost.is_set():
                 return  # A new owner must reconcile; never overwrite its decisions.
             # The cancellation row lock serializes cancellation against completion.
-            with SessionLocal() as db:
-                item = db.scalar(
-                    select(models.Assessment)
-                    .where(models.Assessment.id == assessment_id)
-                    .with_for_update()
-                )
-                latest = db.scalar(
-                    select(models.Attempt.id)
-                    .where(models.Attempt.assessment_id == assessment_id)
-                    .order_by(models.Attempt.number.desc())
-                    .limit(1)
-                )
+            with database.SessionLocal() as db:
+                item = db.get(models.Assessment, assessment_id, with_for_update=True)
+                latest = latest_attempt(db, assessment_id)
                 if (
                     self._lost.is_set()
                     or item.status not in {"running", "cancelling"}
-                    or latest != attempt_id
+                    or not latest
+                    or latest.id != attempt_id
                 ):
                     return
                 attempt = db.get(models.Attempt, attempt_id)
@@ -316,7 +301,7 @@ class AssessmentDispatcher:
             self._recover(failed_only=failed_only)
 
     def _recover(self, *, failed_only=False):
-        with SessionLocal() as db:
+        with database.SessionLocal() as db:
             ids = list(
                 db.scalars(
                     select(models.Assessment.id)
@@ -341,44 +326,34 @@ class AssessmentDispatcher:
                     continue
             if self._lost.is_set():
                 raise RuntimeError("dispatcher ownership lost during recovery")
-            with SessionLocal() as db:
-                item = db.scalar(
-                    select(models.Assessment)
-                    .where(models.Assessment.id == assessment_id)
-                    .with_for_update()
-                )
+            with database.SessionLocal() as db:
+                item = db.get(models.Assessment, assessment_id, with_for_update=True)
                 self._assert_owner(db)
                 if (
                     item.status not in {"running", "recovering", "cancelling"}
                     and not item.cleanup_pending
                 ):
                     continue
-                attempt = db.scalar(
-                    select(models.Attempt)
-                    .where(models.Attempt.assessment_id == item.id)
-                    .order_by(models.Attempt.number.desc())
-                )
-                if not attempt:
+                attempt = latest_attempt(db, item.id)
+                try:
+                    if not attempt:
+                        raise ValueError("execution attempt missing")
+                    validate_journal(attempt.operation_journal)
+                except ValueError as exc:
                     if item.status != "failed":
-                        transition(
-                            db, item, "failed", {"error": "execution attempt missing"}
-                        )
+                        transition(db, item, "failed", {"error": str(exc)})
                     item.cleanup_pending = True
                     item.result = {
                         **(item.result or {}),
                         "cleanup_verified": False,
-                        "cleanup_reason": "execution attempt missing",
+                        "cleanup_reason": str(exc),
                     }
                     db.commit()
                     continue
                 original_status = item.status
                 if original_status == "running":
                     transition(db, item, "recovering", {"attempt": attempt.number})
-                journal = (
-                    deepcopy(attempt.operation_journal)
-                    if attempt.operation_journal
-                    else new_journal(legacy=True)
-                )
+                journal = deepcopy(attempt.operation_journal)
                 token = journal["owner"] = str(uuid4())
                 attempt.operation_journal = journal
                 attempt_id = attempt.id
@@ -390,12 +365,8 @@ class AssessmentDispatcher:
                     ),
                 )
             cleanup = sandbox.cleanup()
-            with SessionLocal() as db:
-                item = db.scalar(
-                    select(models.Assessment)
-                    .where(models.Assessment.id == assessment_id)
-                    .with_for_update()
-                )
+            with database.SessionLocal() as db:
+                item = db.get(models.Assessment, assessment_id, with_for_update=True)
                 self._assert_owner(db)
                 attempt = db.get(models.Attempt, attempt_id)
                 if attempt.operation_journal["owner"] != token or item.status not in {
@@ -454,7 +425,7 @@ class AssessmentDispatcher:
                 db.commit()
         if failed_only:
             return
-        with SessionLocal() as db:
+        with database.SessionLocal() as db:
             queued = list(
                 db.scalars(
                     select(models.Assessment.id).where(

@@ -10,7 +10,7 @@ from sqlalchemy import select, text
 from app import models
 from app.config import settings
 from app.execution import ExecutionContext
-from app.sandbox import CleanupOutcome, InMemorySandbox
+from app.sandbox import CleanupOutcome, InMemorySandbox, new_journal
 from app.worker import AssessmentDispatcher
 
 
@@ -197,10 +197,29 @@ def interrupted(database, assessment, number=1, status="running"):
         for n in range(1, number + 1):
             db.add(
                 models.Attempt(
-                    assessment_id=item.id, number=n, backend="inmemory", resources={}
+                    assessment_id=item.id,
+                    number=n,
+                    backend="inmemory",
+                    resources={},
+                    operation_journal=new_journal(),
                 )
             )
         db.commit()
+
+
+def test_corrupt_journal_cannot_authorize_cleanup_or_retry(database, assessment):
+    interrupted(database, assessment)
+    with database.SessionLocal() as db:
+        attempt = db.scalar(
+            select(models.Attempt).where(models.Attempt.assessment_id == assessment)
+        )
+        attempt.operation_journal = {}
+        db.commit()
+    AssessmentDispatcher().recover()
+    item = read(database, assessment)
+    assert item.status == "failed" and item.cleanup_pending
+    assert item.result["cleanup_verified"] is False
+    assert item.result["cleanup_reason"] == "invalid operation journal"
 
 
 @pytest.mark.parametrize("mode", ["retry", "limit", "cancel", "expired", "cleanup"])

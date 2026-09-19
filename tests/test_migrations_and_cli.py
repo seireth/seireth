@@ -8,6 +8,7 @@ import pytest
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
@@ -22,12 +23,43 @@ def _assert_schema_matches_models(database):
             )
             == []
         )
+        inspector = inspect(connection)
+        for table, name in [
+            ("assessments", "assessment_status_valid"),
+            ("attempts", "attempt_number_bounded"),
+        ]:
+            assert name in {
+                constraint["name"]
+                for constraint in inspector.get_check_constraints(table)
+            }
 
 
 def test_versioned_schema_and_model_agree(database):
     migrate()
     migrate()
     _assert_schema_matches_models(database)
+
+
+def test_migration_connection_has_separate_timeouts(database):
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    observed = []
+
+    def record(connection, _record):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT current_setting('lock_timeout'), current_setting('statement_timeout')"
+            )
+            observed.append(cursor.fetchone())
+        assert connection.info.get_parameters()["connect_timeout"] == "5"
+
+    event.listen(Engine, "connect", record)
+    try:
+        migrate()
+    finally:
+        event.remove(Engine, "connect", record)
+    assert observed == [("30s", "5min")]
 
 
 def test_cli_help_and_tests_do_not_load_operator_settings(tmp_path):
@@ -58,14 +90,39 @@ def test_status_constraint(database):
             )
 
 
-def test_initial_revision_upgrade(database):
-    # All tables live in this disposable database. This test runs after other
-    # database tests; downgrade clears their synthetic records.
+def test_baseline_round_trip(database):
     command.downgrade(migration_config(), "base")
-    command.upgrade(migration_config(), "0001")
-    assert "attempts" not in inspect(database.engine).get_table_names()
+    assert set(inspect(database.engine).get_table_names()) == {"alembic_version"}
     migrate()
-    assert "attempts" in inspect(database.engine).get_table_names()
+    _assert_schema_matches_models(database)
+    with database.engine.connect() as connection:
+        assert (
+            MigrationContext.configure(connection).get_current_revision()
+            == ScriptDirectory.from_config(migration_config()).get_current_head()
+        )
+
+
+def test_revision_generation_uses_template(database, tmp_path):
+    import shutil
+    from pathlib import Path
+
+    config = migration_config()
+    location = tmp_path / "migrations"
+    shutil.copytree(config.get_main_option("script_location"), location)
+    config.set_main_option("script_location", str(location))
+    revision = command.revision(config, message="generation check", autogenerate=True)
+    compile(Path(revision.path).read_text(), revision.path, "exec")
+
+
+def test_missing_journal_is_rejected_by_database(database):
+    with database.engine.begin() as connection:
+        with pytest.raises(IntegrityError) as error:
+            connection.execute(
+                text(
+                    "INSERT INTO attempts (id, assessment_id, number, backend, resources, started_at, cleanup_verified) VALUES ('bad', 'bad', 1, 'docker', '{}', now(), false)"
+                )
+            )
+    assert error.value.orig.diag.column_name == "operation_journal"
 
 
 @pytest.mark.parametrize("migration_status", [0, 1])
@@ -100,7 +157,9 @@ def test_docker_up_waits_and_propagates_readiness_failure(monkeypatch, capsys, s
         calls.append(command)
         return status if "--wait-timeout" in command else 0
 
-    monkeypatch.setattr(sys, "argv", ["app", "docker-up", "--timeout-seconds", "7.2"])
+    monkeypatch.setattr(
+        sys, "argv", ["app", "docker-up", "--api-ready-timeout-seconds", "7.2"]
+    )
     monkeypatch.setattr(subprocess, "call", compose)
     assert main() == status
     start = calls[-1]
@@ -118,7 +177,9 @@ def test_docker_up_waits_and_propagates_readiness_failure(monkeypatch, capsys, s
 def test_docker_up_rejects_invalid_timeout_before_start(monkeypatch, timeout):
     from app.__main__ import main
 
-    monkeypatch.setattr(sys, "argv", ["app", "docker-up", "--timeout-seconds", timeout])
+    monkeypatch.setattr(
+        sys, "argv", ["app", "docker-up", "--api-ready-timeout-seconds", timeout]
+    )
     with pytest.raises(SystemExit) as error:
         main()
     assert error.value.code == 2
@@ -134,50 +195,3 @@ def test_docker_up_missing_cli_reports_stage(monkeypatch, capsys):
     monkeypatch.setattr(subprocess, "call", unavailable)
     assert main() == 1
     assert "build" in capsys.readouterr().err
-
-
-def test_journal_upgrade_preserves_populated_legacy_attempts(database):
-    from app import models
-
-    with database.SessionLocal() as db:
-        project = models.Project(name="migration")
-        db.add(project)
-        db.flush()
-        target = models.Target(
-            project_id=project.id, name="demo", image="demo:local", url="http://demo/"
-        )
-        db.add(target)
-        db.flush()
-        scope = models.AuthorizationScope(
-            project_id=project.id,
-            target_id=target.id,
-            allowed_url=target.url,
-            expires_at=models.now(),
-        )
-        db.add(scope)
-        db.flush()
-        item = models.Assessment(
-            project_id=project.id,
-            target_id=target.id,
-            scope_id=scope.id,
-            profile="passive",
-            status="failed",
-            result={"error": "preserve me"},
-        )
-        db.add(item)
-        db.flush()
-        attempt = models.Attempt(
-            assessment_id=item.id, number=1, backend="docker", resources={}
-        )
-        db.add(attempt)
-        db.commit()
-        item_id, attempt_id = item.id, attempt.id
-    command.downgrade(migration_config(), "0002")
-    assert "operation_journal" not in {
-        column["name"] for column in inspect(database.engine).get_columns("attempts")
-    }
-    migrate()
-    with database.SessionLocal() as db:
-        assert db.get(models.Attempt, attempt_id).operation_journal is None
-        assert db.get(models.Assessment, item_id).result == {"error": "preserve me"}
-    _assert_schema_matches_models(database)

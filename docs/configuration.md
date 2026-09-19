@@ -7,7 +7,7 @@ Change it and the connection URL together, using URL-safe credentials.
 
 | Setting | Purpose/default |
 | --- | --- |
-| `SEIRETH_API_HOST`, `SEIRETH_API_PORT` | Required local CLI binding; example `127.0.0.1`, `8000` |
+| `SEIRETH_API_HOST`, `SEIRETH_API_PORT` | Required native binding and Docker published address; port 1-65535; example `127.0.0.1`, `8000` |
 | `SEIRETH_DATABASE_URL` | Required `postgresql+psycopg://...` URL; SQLite is unsupported |
 | `SEIRETH_SANDBOX_BACKEND` | Required `inmemory` or `docker` |
 | `SEIRETH_ASSESSMENT_TIMEOUT_SECONDS` | Positive finite execution deadline; default 60 seconds |
@@ -27,9 +27,16 @@ prove it is safe. The in-memory backend also checks target registration policy.
 The execution deadline is the earlier of the configured timeout and scope expiry.
 Cleanup has separate bounded Docker command timeouts, so it can run after expiry.
 
-Compose selects the Docker backend, connects to `postgres:5432`, and publishes
-API/database ports only on loopback. Local Python uses `127.0.0.1:5432`. PostgreSQL
+Compose deliberately selects the Docker backend and its bundled database at
+`postgres:5432`, overriding the native connection URL and backend. The published
+API address uses `SEIRETH_API_HOST` and `SEIRETH_API_PORT`; its internal listener
+and health probe stay on port 8000. PostgreSQL stays published on loopback port
+5432. The runner image uses the configured value or the application default.
+Verification maps wildcard bindings (`0.0.0.0`/`::`) to loopback destinations. PostgreSQL
 18 uses the named volume at `/var/lib/postgresql`. Database credentials should not
 contain unescaped URL delimiters when interpolated into the Compose URL.
 
-`ENVIRONMENT` was an unused required label and has been removed.
+The API and temporary migration job share one application image.
+`docker-up --api-ready-timeout-seconds` limits only API readiness; it does not
+limit the build or migration duration. Migrations use separate connection (5s),
+lock (30s), and statement (300s) limits. These do not change normal API query limits.

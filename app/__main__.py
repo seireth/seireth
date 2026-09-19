@@ -36,14 +36,16 @@ def main() -> int:
     docker_up = subparsers.add_parser(
         "docker-up", help="Build, migrate, and start the Docker stack"
     )
-    docker_up.add_argument("--timeout-seconds", type=positive_timeout, default=120)
+    docker_up.add_argument(
+        "--api-ready-timeout-seconds", type=positive_timeout, default=120
+    )
 
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         return run(["pytest", *sys.argv[2:]])
     args = parser.parse_args()
     if args.command == "docker-up":
         for stage, command in (
-            ("build", ["build", "api", "migrate"]),
+            ("build", ["build", "api"]),
             ("stop API", ["stop", "api"]),
             ("start PostgreSQL", ["up", "-d", "--wait", "postgres"]),
             ("migration", ["run", "--rm", "--no-deps", "-T", "migrate"]),
@@ -55,7 +57,7 @@ def main() -> int:
                     "--no-deps",
                     "--wait",
                     "--wait-timeout",
-                    str(math.ceil(args.timeout_seconds)),
+                    str(math.ceil(args.api_ready_timeout_seconds)),
                     "api",
                 ],
             ),

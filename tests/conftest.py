@@ -40,7 +40,6 @@ def database():
     settings.database_url = url
     db.engine = create_engine(url, pool_pre_ping=True)
     db.SessionLocal = sessionmaker(db.engine, expire_on_commit=False)
-    worker.engine, worker.SessionLocal = db.engine, db.SessionLocal
     try:
         migrate()
         yield db
@@ -48,7 +47,6 @@ def database():
         worker.dispatcher.stop()
         db.engine.dispose()
         db.engine, db.SessionLocal = old_engine, old_factory
-        worker.engine, worker.SessionLocal = old_engine, old_factory
         settings.database_url = old_url
         with admin.connect() as connection:
             connection.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))

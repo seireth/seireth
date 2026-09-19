@@ -74,6 +74,8 @@ jobs:
     timeout-minutes: 15
     env:
       COMPOSE_PROJECT_NAME: seireth-ci
+      # Exercise the published-port setting instead of relying on the example port.
+      SEIRETH_API_PORT: "18080"
       SEIRETH_TEST_ADMIN_URL: postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v7
@@ -87,7 +89,8 @@ jobs:
           mkdir -p artifacts
           docker build -t seireth/demo-target:local examples/demo-target
           docker pull python:3.14-slim
-          python -m app docker-up
+          python -m app docker-up --api-ready-timeout-seconds 120
+          test -z "$(docker compose ps -a -q migrate)"
       - name: Verify real assessment and resource removal
         shell: bash
         run: |

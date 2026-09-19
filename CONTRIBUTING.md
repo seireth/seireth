@@ -71,6 +71,9 @@ Development expectations:
 
 ## Pull requests
 
+Schema changes add a new Alembic revision after `0001_initial_schema`; do not edit
+the baseline after deployment. Follow the [migration and reset guide](docs/getting-started.md#schema-changes).
+
 Pull requests should explain:
 
 - What changed and why

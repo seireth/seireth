@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     """Runtime settings for the API and persistence layer."""
 
     api_host: str
-    api_port: int
+    api_port: int = Field(ge=1, le=65535)
 
     database_url: str
     sandbox_backend: Literal["inmemory", "docker"]
@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     def api_base_url(self) -> str:
         """Build the local API URL from the configured host and port."""
 
-        host = self.api_host
+        host = self.api_host.strip("[]")
+        host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
         return f"http://{host}:{self.api_port}"

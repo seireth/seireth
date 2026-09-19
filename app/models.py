@@ -157,7 +157,9 @@ class Attempt(Base):
     number: Mapped[int] = mapped_column(Integer)
     backend: Mapped[str] = mapped_column(String(20))
     resources: Mapped[dict] = mapped_column(JSON)
-    operation_journal: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    operation_journal: Mapped[dict] = mapped_column(
+        JSON(none_as_null=True), nullable=False
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cleanup_verified: Mapped[bool] = mapped_column(Boolean, default=False)

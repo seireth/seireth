@@ -9,8 +9,11 @@ worker service, frontend, or Go service is required.
 Alembic revision files create and evolve the schema. Run `python -m app migrate`
 explicitly for native startup. `python -m app docker-up` stops any existing API,
 waits for PostgreSQL, runs migrations with `docker compose run --rm`, then starts
-the API only on success and waits for its healthcheck. The API does not check migration revisions or run DDL. One PostgreSQL advisory lock guards the dispatcher for the application
-lifetime; a second API process refuses to start. Ownership loss interrupts work.
+the API only on success and waits for its healthcheck. Both services use the same
+application image. The fresh `0001_initial_schema` revision defines the complete schema;
+subsequent changes add revisions. Every attempt requires an operation journal.
+The API does not check migration revisions or run DDL. One PostgreSQL advisory lock
+guards the dispatcher for the application lifetime; a second API process refuses to start. Ownership loss interrupts work.
 
 ## Execution
 

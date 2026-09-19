@@ -2,8 +2,8 @@
 
 SEIRETH is a local, single-operator development tool. Run only owned or explicitly
 authorized images. The fixed development actor is not production authentication.
-API and database ports bind to loopback; do not expose this deployment to untrusted
-networks. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
+The example API binding and the database port use loopback. Setting a non-loopback
+API host exposes this unauthenticated development API; do not expose it to untrusted networks. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
 
 ## Enforced boundaries
 
@@ -59,3 +59,7 @@ docker compose logs api
 ```
 
 Do not use global Docker prune on a shared daemon.
+
+Every attempt requires a journal. Missing or corrupt journals cannot certify
+cleanup or authorize a retry. Inspect the journal and daemon activity before
+resolving persistent uncertainty; do not clear flags just because resources are absent.

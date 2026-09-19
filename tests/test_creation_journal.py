@@ -10,7 +10,7 @@ from app.orchestrator import execute
 from app.sandbox import DockerSandbox, new_journal
 
 
-def make_sandbox(journal=None, persist=None):
+def make_sandbox(journal, persist=None):
     return DockerSandbox(
         "demo:local",
         runner_image="python:3.14-slim",
@@ -91,21 +91,20 @@ def test_crash_boundaries_remain_conservative(monkeypatch, boundary):
     assert not daemon.live
 
 
-def test_legacy_absence_remains_unknown(monkeypatch):
-    daemon = FakeDocker()
-    daemon.install(monkeypatch)
-    sandbox = make_sandbox()
-    assert not sandbox.cleanup().verified
-    for kind in sandbox.resources:
-        daemon.add(sandbox, kind)
-    assert sandbox.cleanup().verified
-    assert not daemon.live
+@pytest.mark.parametrize(
+    "journal", [None, {}, {"version": 1, "owner": "invalid", "resources": {}}]
+)
+def test_invalid_journal_is_rejected(journal):
+    with pytest.raises(ValueError, match="invalid operation journal"):
+        make_sandbox(journal)
 
 
 def test_persist_observed_id_before_removing_late_resource(monkeypatch):
     daemon = FakeDocker()
     daemon.install(monkeypatch)
-    sandbox = make_sandbox(new_journal(legacy=True))
+    journal = new_journal()
+    journal["resources"]["network"]["state"] = "uncertain"
+    sandbox = make_sandbox(journal)
     daemon.add(sandbox, "network")
 
     def cannot_persist(journal, advancing):

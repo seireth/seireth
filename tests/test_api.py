@@ -8,6 +8,8 @@ import pytest_asyncio
 from app.api import app
 from app.config import settings
 
+pytestmark = pytest.mark.asyncio
+
 
 @pytest_asyncio.fixture
 async def client(database):
@@ -22,23 +24,53 @@ async def client(database):
         yield test_client
 
 
-@pytest.mark.asyncio
-async def test_scope_is_required(client):
-    project = (await client.post("/api/v1/projects", json={"name": "demo"})).json()
-    target = (
-        await client.post(
-            "/api/v1/targets",
-            json={
-                "project_id": project["id"],
-                "name": "demo",
-                "url": "http://demo-target:8080",
-            },
-        )
-    ).json()
+@pytest_asyncio.fixture
+async def project(client):
+    response = await client.post("/api/v1/projects", json={"name": "demo"})
+    assert response.status_code == 200
+    return response.json()["id"]
+
+
+@pytest_asyncio.fixture
+async def target(client, project, request):
+    response = await client.post(
+        "/api/v1/targets",
+        json={
+            "project_id": project,
+            "name": "demo",
+            "url": getattr(request, "param", "http://demo-target:8080"),
+        },
+    )
+    assert response.status_code == 200
+    return response.json()
+
+
+@pytest.fixture
+def scope_payload(project, target):
+    return {
+        "project_id": project,
+        "target_id": target["id"],
+        "allowed_url": target["url"],
+        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+    }
+
+
+@pytest_asyncio.fixture
+async def assessment_payload(client, scope_payload):
+    response = await client.post("/api/v1/authorization-scopes", json=scope_payload)
+    assert response.status_code == 200
+    return {
+        "project_id": scope_payload["project_id"],
+        "target_id": scope_payload["target_id"],
+        "scope_id": response.json()["id"],
+    }
+
+
+async def test_scope_is_required(client, project, target):
     response = await client.post(
         "/api/v1/assessments",
         json={
-            "project_id": project["id"],
+            "project_id": project,
             "target_id": target["id"],
             "scope_id": "missing",
         },
@@ -46,39 +78,12 @@ async def test_scope_is_required(client):
     assert response.status_code == 403
 
 
-@pytest.mark.asyncio
-async def test_passive_assessment_returns_json_and_cleanup(client):
-    project = (await client.post("/api/v1/projects", json={"name": "demo2"})).json()
-    target = (
-        await client.post(
-            "/api/v1/targets",
-            json={
-                "project_id": project["id"],
-                "name": "demo",
-                "url": "http://demo-target:8080",
-            },
-        )
-    ).json()
-    scope = (
-        await client.post(
-            "/api/v1/authorization-scopes",
-            json={
-                "project_id": project["id"],
-                "target_id": target["id"],
-                "allowed_url": "http://demo-target:8080",
-                "expires_at": (
-                    datetime.now(timezone.utc) + timedelta(hours=1)
-                ).isoformat(),
-            },
-        )
-    ).json()
+async def test_passive_assessment_returns_json_and_cleanup(
+    client, project, assessment_payload
+):
     result = await client.post(
         "/api/v1/assessments",
-        json={
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "scope_id": scope["id"],
-        },
+        json=assessment_payload,
     )
     assert result.status_code == 202
     assert result.headers["location"].endswith(result.json()["id"])
@@ -98,7 +103,7 @@ async def test_passive_assessment_returns_json_and_cleanup(client):
     assert assessment["status"] == "completed"
     assert assessment["cleanup_pending"] is False
     assert assessment["result"] == report["result"]
-    audit = (await client.get(f"/api/v1/projects/{project['id']}/audit-events")).json()
+    audit = (await client.get(f"/api/v1/projects/{project}/audit-events")).json()
     assert [event["action"] for event in audit] == [
         "project.created",
         "target.registered",
@@ -109,38 +114,19 @@ async def test_passive_assessment_returns_json_and_cleanup(client):
     ]
 
 
-@pytest.mark.asyncio
-async def test_expired_scope_is_rejected(client):
-    project = (await client.post("/api/v1/projects", json={"name": "expired"})).json()
-    target = (
-        await client.post(
-            "/api/v1/targets",
-            json={
-                "project_id": project["id"],
-                "name": "demo",
-                "url": "http://demo-target:8080",
-            },
-        )
-    ).json()
-    scope = await client.post(
-        "/api/v1/authorization-scopes",
-        json={
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "allowed_url": "http://demo-target:8080",
-            "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
-        },
-    )
-    assert scope.status_code == 400
+async def test_expired_scope_is_rejected(client, scope_payload):
+    scope_payload["expires_at"] = (
+        datetime.now(timezone.utc) - timedelta(hours=1)
+    ).isoformat()
+    response = await client.post("/api/v1/authorization-scopes", json=scope_payload)
+    assert response.status_code == 400
 
 
-@pytest.mark.asyncio
-async def test_target_image_must_be_allowlisted(client):
-    project = (await client.post("/api/v1/projects", json={"name": "images"})).json()
+async def test_target_image_must_be_allowlisted(client, project):
     response = await client.post(
         "/api/v1/targets",
         json={
-            "project_id": project["id"],
+            "project_id": project,
             "name": "untrusted",
             "image": "attacker/image:latest",
             "url": "http://demo-target:8080",
@@ -149,10 +135,9 @@ async def test_target_image_must_be_allowlisted(client):
     assert response.status_code == 400
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("explicit_image", [False, True])
 async def test_target_stores_default_or_explicit_allowed_image(
-    client, monkeypatch, explicit_image
+    client, project, monkeypatch, explicit_image
 ):
     from app.db import SessionLocal
     from app.models import Target
@@ -163,10 +148,7 @@ async def test_target_stores_default_or_explicit_allowed_image(
         "docker_allowed_target_images",
         [settings.docker_target_image, alternative],
     )
-    project = (
-        await client.post("/api/v1/projects", json={"name": "allowed-images"})
-    ).json()
-    payload = {"project_id": project["id"], "name": "allowed"}
+    payload = {"project_id": project, "name": "allowed"}
     if explicit_image:
         payload["image"] = alternative
     response = await client.post("/api/v1/targets", json=payload)
@@ -178,52 +160,24 @@ async def test_target_stores_default_or_explicit_allowed_image(
         )
 
 
-@pytest.mark.asyncio
-async def test_default_image_must_also_be_allowlisted(client, monkeypatch):
+async def test_default_image_must_also_be_allowlisted(client, project, monkeypatch):
     monkeypatch.setattr(settings, "docker_allowed_target_images", [])
-    project = (
-        await client.post("/api/v1/projects", json={"name": "denied-default"})
-    ).json()
     response = await client.post(
-        "/api/v1/targets", json={"project_id": project["id"], "name": "default"}
+        "/api/v1/targets", json={"project_id": project, "name": "default"}
     )
     assert response.status_code == 400
 
 
-@pytest.mark.asyncio
 async def test_queued_and_cancelled_before_execution_have_no_result(
-    client, monkeypatch
+    client, assessment_payload, monkeypatch
 ):
     from app.api import dispatcher
 
     submitted = []
     monkeypatch.setattr(dispatcher, "submit", submitted.append)
-    project = (await client.post("/api/v1/projects", json={"name": "queued"})).json()
-    target = (
-        await client.post(
-            "/api/v1/targets", json={"project_id": project["id"], "name": "demo"}
-        )
-    ).json()
-    scope = (
-        await client.post(
-            "/api/v1/authorization-scopes",
-            json={
-                "project_id": project["id"],
-                "target_id": target["id"],
-                "allowed_url": "http://demo-target:8080",
-                "expires_at": (
-                    datetime.now(timezone.utc) + timedelta(minutes=5)
-                ).isoformat(),
-            },
-        )
-    ).json()
     response = await client.post(
         "/api/v1/assessments",
-        json={
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "scope_id": scope["id"],
-        },
+        json=assessment_payload,
     )
     assert response.status_code == 202
     queued = response.json()
@@ -239,19 +193,8 @@ async def test_queued_and_cancelled_before_execution_have_no_result(
     assert cancelled["result"] is None
 
 
-@pytest.mark.asyncio
-async def test_scope_cannot_escape_target_origin_or_path(client):
-    project = (await client.post("/api/v1/projects", json={"name": "scope"})).json()
-    target = (
-        await client.post(
-            "/api/v1/targets",
-            json={
-                "project_id": project["id"],
-                "name": "demo",
-                "url": "https://example.test/app",
-            },
-        )
-    ).json()
+@pytest.mark.parametrize("target", ["https://example.test/app"], indirect=True)
+async def test_scope_cannot_escape_target_origin_or_path(client, scope_payload):
     for allowed_url in (
         "https://other.example/app",
         "https://example.test/application",
@@ -259,13 +202,6 @@ async def test_scope_cannot_escape_target_origin_or_path(client):
     ):
         response = await client.post(
             "/api/v1/authorization-scopes",
-            json={
-                "project_id": project["id"],
-                "target_id": target["id"],
-                "allowed_url": allowed_url,
-                "expires_at": (
-                    datetime.now(timezone.utc) + timedelta(hours=1)
-                ).isoformat(),
-            },
+            json={**scope_payload, "allowed_url": allowed_url},
         )
         assert response.status_code == 400

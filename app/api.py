@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Response
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models
@@ -163,10 +162,7 @@ def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
 def get_results(assessment_id: str, db: Session = Depends(get_db)):
     """Return the assessment status, JSON result, and normalized findings."""
 
-    item = db.get(models.Assessment, assessment_id)
-    if not item:
-        raise HTTPException(404, "assessment not found")
-    authorize_project(db, item.project_id)
+    item = get_assessment(assessment_id, db)
     return {
         "assessment_id": item.id,
         "status": item.status,
@@ -212,11 +208,7 @@ def get_audit_events(project_id: str, db: Session = Depends(get_db)):
 def cancel_assessment(
     assessment_id: str, response: Response, db: Session = Depends(get_db)
 ):
-    item = db.scalar(
-        select(models.Assessment)
-        .where(models.Assessment.id == assessment_id)
-        .with_for_update()
-    )
+    item = db.get(models.Assessment, assessment_id, with_for_update=True)
     if not item:
         raise HTTPException(404, "assessment not found")
     authorize_project(db, item.project_id)
