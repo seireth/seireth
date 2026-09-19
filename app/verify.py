@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
-
-from .config import settings
 
 
 def require(response: httpx.Response, expected: int) -> dict:
@@ -132,6 +129,7 @@ def verify(
             "target.registered",
             "scope.authorized",
             "assessment.queued",
+            "assessment.running",
             "assessment.completed",
         ]
         if actions != expected_actions:
@@ -144,21 +142,3 @@ def verify(
             "results": results,
             "audit": audit,
         }
-
-
-def main() -> int:
-    """Parse verification options, run the workflow, and print its JSON output."""
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base-url", default=settings.api_base_url)
-    parser.add_argument("--timeout-seconds", type=positive_timeout, default=120)
-    parser.add_argument("--expected-backend", choices=("inmemory", "docker"))
-    args = parser.parse_args()
-    print(
-        json.dumps(
-            verify(args.base_url, args.timeout_seconds, args.expected_backend),
-            indent=2,
-            default=str,
-        )
-    )
-    return 0

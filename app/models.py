@@ -2,7 +2,17 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -19,6 +29,8 @@ class AssessmentStatus(StrEnum):
 
     queued = "queued"
     running = "running"
+    cancelling = "cancelling"
+    recovering = "recovering"
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
@@ -36,10 +48,6 @@ class Project(Base):
         String(200), default="local-development", index=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
-    targets: Mapped[list["Target"]] = relationship(cascade="all, delete-orphan")
-    scopes: Mapped[list["AuthorizationScope"]] = relationship(
-        cascade="all, delete-orphan"
-    )
 
 
 class Target(Base):
@@ -72,6 +80,15 @@ class Assessment(Base):
     """A single execution of a selected assessment profile."""
 
     __tablename__ = "assessments"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'cancelling', 'recovering', 'completed', 'failed', 'cancelled')",
+            name="assessment_status_valid",
+        ),
+    )
+    cleanup_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
@@ -83,7 +100,6 @@ class Assessment(Base):
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     findings: Mapped[list["Finding"]] = relationship(cascade="all, delete-orphan")
-    evidence: Mapped[list["Evidence"]] = relationship(cascade="all, delete-orphan")
 
 
 class Finding(Base):
@@ -126,4 +142,23 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
-"""SQLAlchemy persistence models for the MVP-0 domain."""
+class Attempt(Base):
+    """Durable ownership of one execution, committed before creating resources."""
+
+    __tablename__ = "attempts"
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "number", name="attempt_number_unique"),
+        CheckConstraint("number BETWEEN 1 AND 2", name="attempt_number_bounded"),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id"), index=True)
+    number: Mapped[int] = mapped_column(Integer)
+    backend: Mapped[str] = mapped_column(String(20))
+    resources: Mapped[dict] = mapped_column(JSON)
+    operation_journal: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cleanup_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    error: Mapped[str | None] = mapped_column(String(200))

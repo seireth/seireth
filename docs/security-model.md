@@ -1,60 +1,61 @@
 # Security model
 
-SEIRETH MVP-0 is a local, single-operator development tool. Run only images and
-targets you own or are explicitly authorized to assess. Report vulnerabilities
-using [SECURITY.md](../SECURITY.md).
+SEIRETH is a local, single-operator development tool. Run only owned or explicitly
+authorized images. The fixed development actor is not production authentication.
+API and database ports bind to loopback; do not expose this deployment to untrusted
+networks. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
 
-## Implemented controls
+## Enforced boundaries
 
-- Project ownership checks use one fixed development actor.
-- Authorization scopes are bounded to a target origin/path and checked for
-  expiry at scope creation and assessment submission.
-- Target registration accepts only image references on the operator's allowlist.
-- Docker assessments create an internal network and do not publish target ports.
-- Target and runner containers have read-only root filesystems, dropped Linux
-  capabilities, no-new-privileges, CPU/memory/PID limits, and a restricted `/tmp`.
-- Targets use an unprivileged numeric user. The runner currently uses its image's
-  default user. Neither receives the Docker socket.
-- Plugin execution is followed by cleanup, and outcome records include cleanup status.
+Admission and execution check project/target/scope relationships, origin/path,
+expiry, passive profile, and the operator's image allowlist. Root URL scopes include
+child paths; traversal, credentials, fragments, and ambiguous multiply encoded
+paths are rejected. Redirect responses are inspected without following them.
 
-## Trust boundaries and limitations
+The runner maps the registered host to the disposable target's Docker alias. It
+measures the cloned image instance, not the original remote host. HTTPS targets
+must have certificates valid for the sandbox alias; custom hostname/TLS mapping
+is not implemented.
 
-The API container mounts the host Docker socket. Control of this API process
-can grant substantial control over the Docker host. The image allowlist does
-not mitigate a compromised operator account or Docker daemon.
+Targets and runners use a private internal network, no published ports, a non-root
+numeric user, dropped capabilities, no-new-privileges, read-only filesystems, and
+CPU/memory/PID limits. Neither gets the Docker socket. Scope expiry and cancellation
+interrupt actual runner operations. Cleanup independently verifies each resource.
 
-The API has no production authentication, tenant isolation, or TLS setup. Compose
-publishes port 8000 using the host's default bind behavior. Do not expose it to
-untrusted networks. Source-code scope checks are not proof of target ownership.
+## Privileged and remaining boundaries
 
-Docker containers share a kernel and are not a sufficient boundary for arbitrary
-hostile workloads. Image tags are mutable. Allowlist changes are checked on new
-registrations and do not revoke images already stored on targets.
+The API itself has the host Docker socket and therefore substantial host control.
+The image allowlist does not protect a compromised API process, operator, or Docker
+daemon. Containers share a kernel and are not appropriate for arbitrary hostile
+workloads. Source-code scope checks do not prove target ownership. Image tags are
+mutable. There is no multi-user authentication, tenant isolation, or production TLS.
 
-The in-memory backend simulates responses and offers no real target isolation
-or security measurement. The header plugin checks presence of three headers;
-it does not validate their values or comprehensively assess application security.
+The in-memory backend simulates headers without network access. The current plugin
+checks only three header presences; it does not validate values or prove security.
+Audit events are application records, not tamper-proof evidence.
 
-Cancellation is cooperative. Scope expiry is checked when work is submitted,
-not continuously during execution. Startup recovery may requeue unfinished work;
-it does not reconcile all resources left by a process crash. Audit events are
-application records, not cryptographically tamper-proof evidence.
+## Cleanup and failure
 
-## Cleanup and operator checks
+Each resource carries assessment/attempt labels and has a persisted name. Cleanup
+checks ownership and resource IDs before removal and uses successful enumeration
+to verify absence. Creation intent is durable before launching Docker; absence
+does not resolve an interrupted creation with no known resource ID.
+Docker errors, permissions failures, timeouts, or ownership mismatches never mean
+successful cleanup. Mismatched resources are left untouched and reported unverified.
 
-The Docker backend attempts to remove its runner, target, and network, then
-checks that the network cannot be inspected. The current cleanup boolean does
-not independently inspect both containers after removal. Docker CI adds a
-separate check that no assessment containers or networks remain.
+A terminal `cancelled` result after execution requires verified cleanup. Unverified
+cleanup produces `failed` with `cleanup_verified: false` and `cleanup_pending: true`;
+startup and a background check every 30 seconds revisit cleanup
+without retrying that assessment. Crash-interrupted work is retried once only after
+verified cleanup and renewed policy checks. An unknown cleanup outcome requires
+operator investigation even though execution has stopped.
 
-For failures or interrupted runs, inspect:
+Inspect affected resources using exact labels/names:
 
 ```bash
-docker ps -a --filter name=seireth-target- --filter name=seireth-assessment-runner-
-docker network ls --filter name=seireth-assessment-
+docker ps -a --filter label=seireth.assessment=ASSESSMENT_ID
+docker network ls --filter label=seireth.assessment=ASSESSMENT_ID
 docker compose logs api
 ```
 
-Match resources to the affected run and confirm they are no longer needed before
-removing them by exact name. Do not use a global Docker prune on a shared daemon.
-Treat `cleanup_verified: false` or a missing result as requiring investigation.
+Do not use global Docker prune on a shared daemon.

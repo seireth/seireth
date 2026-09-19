@@ -5,17 +5,20 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from app.api import app
 from app.config import settings
-from app.main import app
 
 
 @pytest_asyncio.fixture
-async def client():
+async def client(database):
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-    ) as test_client:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as test_client,
+    ):
         yield test_client
 
 
@@ -88,9 +91,12 @@ async def test_passive_assessment_returns_json_and_cleanup(client):
         await asyncio.sleep(0.01)
     assert report["status"] == "completed"
     assert report["result"]["cleanup_verified"] is True
+    assert report["cleanup_pending"] is False
+    assert report["result"]["cleanup_reason"] is None
     assert report["findings"]
     assessment = (await client.get(result.headers["location"])).json()
     assert assessment["status"] == "completed"
+    assert assessment["cleanup_pending"] is False
     assert assessment["result"] == report["result"]
     audit = (await client.get(f"/api/v1/projects/{project['id']}/audit-events")).json()
     assert [event["action"] for event in audit] == [
@@ -98,6 +104,7 @@ async def test_passive_assessment_returns_json_and_cleanup(client):
         "target.registered",
         "scope.authorized",
         "assessment.queued",
+        "assessment.running",
         "assessment.completed",
     ]
 
@@ -187,7 +194,7 @@ async def test_default_image_must_also_be_allowlisted(client, monkeypatch):
 async def test_queued_and_cancelled_before_execution_have_no_result(
     client, monkeypatch
 ):
-    from app.main import dispatcher
+    from app.api import dispatcher
 
     submitted = []
     monkeypatch.setattr(dispatcher, "submit", submitted.append)

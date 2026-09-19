@@ -1,8 +1,11 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from time import sleep
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/slow":
+            sleep(1.5)  # Owned fixture for cancellation and process-crash tests.
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
