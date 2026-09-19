@@ -1,17 +1,51 @@
 name: seireth
 
 services:
-  api:
-    build: .
-    env_file:
-      - .env
+  postgres:
+    image: postgres:18
     environment:
-      SEIRETH_DATABASE_URL: sqlite:////data/seireth.db
-      SEIRETH_SANDBOX_BACKEND: docker
-      SEIRETH_DOCKER_RUNNER_IMAGE: python:3.14-slim
-    ports: ["8000:8000"]
+      POSTGRES_USER: seireth
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: seireth
+    ports: ["127.0.0.1:5432:5432"]
     volumes:
-      - seireth-data:/data
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U seireth -d seireth"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  migrate:
+    profiles: [tools]
+    image: ${COMPOSE_PROJECT_NAME:-seireth}-app:local
+    env_file: [.env]
+    environment:
+      SEIRETH_DATABASE_URL: postgresql+psycopg://seireth:${POSTGRES_PASSWORD}@postgres:5432/seireth
+    command: ["python", "-m", "app", "migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  api:
+    image: ${COMPOSE_PROJECT_NAME:-seireth}-app:local
+    build: .
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
+    stop_grace_period: 180s
+    env_file: [.env]
+    environment:
+      SEIRETH_DATABASE_URL: postgresql+psycopg://seireth:${POSTGRES_PASSWORD}@postgres:5432/seireth
+      SEIRETH_SANDBOX_BACKEND: docker
+    ports:
+      - target: 8000
+        published: "${SEIRETH_API_PORT:?Set SEIRETH_API_PORT in .env}"
+        host_ip: "${SEIRETH_API_HOST:?Set SEIRETH_API_HOST in .env}"
+    volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      postgres:
+        condition: service_healthy
 volumes:
-  seireth-data:
+  postgres-data:

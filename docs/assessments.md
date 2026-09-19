@@ -1,64 +1,31 @@
 # Assessments
 
-The API explorer at `http://127.0.0.1:8000/docs` contains the generated request
-schemas. For an executable end-to-end example, use the following in an activated
-environment while the API is running:
+Open `/docs` on your configured API address for request schemas and interactive
+requests. `python -m app verify` runs the full example and checks findings, cleanup,
+and audit ordering; its implementation is in [app/verify.py](../app/verify.py).
 
-```python
-from datetime import datetime, timedelta, timezone
-import time
-import httpx
-
-with httpx.Client(base_url="http://127.0.0.1:8000", timeout=10) as client:
-    def post(path, body):
-        response = client.post(path, json=body)
-        response.raise_for_status()
-        return response
-
-    project = post("/api/v1/projects", {"name": "Example"}).json()
-    target = post("/api/v1/targets", {
-        "project_id": project["id"], "name": "Demo",
-        "url": "http://demo-target:8080",
-    }).json()
-    scope = post("/api/v1/authorization-scopes", {
-        "project_id": project["id"], "target_id": target["id"],
-        "allowed_url": "http://demo-target:8080",
-        "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
-    }).json()
-    accepted = post("/api/v1/assessments", {
-        "project_id": project["id"], "target_id": target["id"],
-        "scope_id": scope["id"], "profile": "passive",
-    })
-    location = accepted.headers["Location"]
-    deadline = time.monotonic() + 120
-    while time.monotonic() < deadline:
-        response = client.get(location + "/results")
-        response.raise_for_status()
-        report = response.json()
-        if report["status"] in {"completed", "failed", "cancelled"}:
-            print(report)
-            break
-        time.sleep(0.2)
-    else:
-        raise TimeoutError(f"Still waiting for {location}; inspect or cancel it")
-```
-
-For automated verification, `python -m app verify` additionally asserts successful
-completion, demo findings, cleanup, and audit ordering.
+| Operation | Endpoint |
+| --- | --- |
+| Create a project | `POST /api/v1/projects` |
+| Register an allowlisted target | `POST /api/v1/targets` |
+| Authorize a bounded URL and expiry | `POST /api/v1/authorization-scopes` |
+| Submit an assessment using those IDs | `POST /api/v1/assessments` |
+| Read audit events | `GET /api/v1/projects/{id}/audit-events` |
 
 ## Authorization
 
 A scope must belong to the same project and target, be unexpired when created
-and when an assessment is submitted, and stay within the registered URL's
+and when an assessment is submitted, executed, or retried, and stay within the registered URL's
 origin and path. The only supported profile is `passive`. All requests currently
 use one development actor; there is no user authentication flow.
 
 ## Status and result
 
-Creation returns `202 Accepted`, normally with this shape:
+Creation returns `202 Accepted`. Poll the `Location` response header, appending
+`/results` for findings, until `completed`, `failed`, or `cancelled`. A queued record is:
 
 ```json
-{"id": "assessment-id", "status": "queued", "result": null}
+{"id": "assessment-id", "status": "queued", "result": null, "cleanup_pending": false}
 ```
 
 `result` is nullable because creation acknowledges background work before an
@@ -69,38 +36,37 @@ clients should handle any returned state.
 | Status | Meaning |
 | --- | --- |
 | `queued` | Work accepted, no recorded execution outcome yet |
-| `running` | Execution state; intermediate updates may not be visible until the worker commits |
+| `running` | Claimed and committed before sandbox execution |
+| `cancelling` | Cancellation requested; execution is stopping and cleanup is pending |
+| `recovering` | Interrupted attempt being reconciled before a possible retry |
 | `completed` | Execution succeeded and cleanup reported success |
 | `failed` | Execution or cleanup failed; inspect `result` and server logs |
 | `cancelled` | Cancellation recorded; execution may not have started |
 
 `GET /api/v1/assessments/{id}/results` returns `assessment_id`, `status`, `result`,
 and a `findings` array. A successful result contains `plugin`, `finding_count`,
-`sandbox_backend`, `cleanup_verified`, and `completed_at`. A zero count means
+`sandbox_backend`, `cleanup_verified`, `completed_at`, and the attempt number. A zero count means
 the plugin found no missing required headers, not that the target is secure.
 
-An execution failure can produce:
-
-```json
-{
-  "sandbox_backend": "docker",
-  "cleanup_verified": true,
-  "error": "assessment execution failed",
-  "completed_at": "2026-09-17T12:00:00+00:00"
-}
-```
-
-Some worker failures have fewer fields. A cleanup failure can retain plugin
-summary fields with `cleanup_verified: false` and status `failed`. Always inspect
-status together with the result instead of assuming one fixed failure shape.
+Execution failures include an `error` in the result. Unverified cleanup always
+produces `failed`, including after cancellation. Assessment and results responses
+include `cleanup_pending`; `result.cleanup_reason` explains unresolved cleanup.
+Inspect `cleanup_verified` independently of execution success. See the
+[cleanup procedure](security-model.md#cleanup-and-failure) for reconciliation,
+resource inspection, and why absence alone cannot resolve uncertain creation.
 
 ## Cancellation and audit events
 
-`POST /api/v1/assessments/{id}/cancel` requests cancellation of queued or running
-work. Already terminal assessments return `409`. Cancellation is cooperative;
-it does not immediately terminate a Docker subprocess. Cancellation before
-execution may leave `result` null. A cancelled status alone does not prove cleanup.
+`POST /api/v1/assessments/{id}/cancel` immediately cancels queued work (HTTP 200,
+possibly null result). For active work it returns HTTP 202 and `cancelling`;
+repeated pending requests are idempotent. Terminal runs return HTTP 409.
+Continue polling during `running`, `cancelling`, and `recovering`.
 
-`GET /api/v1/projects/{project_id}/audit-events` returns chronological events.
-A successful demo records project creation, target registration, scope
-authorization, assessment queuing, and assessment completion.
+Cancellation interrupts the runner and cleans up before the final `cancelled`
+outcome. Deadline or scope expiry produces `failed` after cleanup. Crash recovery
+can retry once after cleanup and fresh policy validation; results expose `attempt`.
+
+Audit events include `assessment.running`, `assessment.cancelling`, and recovery
+transitions as applicable. A normal success records project creation, target
+registration, scope authorization, assessment queuing, running, and completion.
+Transitions and their audit records are committed together.

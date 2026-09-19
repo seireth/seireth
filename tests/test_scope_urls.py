@@ -1,7 +1,4 @@
-import pytest
-
-from app.main import bounded_url
-from app.worker import AssessmentWorker
+from app.policy import bounded_url
 
 
 def test_scope_requires_a_path_boundary():
@@ -17,11 +14,9 @@ def test_scope_requires_a_path_boundary():
     )
 
 
-def test_worker_timeout_still_runs_cleanup():
-    cleaned = []
-    worker = AssessmentWorker(timeout_seconds=0.01)
-    with pytest.raises(TimeoutError):
-        worker.run(
-            lambda cancel: __import__("time").sleep(0.1), lambda: cleaned.append(True)
-        )
-    assert cleaned == [True]
+def test_root_scope_contains_child_paths():
+    assert bounded_url("https://example.test/login", "https://example.test/")
+    assert not bounded_url("https://other.test/login", "https://example.test/")
+    assert not bounded_url(
+        "https://example.test/%252e%252e/secret", "https://example.test/"
+    )

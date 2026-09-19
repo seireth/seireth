@@ -1,6 +1,4 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
-from urllib.parse import unquote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 from sqlalchemy.orm import Session
@@ -8,7 +6,9 @@ from sqlalchemy.orm import Session
 from . import models
 from .config import settings
 from .db import get_db
-from .migration import migrate
+from .lifecycle import audit, transition
+from .policy import ACTOR as MVP_ACTOR
+from .policy import PolicyError, bounded_url, unexpired, validate
 from .schemas import (
     AssessmentCreate,
     AssessmentOut,
@@ -21,53 +21,15 @@ from .worker import dispatcher
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Apply migrations and recover persisted assessment jobs at startup."""
-    migrate()
-    dispatcher.recover()
-    yield
+    """Hold dispatcher ownership for the application lifetime."""
+    dispatcher.start()
+    try:
+        yield
+    finally:
+        dispatcher.stop()
 
 
 app = FastAPI(title="Seireth MVP-0", version="0.1.0", lifespan=lifespan)
-MVP_ACTOR = "local-development"
-
-
-def unexpired(value: datetime) -> bool:
-    """Return whether a timestamp is in the future, treating naive values as UTC."""
-
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value > datetime.now(timezone.utc)
-
-
-def bounded_url(candidate: str, registered: str) -> bool:
-    """Return whether a candidate URL stays within the registered target origin/path."""
-
-    left, right = urlsplit(candidate), urlsplit(registered)
-    if (
-        left.username
-        or left.password
-        or left.fragment
-        or right.username
-        or right.password
-    ):
-        return False
-    try:
-        left_port = left.port or (443 if left.scheme == "https" else 80)
-        right_port = right.port or (443 if right.scheme == "https" else 80)
-    except ValueError:
-        return False
-    if (left.scheme.lower(), (left.hostname or "").lower(), left_port) != (
-        right.scheme.lower(),
-        (right.hostname or "").lower(),
-        right_port,
-    ):
-        return False
-    base = unquote(right.path).rstrip("/") or "/"
-    path = unquote(left.path) or "/"
-    if ".." in base.split("/") or ".." in path.split("/"):
-        return False
-    # A path boundary is required: /app does not contain /application.
-    return path == base or path.startswith(base + "/")
 
 
 def authorize_project(db: Session, project_id: str) -> models.Project:
@@ -79,18 +41,12 @@ def authorize_project(db: Session, project_id: str) -> models.Project:
     return project
 
 
-def audit(db: Session, project_id: str, action: str, resource_id: str) -> None:
-    """Queue an append-only audit event for the current database transaction."""
-
-    db.add(
-        models.AuditEvent(project_id=project_id, action=action, resource_id=resource_id)
-    )
-
-
 @app.get("/health")
 def health() -> dict[str, str]:
     """Return a lightweight readiness response."""
 
+    if not dispatcher.ready:
+        raise HTTPException(503, "assessment dispatcher unavailable")
     return {"status": "ok"}
 
 
@@ -161,20 +117,21 @@ def create_assessment(
 ):
     """Validate authorization and enqueue a passive assessment."""
 
-    authorize_project(db, payload.project_id)
+    project = authorize_project(db, payload.project_id)
     target = db.get(models.Target, payload.target_id)
     scope = db.get(models.AuthorizationScope, payload.scope_id)
-    if (
-        not target
-        or target.project_id != payload.project_id
-        or not scope
-        or scope.project_id != payload.project_id
-        or scope.target_id != target.id
-        or not unexpired(scope.expires_at)
-    ):
-        raise HTTPException(403, "valid authorization scope required")
     if payload.profile != "passive":
         raise HTTPException(400, "MVP-0 only supports the passive profile")
+    try:
+        validate(
+            project,
+            target,
+            scope,
+            payload.profile,
+            settings.docker_allowed_target_images,
+        )
+    except PolicyError as exc:
+        raise HTTPException(403, str(exc)) from exc
     item = models.Assessment(
         project_id=payload.project_id,
         target_id=target.id,
@@ -205,13 +162,11 @@ def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
 def get_results(assessment_id: str, db: Session = Depends(get_db)):
     """Return the assessment status, JSON result, and normalized findings."""
 
-    item = db.get(models.Assessment, assessment_id)
-    if not item:
-        raise HTTPException(404, "assessment not found")
-    authorize_project(db, item.project_id)
+    item = get_assessment(assessment_id, db)
     return {
         "assessment_id": item.id,
         "status": item.status,
+        "cleanup_pending": item.cleanup_pending,
         "result": item.result,
         "findings": [
             {
@@ -250,20 +205,21 @@ def get_audit_events(project_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/assessments/{assessment_id}/cancel")
-def cancel_assessment(assessment_id: str, db: Session = Depends(get_db)):
-    """Cancel an assessment that has not reached a terminal state."""
-
-    item = db.get(models.Assessment, assessment_id)
+def cancel_assessment(
+    assessment_id: str, response: Response, db: Session = Depends(get_db)
+):
+    item = db.get(models.Assessment, assessment_id, with_for_update=True)
     if not item:
         raise HTTPException(404, "assessment not found")
     authorize_project(db, item.project_id)
-    if item.status not in ("queued", "running"):
+    if item.status not in ("queued", "running", "recovering", "cancelling"):
         raise HTTPException(409, "assessment is no longer cancellable")
-    item.status = "cancelled"
-    dispatcher.cancel(item.id)
-    audit(db, item.project_id, "assessment.cancelled", item.id)
+    if item.status == "queued":
+        transition(db, item, "cancelled")
+    else:
+        if item.status != "cancelling":
+            transition(db, item, "cancelling")
+        response.status_code = 202
     db.commit()
+    dispatcher.cancel(item.id)
     return {"id": item.id, "status": item.status}
-
-
-"""FastAPI application and MVP-0 assessment endpoints."""

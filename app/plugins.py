@@ -14,17 +14,9 @@ class PluginFinding:
 
 
 def security_headers(sandbox: Sandbox, url: str) -> list[PluginFinding]:
-    """Check for baseline browser security headers without modifying the target.
+    """Check browser security headers without modifying the target."""
 
-    Args:
-        sandbox: Backend used to obtain the target response headers.
-        url: Authorized target URL included in evidence.
-
-    Returns:
-        One medium-severity finding for each missing required header.
-    """
-
-    headers = {k.lower(): v for k, v in sandbox.execute(url).headers.items()}
+    headers = {k.lower(): v for k, v in sandbox.execute(url).items()}
     required = {
         "x-content-type-options": "Missing X-Content-Type-Options header",
         "content-security-policy": "Missing Content-Security-Policy header",
@@ -40,6 +32,3 @@ def security_headers(sandbox: Sandbox, url: str) -> list[PluginFinding]:
         for name, message in required.items()
         if name not in headers
     ]
-
-
-"""Security-test plugins and their normalized finding types."""

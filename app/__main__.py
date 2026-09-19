@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import math
 import subprocess
 import sys
 
-from .config import settings
 from .verify import positive_timeout, verify
 
 
@@ -25,20 +25,67 @@ def main() -> int:
     serve.add_argument("--host", default=None)
     serve.add_argument("--port", type=int, default=None)
 
-    test = subparsers.add_parser("test", help="Run the test suite")
-    test.add_argument("pytest_args", nargs=argparse.REMAINDER)
+    subparsers.add_parser("test", help="Run pytest, forwarding all following arguments")
 
     check = subparsers.add_parser("verify", help="Run the MVP-0 API workflow")
     check.add_argument("--base-url", default=None)
     check.add_argument("--timeout-seconds", type=positive_timeout, default=120)
     check.add_argument("--expected-backend", choices=("inmemory", "docker"))
 
+    subparsers.add_parser("migrate", help="Apply versioned database migrations")
+    docker_up = subparsers.add_parser(
+        "docker-up", help="Build, migrate, and start the Docker stack"
+    )
+    docker_up.add_argument(
+        "--api-ready-timeout-seconds", type=positive_timeout, default=120
+    )
+
+    if len(sys.argv) > 1 and sys.argv[1] == "test":
+        return run(["pytest", *sys.argv[2:]])
     args = parser.parse_args()
+    if args.command == "docker-up":
+        for stage, command in (
+            ("build", ["build", "api"]),
+            ("stop API", ["stop", "api"]),
+            ("start PostgreSQL", ["up", "-d", "--wait", "postgres"]),
+            ("migration", ["run", "--rm", "--no-deps", "-T", "migrate"]),
+            (
+                "API readiness",
+                [
+                    "up",
+                    "-d",
+                    "--no-deps",
+                    "--wait",
+                    "--wait-timeout",
+                    str(math.ceil(args.api_ready_timeout_seconds)),
+                    "api",
+                ],
+            ),
+        ):
+            try:
+                status = subprocess.call(["docker", "compose", *command])
+            except OSError as error:
+                print(f"docker-up failed during {stage}: {error}", file=sys.stderr)
+                return 1
+            if status:
+                print(
+                    f"docker-up failed during {stage}. Inspect with: docker compose ps -a; docker compose logs api",
+                    file=sys.stderr,
+                )
+                return status
+        return 0
+    if args.command == "migrate":
+        from .migration import migrate
+
+        migrate()
+        return 0
+    from .config import settings
+
     if args.command == "serve":
         return run(
             [
                 "uvicorn",
-                "app.main:app",
+                "app.api:app",
                 "--reload",
                 "--host",
                 args.host if args.host is not None else settings.api_host,
@@ -46,8 +93,6 @@ def main() -> int:
                 str(args.port if args.port is not None else settings.api_port),
             ]
         )
-    if args.command == "test":
-        return run(["pytest", *args.pytest_args])
     try:
         import json
 

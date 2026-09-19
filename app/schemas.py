@@ -2,16 +2,14 @@ from datetime import datetime
 
 from pydantic import AnyHttpUrl, BaseModel, Field
 
+from .models import AssessmentStatus
+
 
 class ProjectCreate(BaseModel):
-    """Request to create a project."""
-
     name: str = Field(min_length=1, max_length=200)
 
 
 class TargetCreate(BaseModel):
-    """Request to register a target."""
-
     project_id: str
     name: str = Field(min_length=1, max_length=200)
     image: str | None = None
@@ -19,8 +17,6 @@ class TargetCreate(BaseModel):
 
 
 class ScopeCreate(BaseModel):
-    """Request to create an authorization scope."""
-
     project_id: str
     target_id: str
     allowed_url: AnyHttpUrl
@@ -28,8 +24,6 @@ class ScopeCreate(BaseModel):
 
 
 class AssessmentCreate(BaseModel):
-    """Request to start an assessment."""
-
     project_id: str
     target_id: str
     scope_id: str
@@ -37,11 +31,7 @@ class AssessmentCreate(BaseModel):
 
 
 class AssessmentOut(BaseModel):
-    """Minimal persisted assessment response."""
-
     id: str
-    status: str
+    status: AssessmentStatus
+    cleanup_pending: bool = False
     result: dict | None = None
-
-
-"""Pydantic request and response schemas for the API."""

@@ -18,7 +18,7 @@ targets, records findings and audit events, and destroys the assessment
 environment afterward.
 
 **MVP-0:** a working local API with one passive HTTP security-header plugin.
-It uses SQLite and a process-local worker. It is not a multi-user production
+It uses PostgreSQL 18, versioned Alembic migrations, and a process-local worker. It is not a multi-user production
 service or a general internet scanner.
 
 ## How it works
@@ -36,95 +36,15 @@ flowchart LR
 - **Disposable Docker resources:** a private network, restricted target, and runner.
 - **Queryable outcomes:** JSON findings, cleanup status, and an audit trail.
 
-## Quick start
+## Getting started
 
-Install **Python 3.14**. Create and activate a virtual environment:
+Follow [the setup guide](docs/getting-started.md) for Python 3.14, PostgreSQL,
+and native or Docker startup. The default in-memory backend simulates responses;
+real assessments require Docker and access to its privileged socket.
 
-**Windows PowerShell**
-
-```powershell
-py -3.14 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-Copy-Item .env.example .env
-```
-
-**macOS / Linux**
-
-```bash
-python3.14 -m venv .venv
-source .venv/bin/activate
-cp .env.example .env
-```
-
-Install and start the API:
-
-```bash
-python -m pip install -e ".[test,quality,security]"
-python -m app serve
-```
-
-Open [the API explorer](http://127.0.0.1:8000/docs). In a second terminal with
-the same virtual environment activated, run:
-
-```bash
-python -m app verify --expected-backend inmemory
-```
-
-The default `inmemory` backend **simulates header responses without network
-access**. It verifies the API workflow; it does not assess a real website.
-
-## Run a real Docker assessment
-
-With Docker Desktop or Docker Engine running, stop the local API to free port
-8000. Keep the `.env` file created above, then run:
-
-```bash
-docker build -t seireth/demo-target:local examples/demo-target
-docker pull python:3.14-slim
-docker compose up --build -d
-python -m app verify --expected-backend docker --timeout-seconds 120
-```
-
-Compose selects the Docker backend and persists assessment records in a named
-volume. The API uses the host Docker socket, which grants substantial host
-control; see the [security model](docs/security-model.md).
-
-A successful demo produces this result shape (timestamp varies):
-
-```json
-{
-  "plugin": "security-headers",
-  "finding_count": 3,
-  "sandbox_backend": "docker",
-  "cleanup_verified": true,
-  "completed_at": "2026-09-17T12:00:00+00:00"
-}
-```
-
-Stop the API with `docker compose down`. Assessment resources are removed by
-the worker; the database volume remains for subsequent use.
-
-## Understanding assessment responses
-
-Creation returns `202 Accepted` because work runs in the background. An initial
-`result: null` means no execution outcome has been recorded yet. Follow the
-`Location` response header to poll the assessment; append `/results` for findings.
-
-Stop polling at `completed`, `failed`, or `cancelled`. A completed assessment
-has a result even when it finds zero issues. An assessment cancelled before
-execution may retain a null result. See [the API walkthrough](docs/assessments.md).
-
-## Development
-
-```bash
-python -m pytest
-python -m ruff check .
-python -m ruff format --check .
-```
-
-Tests use a temporary database and explicit test settings. CI runs on Python
-3.14 and also checks the real Docker lifecycle. See
-[Contributing](CONTRIBUTING.md) for formatting and dependency-audit commands.
+After setup, `python -m app verify` exercises project registration, authorization,
+assessment execution, results, cleanup, and audit ordering. See [Assessments](docs/assessments.md)
+for API states and cancellation, and [Contributing](CONTRIBUTING.md) for development checks.
 
 ## Documentation
 
@@ -140,5 +60,4 @@ Tests use a temporary database and explicit test settings. CI runs on Python
 Use only targets you are authorized to assess. Report SEIRETH vulnerabilities
 through the process in [SECURITY.md](SECURITY.md).
 
-Licensed under [Apache 2.0](LICENSE). The logo is reused from the
-[SEIRETH GitHub organization](https://github.com/seireth).
+Licensed under [Apache 2.0](LICENSE).

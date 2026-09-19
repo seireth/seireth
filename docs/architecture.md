@@ -1,56 +1,55 @@
 # Architecture
 
-SEIRETH MVP-0 is one Python 3.14 application using FastAPI, SQLAlchemy, SQLite,
-and a process-local thread pool. There is no separate queue service, frontend,
-Go service, or distributed worker in the current implementation.
+SEIRETH is one Python 3.14 FastAPI application with PostgreSQL 18, synchronous
+SQLAlchemy/Psycopg, and a two-thread process-local dispatcher. No Redis, separate
+worker service, frontend, or Go service is required.
 
-## Request and execution flow
+## Startup and persistence
 
-1. FastAPI validates project ownership and accepts a registered target and scope.
-2. Assessment creation stores a queued record and audit event, submits work to
-   the dispatcher, and returns `202 Accepted` with a `Location` header.
-3. The dispatcher loads the target and scope in a separate database session.
-4. The orchestrator selects the configured sandbox and runs the header plugin.
-5. Findings and evidence are added; cleanup runs after plugin execution.
-6. The worker commits the final state, result, and terminal audit event.
+Alembic revision files create and evolve the schema. Run `python -m app migrate`
+explicitly for native startup. `python -m app docker-up` stops any existing API,
+waits for PostgreSQL, runs migrations with `docker compose run --rm`, then starts
+the API only on success and waits for its healthcheck. Both services use the same
+application image. The fresh `0001_initial_schema` revision defines the complete schema;
+subsequent changes add revisions. Every attempt requires an operation journal.
+The API does not check migration revisions or run DDL. One PostgreSQL advisory lock
+guards the dispatcher for the application lifetime; a second API process refuses to start. Ownership loss interrupts work.
 
-The dispatcher uses two worker threads. Startup attempts to recover persisted
-queued/running assessments. It is not a durable distributed queue, and restart
-recovery is not a guarantee that earlier Docker resources were reclaimed.
-Use one API process for this MVP.
+## Execution
 
-## Components
+1. Admission validates project ownership, target, scope, profile, and image policy.
+2. The API persists `queued` and its audit event, then submits the assessment ID.
+3. The worker locks the assessment row, rechecks policy, creates a durable attempt
+   with resource names and an operation journal, and commits `running` before
+   issuing Docker commands. Each resource's creation intent is committed before
+   its command, and its ID before advancing to container startup. Containers are
+   created separately from startup and removed explicitly by cleanup.
+4. The plugin receives an execution interface; orchestration owns cleanup.
+5. Findings remain buffered until successful execution and verified cleanup.
+6. Finalization locks the assessment and commits results, findings, evidence,
+   attempt outcome, and terminal audit event together.
 
-| Component | Responsibility |
-| --- | --- |
-| `app/main.py` and `app/schemas.py` | HTTP routes, request validation, scope checks, and response schemas |
-| `app/models.py`, `app/db.py`, `app/migration.py` | SQLAlchemy records, sessions, and small idempotent startup migrations |
-| `app/worker.py` | Background dispatch, cancellation signals, and outcome persistence |
-| `app/orchestrator.py` | Plugin execution, findings/evidence, and cleanup outcomes |
-| `app/sandbox.py` | Simulated backend and Docker CLI resource lifecycle |
-| `app/plugins.py` | Passive presence checks for three HTTP security headers |
-| `app/verify.py` | Public API workflow verification with bounded polling |
+Policy rules live in `app/policy.py`; state transitions and finalization live in
+`app/lifecycle.py`. The remaining API, database, worker, plugin, sandbox, and
+verification modules keep their existing responsibilities.
 
-## Stored data
+## Recovery
 
-Projects own targets and authorization scopes. Assessments reference a project,
-target, and scope, and carry status plus an optional JSON result. Findings and
-evidence belong to assessments. Audit events record project actions.
+Resource names and assessment/attempt ownership labels survive process failure.
+Startup reconciles interrupted attempts before retrying once (two attempts total).
+Only crash/shutdown interruptions qualify. Cancellation, deadline expiry, policy
+rejection, and plugin errors are not retried automatically. Every retry requires
+verified cleanup and current authorization. Failed cleanup remains recorded and
+is revisited at startup and every 30 seconds by a separate reconciliation thread,
+without re-executing the failed assessment or blocking other assessments.
 
-The default database is `seireth.db` in the working directory. Compose stores
-SQLite under `/data` in a named volume. Tests use a disposable SQLite database.
-Evidence is stored internally; the public results endpoint currently exposes
-normalized findings, not a standalone evidence export API.
+Journal ownership tokens fence stale workers after recovery takes over. Journal
+writes use short row-locked transactions; Docker commands run outside those
+transactions. Cleanup verifies ownership and records observed IDs before removal.
+An absent resource with uncertain creation remains pending indefinitely. An
+identified, removed resource can be marked verified; time alone is not evidence.
 
-## Sandbox backends
-
-`inmemory` returns deterministic headers without network traffic. It is useful
-for development and tests, but does not measure target security.
-
-`docker` starts an allowlisted image on an internal per-assessment network,
-then starts a Python runner on that network to fetch response headers. The
-registered URL's host is mapped to the target container's network alias.
-This checks the disposable image instance rather than the original remote host.
-
-See the [security model](security-model.md) for limitations and the
-[roadmap](roadmap.md) for planned capabilities.
+The API is deliberately single-process. PostgreSQL stores authoritative state;
+the thread pool and events are transient execution mechanisms, not a distributed
+queue. Queued work survives restart. Normal shutdown interrupts active work and
+performs bounded cleanup; a later startup may retry the interrupted attempt.

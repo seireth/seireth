@@ -1,67 +1,97 @@
-"""Disposable assessment sandboxes.
-
-The Docker implementation deliberately uses the Docker CLI rather than a
-client library.  This keeps the API process' dependency surface small, while
-still making every privileged operation explicit and easy to audit.
-"""
+"""Owned, cancellable Docker resources and independent removal verification."""
 
 import json
 import re
 import subprocess
+from copy import deepcopy
 from dataclasses import dataclass
+from time import monotonic
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+from .execution import ExecutionContext
 
 
 @dataclass(frozen=True)
-class SandboxResult:
-    """Result of a sandbox request, including cleanup details."""
+class CleanupOutcome:
+    verified: bool
+    reason: str | None = None
 
-    headers: dict[str, str]
-    cleanup_verified: bool
-    error: str | None = None
+
+def new_journal():
+    return {
+        "version": 1,
+        "owner": str(uuid4()),
+        "resources": {
+            kind: {"state": "not_requested", "id": None}
+            for kind in ("network", "target", "runner")
+        },
+    }
+
+
+def validate_journal(journal):
+    """Reject corrupt ownership data rather than inventing cleanup history."""
+    try:
+        UUID(journal["owner"])
+        valid = journal["version"] == 1 and set(journal["resources"]) == {
+            "network",
+            "target",
+            "runner",
+        }
+        for entry in journal["resources"].values():
+            state, identity = entry["state"], entry["id"]
+            valid = valid and (
+                (state in {"not_requested", "uncertain"} and identity is None)
+                or (
+                    state in {"created", "removed"}
+                    and isinstance(identity, str)
+                    and re.fullmatch(r"[a-f0-9]{64}", identity)
+                )
+            )
+        if not valid:
+            raise ValueError("invalid journal fields")
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("invalid operation journal") from exc
 
 
 class Sandbox(Protocol):
-    """Contract implemented by assessment sandbox backends."""
-
-    def execute(self, url: str, timeout_seconds: float = 5) -> SandboxResult: ...
-    def cleanup(self) -> bool: ...
+    def execute(self, url: str, timeout_seconds: float = 5) -> dict[str, str]: ...
+    def cleanup(self) -> CleanupOutcome: ...
 
 
 class InMemorySandbox:
-    """Deterministic test backend; it performs no network access."""
+    """Deterministic backend with no network access."""
 
-    backend_name = "inmemory"
-
-    def __init__(self, headers: dict[str, str] | None = None):
+    def __init__(self, headers=None, context: ExecutionContext | None = None):
         self.headers = headers or {}
-        self.cleaned = False
+        self.context = context
 
-    def execute(self, url: str, timeout_seconds: float = 5) -> SandboxResult:
-        """Return deterministic headers without making a network request."""
+    def execute(self, url: str, timeout_seconds: float = 5) -> dict[str, str]:
+        if self.context:
+            self.context.check()
+        return dict(self.headers)
 
-        return SandboxResult(dict(self.headers), self.cleaned)
-
-    def cleanup(self) -> bool:
-        """Mark the in-memory sandbox as cleaned up."""
-
-        self.cleaned = True
-        return True
+    def cleanup(self) -> CleanupOutcome:
+        return CleanupOutcome(True)
 
 
-_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 _IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,254}$")
-_NETWORK_PREFIX = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,49}$")
 _FETCH = """\
-import json, sys, time, urllib.request
+import json, sys, time, urllib.request, urllib.error
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+opener = urllib.request.build_opener(NoRedirect)
 url, timeout = sys.argv[1], float(sys.argv[2])
 deadline = time.monotonic() + timeout
 last_error = None
 while time.monotonic() < deadline:
     try:
-        response = urllib.request.urlopen(url, timeout=min(2, max(0.1, deadline - time.monotonic())))
+        try:
+            response = opener.open(url, timeout=min(2, max(0.1, deadline - time.monotonic())))
+        except urllib.error.HTTPError as error:
+            response = error
         print(json.dumps(dict(response.headers.items())))
         break
     except OSError as error:
@@ -73,63 +103,98 @@ else:
 
 
 class DockerSandbox:
-    """Run a target and a short-lived Python runner on a private Docker network."""
-
-    backend_name = "docker"
-
     def __init__(
         self,
         image: str,
         *,
         runner_image: str,
-        memory: str = "256m",
-        cpus: float = 0.5,
-        pids_limit: int = 64,
-        network_prefix: str = "seireth-assessment",
-        target_host: str | None = None,
-        target_label: str = "target",
-        assessment_id: str | None = None,
-        target_user: str = "65532:65532",
-        command_timeout: float = 15,
+        memory="256m",
+        cpus=0.5,
+        pids_limit=64,
+        target_host=None,
+        assessment_id=None,
+        attempt_id=None,
+        resources=None,
+        command_timeout=15,
+        context: ExecutionContext | None = None,
+        operation_journal,
+        persist_journal=None,
     ):
         if not _IMAGE.fullmatch(image) or not _IMAGE.fullmatch(runner_image):
             raise ValueError("invalid Docker image name")
-        if not _NETWORK_PREFIX.fullmatch(network_prefix):
-            raise ValueError("invalid Docker network prefix")
         self.image, self.runner_image = image, runner_image
         self.memory, self.cpus, self.pids_limit = memory, cpus, pids_limit
-        self.target_user = target_user
-        self.command_timeout = command_timeout
-        suffix = uuid4().hex[:12]
-        self.network_name = f"{network_prefix}-{suffix}"
-        label = re.sub(r"[^a-z0-9]+", "-", target_label.lower()).strip("-") or "target"
-        label = label[:24].rstrip("-")
-        assessment_label = re.sub(
-            r"[^a-z0-9]+", "-", (assessment_id or suffix).lower()
-        ).strip("-")[:12]
-        self.assessment_label = assessment_label
-        self.target_name = f"seireth-target-{label}-{assessment_label}"
-        self.runner_name = f"seireth-assessment-runner-{assessment_label}"
+        self.command_timeout, self.context = command_timeout, context
         self.target_host = target_host
-        self.container_id: str | None = None
-        self._network_created = False
-        self._last_error: str | None = None
+        validate_journal(operation_journal)
+        self.journal = deepcopy(operation_journal)
+        self.persist_journal = persist_journal
+        self.assessment_id = assessment_id or str(uuid4())
+        self.attempt_id = attempt_id or str(uuid4())
+        token = self.attempt_id.replace("-", "")
+        self.resources = resources or {
+            "network": "seireth-assessment-" + token,
+            "target": "seireth-target-" + token,
+            "runner": "seireth-assessment-runner-" + token,
+        }
+        if set(self.resources) != {"network", "target", "runner"} or any(
+            not re.fullmatch(r"seireth-[a-z0-9-]{1,60}", name)
+            for name in self.resources.values()
+        ):
+            raise ValueError("invalid persisted sandbox resource names")
 
-    def _run(self, args: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
-        """Run a Docker argv without invoking a shell."""
+    @property
+    def labels(self):
+        return {
+            "seireth.assessment": self.assessment_id,
+            "seireth.attempt": self.attempt_id,
+        }
 
-        try:
-            return subprocess.run(
-                ["docker", *args],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError(f"docker command failed: {exc}") from exc
+    def _guard(self, advancing=False):
+        if advancing and self.context:
+            self.context.check()
+        if self.persist_journal:
+            self.persist_journal(deepcopy(self.journal), advancing)
 
-    def _restricted_args(self) -> list[str]:
+    def _record(self, kind, state, identity=None, *, advancing=False):
+        journal = deepcopy(self.journal)
+        journal["resources"][kind] = {"state": state, "id": identity}
+        if self.persist_journal:
+            self.persist_journal(journal, advancing)
+        self.journal = journal
+
+    def _run(self, args: list[str], timeout: float, *, interruptible=True):
+        """Bound the real CLI process and reap it before attempting resource cleanup."""
+        deadline = monotonic() + timeout
+        context = self.context if interruptible else None
+        self._guard(advancing=interruptible)
+        if context:
+            context.check()
+        with subprocess.Popen(
+            ["docker", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        ) as process:
+            try:
+                while True:
+                    if context:
+                        context.check()
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("Docker command timed out")
+                    try:
+                        stdout, stderr = process.communicate(
+                            timeout=min(0.1, remaining)
+                        )
+                        return subprocess.CompletedProcess(
+                            args, process.returncode, stdout, stderr
+                        )
+                    except subprocess.TimeoutExpired:
+                        continue
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
+
+    def _restricted_args(self):
         return [
             "--read-only",
             "--cap-drop=ALL",
@@ -138,19 +203,13 @@ class DockerSandbox:
             f"--cpus={self.cpus}",
             f"--pids-limit={self.pids_limit}",
             "--tmpfs=/tmp:rw,noexec,nosuid,size=16m",
+            "--user=65532:65532",
         ]
 
-    def restricted_run_args(self) -> list[str]:
-        """Expose the common hardening flags for callers and command tests."""
-
-        return self._restricted_args()
-
-    def _target_url(self, url: str) -> str:
+    def _target_url(self, url):
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("sandbox only supports HTTP(S) URLs")
-        if self.target_host is None:
-            self.target_host = parsed.hostname
         if parsed.hostname != self.target_host:
             raise ValueError("URL host is outside the registered target")
         return urlunsplit(
@@ -159,97 +218,144 @@ class DockerSandbox:
                 f"target:{parsed.port}" if parsed.port else "target",
                 parsed.path,
                 parsed.query,
-                parsed.fragment,
+                "",
             )
         )
 
-    def execute(self, url: str, timeout_seconds: float = 5) -> SandboxResult:
-        """Create the private network, fetch headers from the target, and retain cleanup state."""
+    def execute(self, url: str, timeout_seconds: float = 5) -> dict[str, str]:
+        target_url = self._target_url(url)
+        labels = [
+            arg
+            for key, value in self.labels.items()
+            for arg in ("--label", f"{key}={value}")
+        ]
+        commands = [
+            ["network", "create", "--internal", *labels, self.resources["network"]],
+            [
+                "create",
+                "--name",
+                self.resources["target"],
+                "--network",
+                self.resources["network"],
+                "--network-alias",
+                "target",
+                *labels,
+                *self._restricted_args(),
+                self.image,
+            ],
+            [
+                "create",
+                "--name",
+                self.resources["runner"],
+                "--network",
+                self.resources["network"],
+                *labels,
+                *self._restricted_args(),
+                self.runner_image,
+                "python",
+                "-c",
+                _FETCH,
+                target_url,
+                str(timeout_seconds),
+            ],
+        ]
+        for kind, args in zip(("network", "target", "runner"), commands):
+            if self.journal["resources"][kind]["state"] != "not_requested":
+                raise RuntimeError("resource creation was already requested")
+            self._guard(advancing=True)
+            self._record(kind, "uncertain", advancing=True)
+            result = self._run(args, max(self.command_timeout, timeout_seconds + 5))
+            if result.returncode:
+                raise RuntimeError("Docker sandbox operation failed")
+            identity = result.stdout.strip()
+            if not re.fullmatch(r"[a-f0-9]{64}", identity):
+                raise RuntimeError("Docker returned an invalid resource ID")
+            self._record(kind, "created", identity, advancing=True)
+            if kind == "target":
+                started = self._run(["start", identity], self.command_timeout)
+                if started.returncode:
+                    raise RuntimeError("Docker target startup failed")
+        result = self._run(
+            ["start", "--attach", self.journal["resources"]["runner"]["id"]],
+            max(self.command_timeout, timeout_seconds + 5),
+        )
+        if result.returncode:
+            raise RuntimeError("Docker runner failed")
+        headers = json.loads(result.stdout)
+        if not isinstance(headers, dict):
+            raise RuntimeError("runner returned invalid headers")
+        return {str(k): str(v) for k, v in headers.items()}
 
-        try:
-            target_url = self._target_url(url)
-            created = self._run(
-                [
-                    "network",
-                    "create",
-                    "--internal",
-                    self.network_name,
-                ],
-                self.command_timeout,
-            )
-            if created.returncode:
-                raise RuntimeError(
-                    created.stderr.strip() or "unable to create sandbox network"
-                )
-            self._network_created = True
-            target = self._run(
-                [
-                    "run",
-                    "-d",
-                    "--name",
-                    self.target_name,
-                    "--network",
-                    self.network_name,
-                    "--network-alias",
-                    "target",
-                    *self._restricted_args(),
-                    *(["--user", self.target_user] if self.target_user else []),
-                    self.image,
-                ],
-                self.command_timeout,
-            )
-            if target.returncode:
-                raise RuntimeError(
-                    target.stderr.strip() or "unable to start target container"
-                )
-            self.container_id = target.stdout.strip()
-            runner = self._run(
-                [
-                    "run",
-                    "--rm",
-                    "--name",
-                    self.runner_name,
-                    "--network",
-                    self.network_name,
-                    *self._restricted_args(),
-                    self.runner_image,
-                    "python",
-                    "-c",
-                    _FETCH,
-                    target_url,
-                    str(timeout_seconds),
-                ],
-                max(self.command_timeout, timeout_seconds + 5),
-            )
-            if runner.returncode:
-                raise RuntimeError(runner.stderr.strip() or "runner failed")
-            headers = json.loads(runner.stdout)
-            if not isinstance(headers, dict):
-                raise RuntimeError("runner returned invalid headers")
-            return SandboxResult({str(k): str(v) for k, v in headers.items()}, False)
-        except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
-            self._last_error = str(exc)
-            raise
+    def _owned_id(self, kind, name):
+        """Absence is only an observation, not proof that creation has settled."""
+        args = (
+            ["network", "ls", "--format", "{{.Name}}"]
+            if kind == "network"
+            else ["ps", "-a", "--format", "{{.Names}}"]
+        )
+        listed = self._run(args, self.command_timeout, interruptible=False)
+        if listed.returncode:
+            raise RuntimeError("Cannot enumerate Docker resources")
+        if name not in listed.stdout.splitlines():
+            return None
+        args = (
+            ["network", "inspect", name]
+            if kind == "network"
+            else ["container", "inspect", name]
+        )
+        inspected = self._run(args, self.command_timeout, interruptible=False)
+        if inspected.returncode:
+            raise RuntimeError("Cannot verify Docker resource ownership")
+        record = json.loads(inspected.stdout)[0]
+        labels = (
+            record.get("Labels")
+            if kind == "network"
+            else record.get("Config", {}).get("Labels")
+        )
+        if not labels or any(
+            labels.get(key) != value for key, value in self.labels.items()
+        ):
+            raise RuntimeError("Docker resource ownership mismatch")
+        identity = record.get("Id")
+        if not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity):
+            raise RuntimeError("Cannot verify Docker resource identity")
+        return identity
 
-    def cleanup(self) -> bool:
-        """Remove target and private network, and verify both no longer exist."""
-
-        ok = True
-        try:
-            for container_name in (self.runner_name, self.target_name):
-                result = self._run(["rm", "-f", container_name], self.command_timeout)
-                ok = ok and result.returncode in (0, 1)
-            self.container_id = None
-            if self._network_created:
-                result = self._run(
-                    ["network", "rm", self.network_name], self.command_timeout
-                )
-                ok = ok and result.returncode in (0, 1)
-                inspect = self._run(
-                    ["network", "inspect", self.network_name], self.command_timeout
-                )
-                ok = ok and inspect.returncode != 0
-                self._network_created = False
-        except RuntimeError:
-            ok = False
-        return ok
+    def cleanup(self) -> CleanupOutcome:
+        reasons = []
+        for kind in ("runner", "target", "network"):
+            name = self.resources[kind]
+            try:
+                self._guard()
+                entry = self.journal["resources"][kind]
+                identity = self._owned_id(kind, name)
+                if identity:
+                    if entry["id"] and identity != entry["id"]:
+                        raise RuntimeError("Docker resource identity mismatch")
+                    # Persist observation before removal: a crash after rm must
+                    # not turn a known creation back into permanent uncertainty.
+                    self._record(kind, "created", identity)
+                    args = (
+                        ["network", "rm", identity]
+                        if kind == "network"
+                        else ["rm", "-f", identity]
+                    )
+                    self._run(args, self.command_timeout, interruptible=False)
+                    entry = self.journal["resources"][kind]
+                if self._owned_id(kind, name):
+                    reasons.append(f"{kind}: removal not verified")
+                elif entry["state"] == "uncertain":
+                    reasons.append(f"{kind}: creation outcome unknown")
+                elif entry["state"] != "not_requested":
+                    self._record(kind, "removed", entry["id"])
+            except (
+                OSError,
+                RuntimeError,
+                TimeoutError,
+                ValueError,
+                KeyError,
+                IndexError,
+                TypeError,
+            ) as exc:
+                reasons.append(f"{kind}: {exc}")
+        return CleanupOutcome(not reasons, "; ".join(reasons) or None)
