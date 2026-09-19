@@ -14,15 +14,7 @@ class PluginFinding:
 
 
 def security_headers(sandbox: Sandbox, url: str) -> list[PluginFinding]:
-    """Check for baseline browser security headers without modifying the target.
-
-    Args:
-        sandbox: Backend used to obtain the target response headers.
-        url: Authorized target URL included in evidence.
-
-    Returns:
-        One medium-severity finding for each missing required header.
-    """
+    """Check browser security headers without modifying the target."""
 
     headers = {k.lower(): v for k, v in sandbox.execute(url).items()}
     required = {

@@ -303,7 +303,7 @@ class AssessmentDispatcher:
                 finish(db, item, attempt, outcome)
                 db.commit()
         except Exception:
-            # Preserve the durable nonterminal attempt for startup reconciliation.
+            # A later dispatcher startup revisits any nonterminal record left here.
             logger.exception("worker could not finalize assessment %s", assessment_id)
         finally:
             with self._lock:

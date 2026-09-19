@@ -14,9 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from app.migration import migrate, migration_config
 
 
-def test_versioned_schema_and_model_agree(database):
-    migrate()
-    migrate()
+def _assert_schema_matches_models(database):
     with database.engine.connect() as connection:
         assert (
             compare_metadata(
@@ -24,6 +22,12 @@ def test_versioned_schema_and_model_agree(database):
             )
             == []
         )
+
+
+def test_versioned_schema_and_model_agree(database):
+    migrate()
+    migrate()
+    _assert_schema_matches_models(database)
 
 
 def test_cli_help_and_tests_do_not_load_operator_settings(tmp_path):
@@ -176,4 +180,4 @@ def test_journal_upgrade_preserves_populated_legacy_attempts(database):
     with database.SessionLocal() as db:
         assert db.get(models.Attempt, attempt_id).operation_journal is None
         assert db.get(models.Assessment, item_id).result == {"error": "preserve me"}
-    test_versioned_schema_and_model_agree(database)
+    _assert_schema_matches_models(database)
