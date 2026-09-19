@@ -110,7 +110,7 @@ jobs:
           docker network ls -q --filter name=seireth-assessment- | xargs -r docker network rm || status=1
           docker compose down --volumes --remove-orphans || status=1
           exit "$status"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: docker-verification
