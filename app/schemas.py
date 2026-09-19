@@ -43,4 +43,5 @@ class AssessmentOut(BaseModel):
 
     id: str
     status: AssessmentStatus
+    cleanup_pending: bool = False
     result: dict | None = None

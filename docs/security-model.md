@@ -37,12 +37,15 @@ Audit events are application records, not tamper-proof evidence.
 ## Cleanup and failure
 
 Each resource carries assessment/attempt labels and has a persisted name. Cleanup
-checks ownership before removal and uses successful enumeration to verify absence.
+checks ownership and resource IDs before removal and uses successful enumeration
+to verify absence. Creation intent is durable before launching Docker; absence
+does not resolve an interrupted creation with no known resource ID.
 Docker errors, permissions failures, timeouts, or ownership mismatches never mean
 successful cleanup. Mismatched resources are left untouched and reported unverified.
 
 A terminal `cancelled` result after execution requires verified cleanup. Unverified
-cleanup produces `failed` with `cleanup_verified: false`; startup revisits cleanup
+cleanup produces `failed` with `cleanup_verified: false` and `cleanup_pending: true`;
+startup and a background check every 30 seconds revisit cleanup
 without retrying that assessment. Crash-interrupted work is retried once only after
 verified cleanup and renewed policy checks. An unknown cleanup outcome requires
 operator investigation even though execution has stopped.

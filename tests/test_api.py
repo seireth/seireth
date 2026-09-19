@@ -91,9 +91,12 @@ async def test_passive_assessment_returns_json_and_cleanup(client):
         await asyncio.sleep(0.01)
     assert report["status"] == "completed"
     assert report["result"]["cleanup_verified"] is True
+    assert report["cleanup_pending"] is False
+    assert report["result"]["cleanup_reason"] is None
     assert report["findings"]
     assessment = (await client.get(result.headers["location"])).json()
     assert assessment["status"] == "completed"
+    assert assessment["cleanup_pending"] is False
     assert assessment["result"] == report["result"]
     audit = (await client.get(f"/api/v1/projects/{project['id']}/audit-events")).json()
     assert [event["action"] for event in audit] == [

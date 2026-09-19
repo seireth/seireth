@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import subprocess
 import sys
 
@@ -32,23 +33,43 @@ def main() -> int:
     check.add_argument("--expected-backend", choices=("inmemory", "docker"))
 
     subparsers.add_parser("migrate", help="Apply versioned database migrations")
-    subparsers.add_parser(
+    docker_up = subparsers.add_parser(
         "docker-up", help="Build, migrate, and start the Docker stack"
     )
+    docker_up.add_argument("--timeout-seconds", type=positive_timeout, default=120)
 
     if len(sys.argv) > 1 and sys.argv[1] == "test":
         return run(["pytest", *sys.argv[2:]])
     args = parser.parse_args()
     if args.command == "docker-up":
-        for command in (
-            ["build", "api", "migrate"],
-            ["stop", "api"],
-            ["up", "-d", "--wait", "postgres"],
-            ["run", "--rm", "--no-deps", "-T", "migrate"],
-            ["up", "-d", "--no-deps", "api"],
+        for stage, command in (
+            ("build", ["build", "api", "migrate"]),
+            ("stop API", ["stop", "api"]),
+            ("start PostgreSQL", ["up", "-d", "--wait", "postgres"]),
+            ("migration", ["run", "--rm", "--no-deps", "-T", "migrate"]),
+            (
+                "API readiness",
+                [
+                    "up",
+                    "-d",
+                    "--no-deps",
+                    "--wait",
+                    "--wait-timeout",
+                    str(math.ceil(args.timeout_seconds)),
+                    "api",
+                ],
+            ),
         ):
-            status = subprocess.call(["docker", "compose", *command])
+            try:
+                status = subprocess.call(["docker", "compose", *command])
+            except OSError as error:
+                print(f"docker-up failed during {stage}: {error}", file=sys.stderr)
+                return 1
             if status:
+                print(
+                    f"docker-up failed during {stage}. Inspect with: docker compose ps -a; docker compose logs api",
+                    file=sys.stderr,
+                )
                 return status
         return 0
     if args.command == "migrate":

@@ -3,6 +3,8 @@
 import json
 import re
 import subprocess
+from copy import deepcopy
+from dataclasses import dataclass
 from time import monotonic
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
@@ -11,8 +13,26 @@ from uuid import uuid4
 from .execution import ExecutionContext
 
 
+@dataclass(frozen=True)
+class CleanupOutcome:
+    verified: bool
+    reason: str | None = None
+
+
+def new_journal(*, legacy=False):
+    return {
+        "version": 1,
+        "owner": str(uuid4()),
+        "resources": {
+            kind: {"state": "uncertain" if legacy else "not_requested", "id": None}
+            for kind in ("network", "target", "runner")
+        },
+    }
+
+
 class Sandbox(Protocol):
     def execute(self, url: str, timeout_seconds: float = 5) -> dict[str, str]: ...
+    def cleanup(self) -> CleanupOutcome: ...
 
 
 class InMemorySandbox:
@@ -27,8 +47,8 @@ class InMemorySandbox:
             self.context.check()
         return dict(self.headers)
 
-    def cleanup(self) -> bool:
-        return True
+    def cleanup(self) -> CleanupOutcome:
+        return CleanupOutcome(True)
 
 
 _IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,254}$")
@@ -72,6 +92,8 @@ class DockerSandbox:
         resources=None,
         command_timeout=15,
         context: ExecutionContext | None = None,
+        operation_journal=None,
+        persist_journal=None,
     ):
         if not _IMAGE.fullmatch(image) or not _IMAGE.fullmatch(runner_image):
             raise ValueError("invalid Docker image name")
@@ -79,6 +101,13 @@ class DockerSandbox:
         self.memory, self.cpus, self.pids_limit = memory, cpus, pids_limit
         self.command_timeout, self.context = command_timeout, context
         self.target_host = target_host
+        # Missing journals belong to legacy attempts, never to a new execution.
+        self.journal = (
+            deepcopy(operation_journal)
+            if operation_journal is not None
+            else new_journal(legacy=True)
+        )
+        self.persist_journal = persist_journal
         self.assessment_id = assessment_id or str(uuid4())
         self.attempt_id = attempt_id or str(uuid4())
         token = self.attempt_id.replace("-", "")
@@ -100,10 +129,24 @@ class DockerSandbox:
             "seireth.attempt": self.attempt_id,
         }
 
+    def _guard(self, advancing=False):
+        if advancing and self.context:
+            self.context.check()
+        if self.persist_journal:
+            self.persist_journal(deepcopy(self.journal), advancing)
+
+    def _record(self, kind, state, identity=None, *, advancing=False):
+        journal = deepcopy(self.journal)
+        journal["resources"][kind] = {"state": state, "id": identity}
+        if self.persist_journal:
+            self.persist_journal(journal, advancing)
+        self.journal = journal
+
     def _run(self, args: list[str], timeout: float, *, interruptible=True):
         """Bound the real CLI process and reap it before attempting resource cleanup."""
         deadline = monotonic() + timeout
         context = self.context if interruptible else None
+        self._guard(advancing=interruptible)
         if context:
             context.check()
         with subprocess.Popen(
@@ -168,8 +211,7 @@ class DockerSandbox:
         commands = [
             ["network", "create", "--internal", *labels, self.resources["network"]],
             [
-                "run",
-                "-d",
+                "create",
                 "--name",
                 self.resources["target"],
                 "--network",
@@ -181,8 +223,7 @@ class DockerSandbox:
                 self.image,
             ],
             [
-                "run",
-                "--rm",
+                "create",
                 "--name",
                 self.resources["runner"],
                 "--network",
@@ -197,17 +238,35 @@ class DockerSandbox:
                 str(timeout_seconds),
             ],
         ]
-        for args in commands:
+        for kind, args in zip(("network", "target", "runner"), commands):
+            if self.journal["resources"][kind]["state"] != "not_requested":
+                raise RuntimeError("resource creation was already requested")
+            self._guard(advancing=True)
+            self._record(kind, "uncertain", advancing=True)
             result = self._run(args, max(self.command_timeout, timeout_seconds + 5))
             if result.returncode:
                 raise RuntimeError("Docker sandbox operation failed")
+            identity = result.stdout.strip()
+            if not re.fullmatch(r"[a-f0-9]{64}", identity):
+                raise RuntimeError("Docker returned an invalid resource ID")
+            self._record(kind, "created", identity, advancing=True)
+            if kind == "target":
+                started = self._run(["start", identity], self.command_timeout)
+                if started.returncode:
+                    raise RuntimeError("Docker target startup failed")
+        result = self._run(
+            ["start", "--attach", self.journal["resources"]["runner"]["id"]],
+            max(self.command_timeout, timeout_seconds + 5),
+        )
+        if result.returncode:
+            raise RuntimeError("Docker runner failed")
         headers = json.loads(result.stdout)
         if not isinstance(headers, dict):
             raise RuntimeError("runner returned invalid headers")
         return {str(k): str(v) for k, v in headers.items()}
 
-    def _exists_owned(self, kind, name):
-        """Successful enumeration establishes absence; inspect errors never do."""
+    def _owned_id(self, kind, name):
+        """Absence is only an observation, not proof that creation has settled."""
         args = (
             ["network", "ls", "--format", "{{.Name}}"]
             if kind == "network"
@@ -217,7 +276,7 @@ class DockerSandbox:
         if listed.returncode:
             raise RuntimeError("Cannot enumerate Docker resources")
         if name not in listed.stdout.splitlines():
-            return False
+            return None
         args = (
             ["network", "inspect", name]
             if kind == "network"
@@ -236,22 +295,38 @@ class DockerSandbox:
             labels.get(key) != value for key, value in self.labels.items()
         ):
             raise RuntimeError("Docker resource ownership mismatch")
-        return True
+        identity = record.get("Id")
+        if not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity):
+            raise RuntimeError("Cannot verify Docker resource identity")
+        return identity
 
-    def cleanup(self) -> bool:
-        ok = True
+    def cleanup(self) -> CleanupOutcome:
+        reasons = []
         for kind in ("runner", "target", "network"):
             name = self.resources[kind]
             try:
-                if self._exists_owned(kind, name):
+                self._guard()
+                entry = self.journal["resources"][kind]
+                identity = self._owned_id(kind, name)
+                if identity:
+                    if entry["id"] and identity != entry["id"]:
+                        raise RuntimeError("Docker resource identity mismatch")
+                    # Persist observation before removal: a crash after rm must
+                    # not turn a known creation back into permanent uncertainty.
+                    self._record(kind, "created", identity)
                     args = (
-                        ["network", "rm", name]
+                        ["network", "rm", identity]
                         if kind == "network"
-                        else ["rm", "-f", name]
+                        else ["rm", "-f", identity]
                     )
                     self._run(args, self.command_timeout, interruptible=False)
-                if self._exists_owned(kind, name):
-                    ok = False
+                    entry = self.journal["resources"][kind]
+                if self._owned_id(kind, name):
+                    reasons.append(f"{kind}: removal not verified")
+                elif entry["state"] == "uncertain":
+                    reasons.append(f"{kind}: creation outcome unknown")
+                elif entry["state"] != "not_requested":
+                    self._record(kind, "removed", entry["id"])
             except (
                 OSError,
                 RuntimeError,
@@ -260,6 +335,6 @@ class DockerSandbox:
                 KeyError,
                 IndexError,
                 TypeError,
-            ):
-                ok = False
-        return ok
+            ) as exc:
+                reasons.append(f"{kind}: {exc}")
+        return CleanupOutcome(not reasons, "; ".join(reasons) or None)

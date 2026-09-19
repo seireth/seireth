@@ -9,13 +9,16 @@ from time import monotonic
 import pytest
 
 from app.execution import Cancelled, ExecutionContext
-from app.sandbox import _FETCH, DockerSandbox
+from app.sandbox import _FETCH, DockerSandbox, new_journal
 
 
 @pytest.fixture
 def sandbox():
     return DockerSandbox(
-        "demo:local", runner_image="python:3.14-slim", target_host="demo-target"
+        "demo:local",
+        runner_image="python:3.14-slim",
+        target_host="demo-target",
+        operation_journal=new_journal(),
     )
 
 
@@ -24,12 +27,13 @@ def test_restricted_owned_commands(sandbox, monkeypatch):
 
     def run(args, timeout, **kwargs):
         calls.append(args)
-        return subprocess.CompletedProcess(args, 0, json.dumps({"X-Test": "ok"}), "")
+        output = json.dumps({"X-Test": "ok"}) if "--attach" in args else "a" * 64
+        return subprocess.CompletedProcess(args, 0, output, "")
 
     monkeypatch.setattr(sandbox, "_run", run)
     assert sandbox.execute("http://demo-target:8080") == {"X-Test": "ok"}
     assert "--internal" in calls[0]
-    for args in calls[1:]:
+    for args in (call for call in calls if call[0] == "create"):
         for flag in [
             "--read-only",
             "--cap-drop=ALL",
@@ -39,6 +43,7 @@ def test_restricted_owned_commands(sandbox, monkeypatch):
         ]:
             assert flag in args
         assert "--network=host" not in args
+        assert "--rm" not in args
 
 
 def test_daemon_failure_never_means_cleanup_success(sandbox, monkeypatch):
@@ -49,7 +54,7 @@ def test_daemon_failure_never_means_cleanup_success(sandbox, monkeypatch):
             args, 1, "", "daemon unavailable"
         ),
     )
-    assert not sandbox.cleanup()
+    assert not sandbox.cleanup().verified
 
 
 @pytest.mark.parametrize(
@@ -57,6 +62,10 @@ def test_daemon_failure_never_means_cleanup_success(sandbox, monkeypatch):
 )
 def test_cleanup_checks_each_resource(sandbox, monkeypatch, failure):
     present = set(sandbox.resources.values())
+    identities = {
+        name: f"{index:064x}"
+        for index, name in enumerate(sandbox.resources.values(), 1)
+    }
     removed = []
 
     def run(args, *a, **kwargs):
@@ -65,9 +74,19 @@ def test_cleanup_checks_each_resource(sandbox, monkeypatch, failure):
             output = "\n".join(present)
         elif "inspect" in args:
             labels = sandbox.labels if failure != "ownership" else {}
-            output = json.dumps([{"Labels": labels, "Config": {"Labels": labels}}])
+            output = json.dumps(
+                [
+                    {
+                        "Id": identities[args[-1]],
+                        "Labels": labels,
+                        "Config": {"Labels": labels},
+                    }
+                ]
+            )
         else:
-            name = args[-1]
+            name = next(
+                name for name, identity in identities.items() if identity == args[-1]
+            )
             removed.append(name)
             if failure == "remove-error":
                 return subprocess.CompletedProcess(args, 1, "", "failed")
@@ -76,7 +95,7 @@ def test_cleanup_checks_each_resource(sandbox, monkeypatch, failure):
         return subprocess.CompletedProcess(args, 0, output, "")
 
     monkeypatch.setattr(sandbox, "_run", run)
-    assert sandbox.cleanup() is (failure is None)
+    assert sandbox.cleanup().verified is (failure is None)
     if failure == "ownership":
         assert not removed
     else:
@@ -89,8 +108,8 @@ def test_cleanup_of_absent_resources_is_idempotent(sandbox, monkeypatch):
         "_run",
         lambda args, *a, **k: subprocess.CompletedProcess(args, 0, "", ""),
     )
-    assert sandbox.cleanup()
-    assert sandbox.cleanup()
+    assert sandbox.cleanup().verified
+    assert sandbox.cleanup().verified
 
 
 @pytest.mark.parametrize("reason", ["cancel", "deadline"])
@@ -127,9 +146,10 @@ def test_network_created_before_cli_timeout_is_reconciled(sandbox, monkeypatch):
         if args[:2] == ["network", "ls"]:
             output = "\n".join(live)
         elif args[:2] == ["network", "inspect"]:
-            output = json.dumps([{"Labels": sandbox.labels}])
+            output = json.dumps([{"Id": "a" * 64, "Labels": sandbox.labels}])
         elif args[:2] == ["network", "rm"]:
-            live.discard(args[-1])
+            assert args[-1] == "a" * 64
+            live.discard(sandbox.resources["network"])
         return subprocess.CompletedProcess(args, 0, output, "")
 
     monkeypatch.setattr(sandbox, "_run", run)

@@ -50,7 +50,12 @@ python -m app verify --expected-backend docker --timeout-seconds 120
 ```
 
 The startup command waits for PostgreSQL, runs migrations in a temporary container
-that removes itself, then starts the API only on success. It stops an existing API
+that removes itself, then starts the API only on success and waits for HTTP 200
+from its `/health` endpoint. Verification can run immediately after it returns.
+API readiness has a 120-second limit after build and migration; override it with
+`python -m app docker-up --timeout-seconds 180` (fractional seconds round up).
+A failed startup returns a nonzero exit code and leaves containers for inspection
+with `docker compose ps -a` and `docker compose logs api`. It stops an existing API
 before migrating. Use this command instead of plain `docker compose up`, which
 does not run migrations. Stop with
 `docker compose down`; the PostgreSQL volume is retained. The owned demo target's

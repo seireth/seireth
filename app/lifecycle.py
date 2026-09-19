@@ -39,6 +39,7 @@ def finish(db, assessment, attempt, outcome):
     result = {
         "sandbox_backend": attempt.backend,
         "cleanup_verified": outcome.cleanup_verified,
+        "cleanup_reason": outcome.cleanup_reason,
         "completed_at": attempt.finished_at.isoformat(),
         "attempt": attempt.number,
     }

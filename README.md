@@ -92,6 +92,8 @@ python -m app verify --expected-backend docker --timeout-seconds 120
 
 `python -m app docker-up` starts PostgreSQL, applies migrations in a temporary
 container that removes itself, and starts the Docker-backed API only on success.
+It returns success after the API healthcheck passes; use `--timeout-seconds 180`
+to override the default 120-second API readiness limit.
 PostgreSQL records persist in a named volume. The API uses the host Docker socket, which grants substantial host
 control; see the [security model](docs/security-model.md).
 

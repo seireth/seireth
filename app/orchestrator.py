@@ -12,7 +12,7 @@ from .sandbox import DockerSandbox, InMemorySandbox
 logger = logging.getLogger(__name__)
 
 
-def sandbox_for(attempt, target=None, scope=None, context=None):
+def sandbox_for(attempt, target=None, scope=None, context=None, persist_journal=None):
     if attempt.backend == "inmemory":
         return InMemorySandbox(context=context)
     return DockerSandbox(
@@ -27,6 +27,8 @@ def sandbox_for(attempt, target=None, scope=None, context=None):
         pids_limit=settings.docker_pids_limit,
         command_timeout=settings.docker_timeout_seconds,
         context=context,
+        operation_journal=attempt.operation_journal,
+        persist_journal=persist_journal,
     )
 
 
@@ -36,6 +38,7 @@ class Outcome:
     error: str | None = None
     cleanup_verified: bool = False
     findings: list[PluginFinding] = field(default_factory=list)
+    cleanup_reason: str | None = None
 
 
 def execute(sandbox, url, context) -> Outcome:
@@ -55,12 +58,13 @@ def execute(sandbox, url, context) -> Outcome:
         outcome.status, outcome.error = "failed", "assessment execution failed"
     finally:
         try:
-            outcome.cleanup_verified = sandbox.cleanup()
+            cleanup = sandbox.cleanup()
+            outcome.cleanup_verified = cleanup.verified
+            outcome.cleanup_reason = cleanup.reason
         except Exception:
             logger.exception("assessment cleanup failed")
+            outcome.cleanup_reason = "cleanup could not be completed"
         if not outcome.cleanup_verified:
-            outcome.status, outcome.error = (
-                "failed",
-                "sandbox cleanup could not be verified",
-            )
+            outcome.status = "failed"
+            outcome.error = outcome.error or "sandbox cleanup could not be verified"
     return outcome

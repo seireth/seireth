@@ -2,6 +2,7 @@
 
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timezone
 from threading import Event, Lock, Thread
 from time import monotonic
@@ -12,13 +13,15 @@ from sqlalchemy import func, select, text
 from . import models
 from .config import settings
 from .db import SessionLocal, engine
-from .execution import ExecutionContext
+from .execution import Cancelled, ExecutionContext, Interrupted
 from .lifecycle import audit, finish, transition
 from .orchestrator import Outcome, execute, sandbox_for
 from .policy import PolicyError, validate
+from .sandbox import new_journal
 
 logger = logging.getLogger(__name__)
 OWNER_LOCK = 7342101
+RECONCILE_INTERVAL_SECONDS = 30
 
 
 class AssessmentDispatcher:
@@ -31,6 +34,9 @@ class AssessmentDispatcher:
         self._shutdown = Event()
         self._lost = Event()
         self._monitor_stop = Event()
+        self._reconciler = None
+        self._reconcile_lock = Lock()
+        self._owner_pid = None
 
     @property
     def ready(self):
@@ -50,12 +56,15 @@ class AssessmentDispatcher:
                 text("SELECT pg_try_advisory_lock(:key)"), {"key": OWNER_LOCK}
             ):
                 raise RuntimeError("Another Seireth dispatcher owns this database")
+            self._owner_pid = self._owner.scalar(text("SELECT pg_backend_pid()"))
             self._executor = ThreadPoolExecutor(
                 max_workers=2, thread_name_prefix="seireth"
             )
             self._monitor = Thread(target=self._watch_owner, daemon=True)
             self._monitor.start()
             self.recover()
+            self._reconciler = Thread(target=self._watch_cleanup, daemon=True)
+            self._reconciler.start()
         except BaseException:
             self.stop()
             raise
@@ -78,6 +87,9 @@ class AssessmentDispatcher:
 
     def stop(self):
         self._shutdown.set()
+        if self._reconciler:
+            self._reconciler.join()
+            self._reconciler = None
         if self._executor:
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
@@ -94,6 +106,7 @@ class AssessmentDispatcher:
                 self._owner.invalidate()
             self._owner.close()
             self._owner = None
+        self._owner_pid = None
         self._events.clear()
 
     def submit(self, assessment_id):
@@ -123,6 +136,70 @@ class AssessmentDispatcher:
         )
         return target, scope
 
+    def _assert_owner(self, db):
+        if self._lost.is_set():
+            raise Interrupted("dispatcher ownership lost")
+        if self._owner_pid is not None and not db.scalar(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND pid=:pid AND objid=:key AND granted AND database=(SELECT oid FROM pg_database WHERE datname=current_database()))"
+            ),
+            {"pid": self._owner_pid, "key": OWNER_LOCK},
+        ):
+            self._lost.set()
+            raise Interrupted("dispatcher ownership lost")
+
+    def _journal_writer(self, assessment_id, attempt_id, token, *, recovery=False):
+        def persist(journal, advancing=False):
+            with SessionLocal() as db:
+                item = db.scalar(
+                    select(models.Assessment)
+                    .where(models.Assessment.id == assessment_id)
+                    .with_for_update()
+                )
+                self._assert_owner(db)
+                attempt = db.get(models.Attempt, attempt_id)
+                latest = db.scalar(
+                    select(models.Attempt.id)
+                    .where(models.Attempt.assessment_id == assessment_id)
+                    .order_by(models.Attempt.number.desc())
+                    .limit(1)
+                )
+                allowed = (
+                    {"recovering", "cancelling", "failed"}
+                    if recovery
+                    else {"running", "cancelling"}
+                )
+                if (
+                    not item
+                    or not attempt
+                    or latest != attempt_id
+                    or item.status not in allowed
+                    or not attempt.operation_journal
+                    or attempt.operation_journal["owner"] != token
+                    or journal["owner"] != token
+                ):
+                    raise Interrupted("execution attempt no longer owns its journal")
+                if recovery and self._shutdown.is_set():
+                    raise Interrupted("cleanup reconciliation stopped")
+                if advancing:
+                    if item.status == "cancelling":
+                        raise Cancelled("assessment cancelled")
+                    if self._shutdown.is_set():
+                        raise Interrupted("execution interrupted")
+                attempt.operation_journal = deepcopy(journal)
+                db.commit()
+
+        return persist
+
+    def _watch_cleanup(self):
+        while not self._shutdown.wait(RECONCILE_INTERVAL_SECONDS):
+            if self._lost.is_set():
+                return
+            try:
+                self.recover(failed_only=True)
+            except Exception:
+                logger.exception("pending cleanup reconciliation failed")
+
     def _run(self, assessment_id, cancel_event):
         try:
             if self._shutdown.is_set() or self._lost.is_set():
@@ -151,6 +228,7 @@ class AssessmentDispatcher:
                     item.result = {
                         "error": str(exc),
                         "cleanup_verified": True,
+                        "cleanup_reason": None,
                         "sandbox_backend": settings.sandbox_backend,
                         "completed_at": models.now().isoformat(),
                     }
@@ -163,6 +241,7 @@ class AssessmentDispatcher:
                     number=number,
                     backend=settings.sandbox_backend,
                     resources={},
+                    operation_journal=new_journal(),
                 )
                 expires = scope.expires_at
                 seconds = min(
@@ -175,7 +254,15 @@ class AssessmentDispatcher:
                     monotonic() + max(0, seconds),
                     lambda: not self._lost.is_set(),
                 )
-                sandbox = sandbox_for(attempt, target, scope, context)
+                sandbox = sandbox_for(
+                    attempt,
+                    target,
+                    scope,
+                    context,
+                    self._journal_writer(
+                        item.id, attempt.id, attempt.operation_journal["owner"]
+                    ),
+                )
                 attempt.resources = getattr(sandbox, "resources", {})
                 db.add(attempt)
                 item.cleanup_pending = True
@@ -205,6 +292,12 @@ class AssessmentDispatcher:
                 ):
                     return
                 attempt = db.get(models.Attempt, attempt_id)
+                self._assert_owner(db)
+                if (
+                    hasattr(sandbox, "journal")
+                    and attempt.operation_journal["owner"] != sandbox.journal["owner"]
+                ):
+                    return
                 if item.status == "cancelling" and outcome.cleanup_verified:
                     outcome.status, outcome.error = "cancelled", "assessment cancelled"
                 finish(db, item, attempt, outcome)
@@ -216,11 +309,18 @@ class AssessmentDispatcher:
             with self._lock:
                 self._events.pop(assessment_id, None)
 
-    def recover(self):
+    def recover(self, *, failed_only=False):
+        # Never reconcile active workers in the periodic pass. Startup recovery
+        # runs before the API accepts requests and before queued work is submitted.
+        with self._reconcile_lock:
+            self._recover(failed_only=failed_only)
+
+    def _recover(self, *, failed_only=False):
         with SessionLocal() as db:
             ids = list(
                 db.scalars(
-                    select(models.Assessment.id).where(
+                    select(models.Assessment.id)
+                    .where(
                         (
                             models.Assessment.status.in_(
                                 ["running", "recovering", "cancelling"]
@@ -228,9 +328,17 @@ class AssessmentDispatcher:
                         )
                         | models.Assessment.cleanup_pending
                     )
+                    .where(
+                        models.Assessment.status == "failed" if failed_only else True
+                    )
                 )
             )
         for assessment_id in ids:
+            if self._shutdown.is_set():
+                return
+            with self._lock:
+                if assessment_id in self._events:
+                    continue
             if self._lost.is_set():
                 raise RuntimeError("dispatcher ownership lost during recovery")
             with SessionLocal() as db:
@@ -239,6 +347,7 @@ class AssessmentDispatcher:
                     .where(models.Assessment.id == assessment_id)
                     .with_for_update()
                 )
+                self._assert_owner(db)
                 if (
                     item.status not in {"running", "recovering", "cancelling"}
                     and not item.cleanup_pending
@@ -250,24 +359,61 @@ class AssessmentDispatcher:
                     .order_by(models.Attempt.number.desc())
                 )
                 if not attempt:
-                    transition(
-                        db, item, "failed", {"error": "execution attempt missing"}
-                    )
-                    item.cleanup_pending = False
+                    if item.status != "failed":
+                        transition(
+                            db, item, "failed", {"error": "execution attempt missing"}
+                        )
+                    item.cleanup_pending = True
+                    item.result = {
+                        **(item.result or {}),
+                        "cleanup_verified": False,
+                        "cleanup_reason": "execution attempt missing",
+                    }
                     db.commit()
                     continue
                 original_status = item.status
                 if original_status == "running":
                     transition(db, item, "recovering", {"attempt": attempt.number})
-                    db.commit()
-                cleaned = sandbox_for(attempt).cleanup()
-                if self._lost.is_set():
-                    raise RuntimeError("dispatcher ownership lost during recovery")
+                journal = (
+                    deepcopy(attempt.operation_journal)
+                    if attempt.operation_journal
+                    else new_journal(legacy=True)
+                )
+                token = journal["owner"] = str(uuid4())
+                attempt.operation_journal = journal
+                attempt_id = attempt.id
+                db.commit()
+                sandbox = sandbox_for(
+                    attempt,
+                    persist_journal=self._journal_writer(
+                        item.id, attempt.id, token, recovery=True
+                    ),
+                )
+            cleanup = sandbox.cleanup()
+            with SessionLocal() as db:
+                item = db.scalar(
+                    select(models.Assessment)
+                    .where(models.Assessment.id == assessment_id)
+                    .with_for_update()
+                )
+                self._assert_owner(db)
+                attempt = db.get(models.Attempt, attempt_id)
+                if attempt.operation_journal["owner"] != token or item.status not in {
+                    "recovering",
+                    "cancelling",
+                    "failed",
+                }:
+                    continue
+                cleaned = cleanup.verified
                 attempt.cleanup_verified = cleaned
-                attempt.finished_at = models.now()
+                attempt.finished_at = attempt.finished_at or models.now()
                 item.cleanup_pending = not cleaned
                 if original_status == "failed":
-                    item.result = {**(item.result or {}), "cleanup_verified": cleaned}
+                    item.result = {
+                        **(item.result or {}),
+                        "cleanup_verified": cleaned,
+                        "cleanup_reason": cleanup.reason,
+                    }
                     if cleaned:
                         audit(
                             db, item.project_id, "assessment.cleanup_verified", item.id
@@ -278,10 +424,14 @@ class AssessmentDispatcher:
                         item,
                         attempt,
                         Outcome(
-                            "failed", "sandbox cleanup could not be verified", False
+                            "failed",
+                            (item.result or {}).get("error")
+                            or "sandbox cleanup could not be verified",
+                            False,
+                            cleanup_reason=cleanup.reason,
                         ),
                     )
-                elif original_status == "cancelling":
+                elif item.status == "cancelling":
                     finish(
                         db,
                         item,
@@ -302,6 +452,8 @@ class AssessmentDispatcher:
                             db, item, "queued", {"retry_after_attempt": attempt.number}
                         )
                 db.commit()
+        if failed_only:
+            return
         with SessionLocal() as db:
             queued = list(
                 db.scalars(

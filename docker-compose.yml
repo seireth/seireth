@@ -27,6 +27,11 @@ services:
         condition: service_healthy
   api:
     build: .
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 2s
+      timeout: 3s
+      retries: 60
     stop_grace_period: 180s
     env_file: [.env]
     environment:

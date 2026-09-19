@@ -170,6 +170,7 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
     return {
         "assessment_id": item.id,
         "status": item.status,
+        "cleanup_pending": item.cleanup_pending,
         "result": item.result,
         "findings": [
             {

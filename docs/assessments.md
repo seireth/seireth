@@ -95,6 +95,27 @@ An execution failure can produce:
 Unverified cleanup always produces `failed`, including after cancellation. Inspect
 `result.cleanup_verified` independently of whether execution itself succeeded.
 
+Assessment and results responses also include `cleanup_pending`. The nullable
+`result.cleanup_reason` explains why cleanup remains unresolved. Docker creation
+intent is committed before each command; a timeout or missing response can leave
+creation uncertain even when no resource is currently visible. Such assessments
+remain failed and pending while other assessments continue.
+
+The dispatcher checks failed pending cleanup every 30 seconds and at startup.
+When a late resource appears, it verifies ownership, records its ID, removes it,
+and verifies absence. Successful reconciliation clears `cleanup_pending` and
+`cleanup_reason`, sets `cleanup_verified`, and records one
+`assessment.cleanup_verified` event. It preserves the original error and does not
+rerun the failed assessment. Elapsed time alone never resolves uncertainty.
+
+For persistent uncertainty, inspect API logs, the attempt's `operation_journal`,
+and Docker resources selected by both `seireth.assessment` and `seireth.attempt`
+labels. Check daemon availability and whether a create request is still in flight.
+Do not clear database flags merely because `docker ps` or `docker network ls` is
+empty. Legacy unfinished Docker attempts have no operation history and are treated
+conservatively; they can remain pending even after resources disappear. There is
+no automatic timeout or administrative override that certifies those attempts.
+
 ## Cancellation and audit events
 
 `POST /api/v1/assessments/{id}/cancel` immediately cancels queued work (HTTP 200,

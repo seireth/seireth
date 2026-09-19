@@ -84,3 +84,96 @@ def test_docker_startup_gates_api_on_temporary_migration(monkeypatch, migration_
     )
     api_started = any("up" in call and "api" in call for call in calls)
     assert api_started == (migration_status == 0)
+
+
+@pytest.mark.parametrize("status", [0, 1, 17])
+def test_docker_up_waits_and_propagates_readiness_failure(monkeypatch, capsys, status):
+    from app.__main__ import main
+
+    calls = []
+
+    def compose(command):
+        calls.append(command)
+        return status if "--wait-timeout" in command else 0
+
+    monkeypatch.setattr(sys, "argv", ["app", "docker-up", "--timeout-seconds", "7.2"])
+    monkeypatch.setattr(subprocess, "call", compose)
+    assert main() == status
+    start = calls[-1]
+    assert "--wait" in start
+    assert start[start.index("--wait-timeout") + 1] == "8"
+    error = capsys.readouterr().err
+    if status:
+        assert "API readiness" in error
+        assert "docker compose ps -a" in error
+        assert "docker compose logs api" in error
+    assert not any("down" in call for call in calls)
+
+
+@pytest.mark.parametrize("timeout", ["0", "-1", "nan", "inf", "not-a-number"])
+def test_docker_up_rejects_invalid_timeout_before_start(monkeypatch, timeout):
+    from app.__main__ import main
+
+    monkeypatch.setattr(sys, "argv", ["app", "docker-up", "--timeout-seconds", timeout])
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+
+
+def test_docker_up_missing_cli_reports_stage(monkeypatch, capsys):
+    from app.__main__ import main
+
+    def unavailable(*args):
+        raise FileNotFoundError("docker unavailable")
+
+    monkeypatch.setattr(sys, "argv", ["app", "docker-up"])
+    monkeypatch.setattr(subprocess, "call", unavailable)
+    assert main() == 1
+    assert "build" in capsys.readouterr().err
+
+
+def test_journal_upgrade_preserves_populated_legacy_attempts(database):
+    from app import models
+
+    with database.SessionLocal() as db:
+        project = models.Project(name="migration")
+        db.add(project)
+        db.flush()
+        target = models.Target(
+            project_id=project.id, name="demo", image="demo:local", url="http://demo/"
+        )
+        db.add(target)
+        db.flush()
+        scope = models.AuthorizationScope(
+            project_id=project.id,
+            target_id=target.id,
+            allowed_url=target.url,
+            expires_at=models.now(),
+        )
+        db.add(scope)
+        db.flush()
+        item = models.Assessment(
+            project_id=project.id,
+            target_id=target.id,
+            scope_id=scope.id,
+            profile="passive",
+            status="failed",
+            result={"error": "preserve me"},
+        )
+        db.add(item)
+        db.flush()
+        attempt = models.Attempt(
+            assessment_id=item.id, number=1, backend="docker", resources={}
+        )
+        db.add(attempt)
+        db.commit()
+        item_id, attempt_id = item.id, attempt.id
+    command.downgrade(migration_config(), "0002")
+    assert "operation_journal" not in {
+        column["name"] for column in inspect(database.engine).get_columns("attempts")
+    }
+    migrate()
+    with database.SessionLocal() as db:
+        assert db.get(models.Attempt, attempt_id).operation_journal is None
+        assert db.get(models.Assessment, item_id).result == {"error": "preserve me"}
+    test_versioned_schema_and_model_agree(database)
