@@ -85,7 +85,7 @@ def test_status_constraint(database):
         with pytest.raises(IntegrityError):
             connection.execute(
                 text(
-                    "INSERT INTO assessments (id, project_id, target_id, scope_id, profile, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', 'passive', 'unknown', now())"
+                    "INSERT INTO assessments (id, project_id, target_id, scope_id, profile, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', 'passive', '[\"security-headers\"]'::json, 'unknown', now())"
                 )
             )
 
@@ -100,6 +100,60 @@ def test_baseline_round_trip(database):
             MigrationContext.configure(connection).get_current_revision()
             == ScriptDirectory.from_config(migration_config()).get_current_head()
         )
+
+
+def test_plugin_migration_backfills_existing_assessments(database):
+    config = migration_config()
+    command.downgrade(config, "base")
+    command.upgrade(config, "0001_initial_schema")
+    with database.engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO projects (id, name, owner_actor, created_at) "
+                "VALUES ('old-project', 'old', 'local-development', now())"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO targets (id, project_id, name, image, url) "
+                "VALUES ('old-target', 'old-project', 'old', 'demo:local', 'http://demo/')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO authorization_scopes "
+                "(id, project_id, target_id, allowed_url, expires_at) "
+                "VALUES ('old-scope', 'old-project', 'old-target', 'http://demo/', now() + interval '1 hour')"
+            )
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO assessments "
+            "(id, project_id, target_id, scope_id, profile, status, "
+            "cleanup_pending, result, created_at) "
+            "VALUES ('old-assessment', 'old-project', 'old-target', 'old-scope', "
+            "'passive', 'completed', false, "
+            '\'{"plugin":"security-headers","finding_count":1}\'::json, now())'
+        )
+        connection.execute(
+            text(
+                "INSERT INTO findings "
+                "(id, assessment_id, plugin, title, severity, description) "
+                "VALUES ('old-finding', 'old-assessment', 'security-headers', "
+                "'old', 'medium', 'old finding')"
+            )
+        )
+    migrate()
+    with database.engine.connect() as connection:
+        plugins, result = connection.execute(
+            text("SELECT plugins, result FROM assessments WHERE id='old-assessment'")
+        ).one()
+        remediation = connection.scalar(
+            text("SELECT remediation FROM findings WHERE id='old-finding'")
+        )
+    assert plugins == ["security-headers"]
+    assert "plugin" not in result
+    assert result["plugins"] == [{"id": "security-headers", "finding_count": 1}]
+    assert remediation is None
 
 
 def test_revision_generation_uses_template(database, tmp_path):

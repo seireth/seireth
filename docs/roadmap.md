@@ -9,7 +9,8 @@ are directions, not release promises or claims of existing support.
 - Project and target registration with a server-controlled image allowlist.
 - Origin-, path-, and time-bounded authorization scopes.
 - Background passive assessments, interruptible cancellation/deadlines, and JSON outcomes.
-- A three-header presence-check plugin with findings and stored evidence.
+- A selectable three-header plugin with limited value checks, remediation guidance,
+  findings, and stored evidence.
 - Simulated and Docker-backed execution, ownership labels, and independent cleanup verification.
 - Project audit events and an executable demo-verification workflow.
 - Unit/API tests, formatting and lint checks, Docker lifecycle CI, and dependency auditing.
@@ -17,7 +18,7 @@ are directions, not release promises or claims of existing support.
 ## Next priorities
 
 1. Extend failure-path coverage as additional execution capabilities are introduced.
-2. Add more passive checks and improve finding explanations and remediation guidance.
+2. Add more passive checks and deepen finding explanations and remediation guidance.
 3. Define a supported authentication/deployment model before enabling multiple users.
 4. Expose useful evidence and reports with stable schemas and redaction rules.
 

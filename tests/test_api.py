@@ -87,6 +87,7 @@ async def test_passive_assessment_returns_json_and_cleanup(
     )
     assert result.status_code == 202
     assert result.headers["location"].endswith(result.json()["id"])
+    assert result.json()["plugins"] == ["security-headers"]
     for _ in range(50):
         report = (
             await client.get(f"/api/v1/assessments/{result.json()['id']}/results")
@@ -98,7 +99,16 @@ async def test_passive_assessment_returns_json_and_cleanup(
     assert report["result"]["cleanup_verified"] is True
     assert report["cleanup_pending"] is False
     assert report["result"]["cleanup_reason"] is None
+    assert "plugin" not in report["result"]
+    assert report["result"]["plugins"] == [
+        {"id": "security-headers", "finding_count": 3}
+    ]
+    assert report["result"]["finding_count"] == 3
     assert report["findings"]
+    assert all(
+        finding["plugin"] == "security-headers" for finding in report["findings"]
+    )
+    assert all(finding["remediation"] for finding in report["findings"])
     assessment = (await client.get(result.headers["location"])).json()
     assert assessment["status"] == "completed"
     assert assessment["cleanup_pending"] is False
@@ -191,6 +201,44 @@ async def test_queued_and_cancelled_before_execution_have_no_result(
     cancelled = (await client.get(location + "/results")).json()
     assert cancelled["status"] == "cancelled"
     assert cancelled["result"] is None
+
+
+async def test_plugin_catalog_and_explicit_selection(
+    client, assessment_payload, monkeypatch
+):
+    from app.api import dispatcher
+
+    catalog = (await client.get("/api/v1/plugins")).json()
+    assert catalog == [
+        {
+            "id": "security-headers",
+            "name": "HTTP security headers",
+            "description": "Check three browser security headers on the target response.",
+            "profiles": ["passive"],
+        }
+    ]
+    monkeypatch.setattr(dispatcher, "submit", lambda assessment_id: None)
+    response = await client.post(
+        "/api/v1/assessments",
+        json={**assessment_payload, "plugins": ["security-headers"]},
+    )
+    assert response.status_code == 202
+    assert response.json()["plugins"] == ["security-headers"]
+    stored = (await client.get(response.headers["location"])).json()
+    assert stored["plugins"] == ["security-headers"]
+
+
+@pytest.mark.parametrize(
+    "plugins", [[], ["unknown"], ["security-headers", "security-headers"]]
+)
+async def test_invalid_plugin_selection_is_rejected(
+    client, assessment_payload, plugins
+):
+    response = await client.post(
+        "/api/v1/assessments",
+        json={**assessment_payload, "plugins": plugins},
+    )
+    assert response.status_code == 400
 
 
 @pytest.mark.parametrize("target", ["https://example.test/app"], indirect=True)

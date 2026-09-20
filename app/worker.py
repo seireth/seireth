@@ -16,6 +16,7 @@ from .config import settings
 from .execution import Cancelled, ExecutionContext, Interrupted
 from .lifecycle import audit, finish, transition
 from .orchestrator import Outcome, execute, sandbox_for
+from .plugins import select_plugins
 from .policy import PolicyError, validate
 from .sandbox import new_journal, validate_journal
 
@@ -145,6 +146,10 @@ class AssessmentDispatcher:
             assessment.profile,
             settings.docker_allowed_target_images,
         )
+        try:
+            select_plugins(assessment.plugins, assessment.profile)
+        except ValueError as exc:
+            raise PolicyError(str(exc)) from exc
         return target, scope
 
     def _assert_owner(self, db):
@@ -261,8 +266,12 @@ class AssessmentDispatcher:
                 item.cleanup_pending = True
                 transition(db, item, "running", {"attempt": number})
                 db.commit()
-                attempt_id, url = attempt.id, scope.allowed_url
-            outcome = execute(sandbox, url, context)
+                attempt_id, url, plugin_ids = (
+                    attempt.id,
+                    scope.allowed_url,
+                    list(item.plugins),
+                )
+            outcome = execute(sandbox, url, context, plugin_ids)
             if self._lost.is_set():
                 return  # A new owner must reconcile; never overwrite its decisions.
             # The cancellation row lock serializes cancellation against completion.

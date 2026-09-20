@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 from app import models
 from app.config import settings
 from app.execution import ExecutionContext
+from app.plugins import BY_ID, Plugin
 from app.sandbox import CleanupOutcome, InMemorySandbox, new_journal
 from app.worker import AssessmentDispatcher
 
@@ -253,8 +254,12 @@ def test_recovery_policy(database, assessment, monkeypatch, mode):
         dispatcher._run(assessment, Event())
         item = read(database, assessment)
         assert item.status == "completed"
+        assert item.plugins == ["security-headers"]
         assert item.result["attempt"] == 2
         assert item.result["finding_count"] == 3
+        assert item.result["plugins"] == [
+            {"id": "security-headers", "finding_count": 3}
+        ]
     if mode == "cleanup":
         assert read(database, assessment).cleanup_pending
         monkeypatch.setattr(
@@ -263,6 +268,31 @@ def test_recovery_policy(database, assessment, monkeypatch, mode):
         dispatcher.recover()
         assert not read(database, assessment).cleanup_pending
         assert read(database, assessment).status == "failed"
+
+
+def test_plugin_failure_persists_no_findings_after_verified_cleanup(
+    database, assessment, monkeypatch
+):
+    def broken(headers, url):
+        raise RuntimeError("synthetic plugin failure")
+
+    monkeypatch.setitem(
+        BY_ID,
+        "security-headers",
+        Plugin(
+            "security-headers",
+            "Broken",
+            "Test failure",
+            ("passive",),
+            broken,
+        ),
+    )
+    AssessmentDispatcher()._run(assessment, Event())
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, assessment)
+        assert item.status == "failed"
+        assert item.result["cleanup_verified"]
+        assert item.findings == []
 
 
 def test_only_one_dispatcher_and_lock_loss_stops_work(database):

@@ -7,6 +7,7 @@ from . import models
 from .config import settings
 from .db import get_db
 from .lifecycle import audit, transition
+from .plugins import catalog, select_plugins
 from .policy import ACTOR as MVP_ACTOR
 from .policy import PolicyError, bounded_url, unexpired, validate
 from .schemas import (
@@ -111,6 +112,13 @@ def create_scope(payload: ScopeCreate, db: Session = Depends(get_db)):
     return {"id": item.id}
 
 
+@app.get("/api/v1/plugins")
+def list_plugins():
+    """List built-in plugins that callers may select for assessments."""
+
+    return catalog()
+
+
 @app.post("/api/v1/assessments", response_model=AssessmentOut, status_code=202)
 def create_assessment(
     payload: AssessmentCreate, response: Response, db: Session = Depends(get_db)
@@ -122,6 +130,10 @@ def create_assessment(
     scope = db.get(models.AuthorizationScope, payload.scope_id)
     if payload.profile != "passive":
         raise HTTPException(400, "MVP-0 only supports the passive profile")
+    try:
+        plugins = select_plugins(payload.plugins, payload.profile)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     try:
         validate(
             project,
@@ -137,6 +149,7 @@ def create_assessment(
         target_id=target.id,
         scope_id=scope.id,
         profile=payload.profile,
+        plugins=[plugin.id for plugin in plugins],
     )
     db.add(item)
     db.flush()
@@ -175,6 +188,7 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
                 "title": f.title,
                 "severity": f.severity,
                 "description": f.description,
+                "remediation": f.remediation,
             }
             for f in item.findings
         ],

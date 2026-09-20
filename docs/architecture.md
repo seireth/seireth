@@ -24,7 +24,9 @@ guards the dispatcher for the application lifetime; a second API process refuses
    issuing Docker commands. Each resource's creation intent is committed before
    its command, and its ID before advancing to container startup. Containers are
    created separately from startup and removed explicitly by cleanup.
-4. The plugin receives an execution interface; orchestration owns cleanup.
+4. The orchestrator fetches response headers once and passes them to the selected
+   built-in plugins in request order. Orchestration owns cleanup. Plugin IDs and
+   descriptions live in `app/plugins/` and are listed through the API.
 5. Findings remain buffered until successful execution and verified cleanup.
 6. Finalization locks the assessment and commits results, findings, evidence,
    attempt outcome, and terminal audit event together.

@@ -31,7 +31,8 @@ workloads. Source-code scope checks do not prove target ownership. Image tags ar
 mutable. There is no multi-user authentication, tenant isolation, or production TLS.
 
 The in-memory backend simulates headers without network access. The current plugin
-checks only three header presences; it does not validate values or prove security.
+checks three headers with limited value checks; it does not fully validate CSP or
+prove security.
 Audit events are application records, not tamper-proof evidence.
 
 ## Cleanup and failure

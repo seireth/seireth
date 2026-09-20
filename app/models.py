@@ -96,6 +96,9 @@ class Assessment(Base):
     target_id: Mapped[str] = mapped_column(ForeignKey("targets.id"))
     scope_id: Mapped[str] = mapped_column(ForeignKey("authorization_scopes.id"))
     profile: Mapped[str] = mapped_column(String(50))
+    plugins: Mapped[list[str]] = mapped_column(
+        JSON, default=lambda: ["security-headers"]
+    )
     status: Mapped[str] = mapped_column(String(30), default=AssessmentStatus.queued)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -114,6 +117,7 @@ class Finding(Base):
     title: Mapped[str] = mapped_column(String(300))
     severity: Mapped[str] = mapped_column(String(30))
     description: Mapped[str] = mapped_column(Text)
+    remediation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Evidence(Base):

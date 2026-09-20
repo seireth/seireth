@@ -30,7 +30,7 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [tool.setuptools]
-packages = ["app"]
+packages = ["app", "app.plugins"]
 
 [tool.setuptools.package-data]
 app = ["migrations/*.py", "migrations/versions/*.py", "migrations/*.mako"]

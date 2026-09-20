@@ -131,6 +131,7 @@ def test_real_api_lifecycle(database, tmp_path, backend, action):
                 },
             )
             aid = assessment["id"]
+            assert assessment["plugins"] == ["security-headers"]
             selector = f"label=seireth.assessment={aid}"
             wait_until(
                 lambda: (
@@ -161,6 +162,13 @@ def test_real_api_lifecycle(database, tmp_path, backend, action):
             ), report
             assert report["result"]["cleanup_verified"]
             assert report["result"]["attempt"] == (2 if action == "crash" else 1)
+            assert client.get(f"/api/v1/assessments/{aid}").json()["plugins"] == [
+                "security-headers"
+            ]
+            if action == "crash":
+                assert report["result"]["plugins"] == [
+                    {"id": "security-headers", "finding_count": 3}
+                ]
             assert len(report["findings"]) == (3 if action == "crash" else 0)
             assert not docker(
                 "ps", "-a", "--filter", selector, "--format", "{{.Names}}"

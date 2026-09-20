@@ -154,7 +154,7 @@ def test_network_created_before_cli_timeout_is_reconciled(sandbox, monkeypatch):
 
     monkeypatch.setattr(sandbox, "_run", run)
     context = ExecutionContext(Event(), Event(), monotonic() + 5)
-    outcome = execute(sandbox, "http://demo-target:8080", context)
+    outcome = execute(sandbox, "http://demo-target:8080", context, ["security-headers"])
     assert outcome.status == "failed"
     assert outcome.cleanup_verified
     assert not live

@@ -9,6 +9,7 @@ and audit ordering; its implementation is in [app/verify.py](../app/verify.py).
 | Create a project | `POST /api/v1/projects` |
 | Register an allowlisted target | `POST /api/v1/targets` |
 | Authorize a bounded URL and expiry | `POST /api/v1/authorization-scopes` |
+| List available plugins | `GET /api/v1/plugins` |
 | Submit an assessment using those IDs | `POST /api/v1/assessments` |
 | Read audit events | `GET /api/v1/projects/{id}/audit-events` |
 
@@ -19,13 +20,20 @@ and when an assessment is submitted, executed, or retried, and stay within the r
 origin and path. The only supported profile is `passive`. All requests currently
 use one development actor; there is no user authentication flow.
 
+An assessment request may include `"plugins": ["security-headers"]`. Omission
+selects that plugin by default. The list must be nonempty, contain no duplicate
+IDs, and include only plugins supported by the passive profile. `GET /api/v1/plugins`
+returns each built-in plugin's stable ID, display name, description, and profiles.
+The selected IDs are stored with the assessment and returned by
+`GET /api/v1/assessments/{id}`.
+
 ## Status and result
 
 Creation returns `202 Accepted`. Poll the `Location` response header, appending
 `/results` for findings, until `completed`, `failed`, or `cancelled`. A queued record is:
 
 ```json
-{"id": "assessment-id", "status": "queued", "result": null, "cleanup_pending": false}
+{"id": "assessment-id", "status": "queued", "plugins": ["security-headers"], "result": null, "cleanup_pending": false}
 ```
 
 `result` is nullable because creation acknowledges background work before an
@@ -44,9 +52,19 @@ clients should handle any returned state.
 | `cancelled` | Cancellation recorded; execution may not have started |
 
 `GET /api/v1/assessments/{id}/results` returns `assessment_id`, `status`, `result`,
-and a `findings` array. A successful result contains `plugin`, `finding_count`,
-`sandbox_backend`, `cleanup_verified`, `completed_at`, and the attempt number. A zero count means
-the plugin found no missing required headers, not that the target is secure.
+and a `findings` array. A successful result contains `plugins` (an ordered list of
+plugin IDs and per-plugin finding counts), total `finding_count`, `sandbox_backend`,
+`cleanup_verified`, `completed_at`, and the attempt number. `result.plugin` has
+been replaced by `result.plugins`. Each finding includes its plugin ID,
+description, and nullable `remediation`; findings created before this change have
+null remediation. A zero count means the selected checks produced no findings,
+not that the target is secure.
+
+The security-headers plugin checks `X-Content-Type-Options: nosniff`, a nonblank
+enforced `Content-Security-Policy`, and framing protection from either
+`X-Frame-Options: DENY` or `SAMEORIGIN` or an enforced CSP `frame-ancestors`
+directive. It does not fully parse or validate CSP, prove that a policy is safe,
+or assess every HTTP response.
 
 Execution failures include an `error` in the result. Unverified cleanup always
 produces `failed`, including after cancellation. Assessment and results responses

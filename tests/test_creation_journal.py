@@ -37,7 +37,9 @@ def test_late_creation_is_not_certified_absent(monkeypatch):
         raise TimeoutError("daemon still creating")
 
     daemon.create_hook = timeout
-    outcome = execute(sandbox, "http://demo-target:8080", context())
+    outcome = execute(
+        sandbox, "http://demo-target:8080", context(), ["security-headers"]
+    )
     assert outcome.status == "failed"
     assert outcome.error == "assessment deadline exceeded"
     assert not outcome.cleanup_verified

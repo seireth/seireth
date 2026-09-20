@@ -28,10 +28,12 @@ class AssessmentCreate(BaseModel):
     target_id: str
     scope_id: str
     profile: str = "passive"
+    plugins: list[str] | None = None
 
 
 class AssessmentOut(BaseModel):
     id: str
     status: AssessmentStatus
+    plugins: list[str]
     cleanup_pending: bool = False
     result: dict | None = None

@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from .config import settings
 from .execution import Cancelled, Interrupted
-from .plugins import PluginFinding, security_headers
+from .plugins import PluginResult, select_plugins
 from .sandbox import DockerSandbox, InMemorySandbox
 
 logger = logging.getLogger(__name__)
@@ -37,16 +37,22 @@ class Outcome:
     status: str = "completed"
     error: str | None = None
     cleanup_verified: bool = False
-    findings: list[PluginFinding] = field(default_factory=list)
+    plugin_results: list[PluginResult] = field(default_factory=list)
     cleanup_reason: str | None = None
 
 
-def execute(sandbox, url, context) -> Outcome:
+def execute(sandbox, url, context, plugin_ids: list[str]) -> Outcome:
     outcome = Outcome()
     try:
         context.check()
-        outcome.findings = security_headers(sandbox, url)
+        plugins = select_plugins(plugin_ids, "passive")
+        headers = sandbox.execute(url)
         context.check()
+        for plugin in plugins:
+            outcome.plugin_results.append(
+                PluginResult(plugin.id, plugin.run(headers, url))
+            )
+            context.check()
     except Cancelled:
         outcome.status, outcome.error = "cancelled", "assessment cancelled"
     except Interrupted:
