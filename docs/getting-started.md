@@ -89,31 +89,6 @@ Review generated operations before applying them. Do not edit already deployed
 revisions. Run migrations before starting the API directly; the API does not
 check the schema revision or apply migrations. Request handlers do not modify the schema.
 
-### Fresh foundation reset
-
-`0001_initial_schema` replaces the earlier development revisions. Existing development
-installations must reset their disposable application database; do not stamp the
-old schema as current. Future changes add new revisions instead of editing this baseline.
-Alembic CLI configuration lives in `pyproject.toml`; generation and runtime migrations
-share the packaged environment and template.
-
-Before resetting, stop the API and resolve assessment-owned Docker resources using
-[the cleanup procedure](security-model.md#cleanup-and-failure). Keep the database
-records until cleanup is resolved. For the bundled Compose database only:
-
-```bash
-docker compose stop api
-docker compose exec -T postgres dropdb -U seireth --force seireth
-docker compose exec -T postgres createdb -U seireth -O seireth seireth
-python -m app docker-up
-```
-
-These commands delete Seireth's development data, not the PostgreSQL volume or
-other databases. For native PostgreSQL, stop the native API and use `dropdb` and
-`createdb` against the explicitly selected development server and database, then
-run `python -m app migrate` before `python -m app serve`. Never apply this reset to
-a shared or production database. No native server is reset automatically.
-
 ## Tests
 
 Tests create a uniquely named PostgreSQL database and drop only that database.
