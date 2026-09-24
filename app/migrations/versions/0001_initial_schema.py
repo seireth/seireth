@@ -6,6 +6,9 @@ from alembic import op
 revision = "0001_initial_schema"
 down_revision = None
 
+PROJECT_ID_REFERENCE = "projects.id"
+ASSESSMENT_ID_REFERENCE = "assessments.id"
+
 
 def upgrade():
     op.create_table(
@@ -35,7 +38,7 @@ def upgrade():
         sa.Column("name", sa.String(200), nullable=False),
         sa.Column("image", sa.String(300), nullable=False),
         sa.Column("url", sa.String(500), nullable=False),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.id"]),
+        sa.ForeignKeyConstraint(["project_id"], [PROJECT_ID_REFERENCE]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_targets_project_id", "targets", ["project_id"])
@@ -46,7 +49,7 @@ def upgrade():
         sa.Column("target_id", sa.String(36), nullable=False),
         sa.Column("allowed_url", sa.String(500), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.id"]),
+        sa.ForeignKeyConstraint(["project_id"], [PROJECT_ID_REFERENCE]),
         sa.ForeignKeyConstraint(["target_id"], ["targets.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -65,7 +68,6 @@ def upgrade():
         sa.Column("project_id", sa.String(36), nullable=False),
         sa.Column("target_id", sa.String(36), nullable=False),
         sa.Column("scope_id", sa.String(36), nullable=False),
-        sa.Column("profile", sa.String(50), nullable=False),
         sa.Column("status", sa.String(30), nullable=False),
         sa.Column("result", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -73,7 +75,7 @@ def upgrade():
             "status IN ('queued', 'running', 'cancelling', 'recovering', 'completed', 'failed', 'cancelled')",
             name="assessment_status_valid",
         ),
-        sa.ForeignKeyConstraint(["project_id"], ["projects.id"]),
+        sa.ForeignKeyConstraint(["project_id"], [PROJECT_ID_REFERENCE]),
         sa.ForeignKeyConstraint(["scope_id"], ["authorization_scopes.id"]),
         sa.ForeignKeyConstraint(["target_id"], ["targets.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -92,7 +94,7 @@ def upgrade():
         sa.Column("cleanup_verified", sa.Boolean(), nullable=False),
         sa.Column("error", sa.String(200), nullable=True),
         sa.CheckConstraint("number BETWEEN 1 AND 2", name="attempt_number_bounded"),
-        sa.ForeignKeyConstraint(["assessment_id"], ["assessments.id"]),
+        sa.ForeignKeyConstraint(["assessment_id"], [ASSESSMENT_ID_REFERENCE]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("assessment_id", "number", name="attempt_number_unique"),
     )
@@ -103,7 +105,7 @@ def upgrade():
         sa.Column("assessment_id", sa.String(36), nullable=False),
         sa.Column("kind", sa.String(100), nullable=False),
         sa.Column("data", sa.JSON(), nullable=False),
-        sa.ForeignKeyConstraint(["assessment_id"], ["assessments.id"]),
+        sa.ForeignKeyConstraint(["assessment_id"], [ASSESSMENT_ID_REFERENCE]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_evidence_assessment_id", "evidence", ["assessment_id"])
@@ -115,7 +117,7 @@ def upgrade():
         sa.Column("title", sa.String(300), nullable=False),
         sa.Column("severity", sa.String(30), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
-        sa.ForeignKeyConstraint(["assessment_id"], ["assessments.id"]),
+        sa.ForeignKeyConstraint(["assessment_id"], [ASSESSMENT_ID_REFERENCE]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_findings_assessment_id", "findings", ["assessment_id"])
