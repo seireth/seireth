@@ -1,9 +1,14 @@
 """Conservative checks for three browser response headers."""
 
 import re
-from collections.abc import Mapping
 
-from .base import PluginFinding
+from .base import (
+    HttpObservation,
+    Plugin,
+    PluginFinding,
+    PluginManifest,
+    PluginResponse,
+)
 
 
 def _has_frame_ancestors(policy: str) -> bool:
@@ -24,10 +29,13 @@ def _has_frame_ancestors(policy: str) -> bool:
     return False
 
 
-def security_headers(headers: Mapping[str, str], url: str) -> list[PluginFinding]:
+def analyze(observation: HttpObservation) -> PluginResponse:
     """Report missing or ineffective values without claiming full CSP validation."""
 
-    observed = {name.lower(): value.strip() for name, value in headers.items()}
+    url = str(observation.url)
+    observed = {
+        name.lower(): value.strip() for name, value in observation.headers.items()
+    }
     findings = []
 
     content_type = observed.get("x-content-type-options", "")
@@ -66,4 +74,14 @@ def security_headers(headers: Mapping[str, str], url: str) -> list[PluginFinding
             )
         )
 
-    return findings
+    return PluginResponse(findings=tuple(findings))
+
+
+PLUGIN = Plugin(
+    manifest=PluginManifest(
+        id="security-headers",
+        name="HTTP security headers",
+        description="Check three browser security headers on the target response.",
+    ),
+    analyze=analyze,
+)
