@@ -14,6 +14,39 @@ def run(command: list[str]) -> int:
     return subprocess.call([sys.executable, "-m", *command])
 
 
+def _docker_up(timeout_seconds: float) -> int:
+    for stage, command in (
+        ("build", ["build", "api"]),
+        ("stop API", ["stop", "api"]),
+        ("start PostgreSQL", ["up", "-d", "--wait", "postgres"]),
+        ("migration", ["run", "--rm", "--no-deps", "-T", "migrate"]),
+        (
+            "API readiness",
+            [
+                "up",
+                "-d",
+                "--no-deps",
+                "--wait",
+                "--wait-timeout",
+                str(math.ceil(timeout_seconds)),
+                "api",
+            ],
+        ),
+    ):
+        try:
+            status = subprocess.call(["docker", "compose", *command])
+        except OSError as error:
+            print(f"docker-up failed during {stage}: {error}", file=sys.stderr)
+            return 1
+        if status:
+            print(
+                f"docker-up failed during {stage}. Inspect with: docker compose ps -a; docker compose logs api",
+                file=sys.stderr,
+            )
+            return status
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app",
@@ -44,36 +77,7 @@ def main() -> int:
         return run(["pytest", *sys.argv[2:]])
     args = parser.parse_args()
     if args.command == "docker-up":
-        for stage, command in (
-            ("build", ["build", "api"]),
-            ("stop API", ["stop", "api"]),
-            ("start PostgreSQL", ["up", "-d", "--wait", "postgres"]),
-            ("migration", ["run", "--rm", "--no-deps", "-T", "migrate"]),
-            (
-                "API readiness",
-                [
-                    "up",
-                    "-d",
-                    "--no-deps",
-                    "--wait",
-                    "--wait-timeout",
-                    str(math.ceil(args.api_ready_timeout_seconds)),
-                    "api",
-                ],
-            ),
-        ):
-            try:
-                status = subprocess.call(["docker", "compose", *command])
-            except OSError as error:
-                print(f"docker-up failed during {stage}: {error}", file=sys.stderr)
-                return 1
-            if status:
-                print(
-                    f"docker-up failed during {stage}. Inspect with: docker compose ps -a; docker compose logs api",
-                    file=sys.stderr,
-                )
-                return status
-        return 0
+        return _docker_up(args.api_ready_timeout_seconds)
     if args.command == "migrate":
         from .migration import migrate
 
