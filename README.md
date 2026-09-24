@@ -54,6 +54,7 @@ for API states and cancellation, and [Contributing](CONTRIBUTING.md) for develop
 | [Architecture](docs/architecture.md) | Current components and data flow |
 | [Configuration](docs/configuration.md) | Settings, defaults, and image policy |
 | [Assessments](docs/assessments.md) | Requests, polling, cancellation, and results |
+| [Plugin development](docs/plugins.md) | Catalog behavior and adding approved checks |
 | [Security model](docs/security-model.md) | Isolation boundaries and limitations |
 | [Roadmap](docs/roadmap.md) | Implemented capabilities and future work |
 
