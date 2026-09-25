@@ -7,7 +7,7 @@ from . import models
 from .config import settings
 from .db import get_db
 from .lifecycle import audit, transition
-from .plugins import catalog, select_plugins
+from .plugins import registry as plugin_registry
 from .policy import ACTOR as MVP_ACTOR
 from .policy import PolicyError, bounded_url, unexpired, validate
 from .schemas import (
@@ -116,7 +116,7 @@ def create_scope(payload: ScopeCreate, db: Session = Depends(get_db)):
 def list_plugins():
     """List built-in plugins that callers may select for assessments."""
 
-    return catalog()
+    return plugin_registry.catalog()
 
 
 @app.post("/api/v1/assessments", response_model=AssessmentOut, status_code=202)
@@ -128,10 +128,8 @@ def create_assessment(
     project = authorize_project(db, payload.project_id)
     target = db.get(models.Target, payload.target_id)
     scope = db.get(models.AuthorizationScope, payload.scope_id)
-    if payload.profile != "passive":
-        raise HTTPException(400, "MVP-0 only supports the passive profile")
     try:
-        plugins = select_plugins(payload.plugins, payload.profile)
+        plugins = plugin_registry.select(payload.plugins)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     try:
@@ -139,7 +137,6 @@ def create_assessment(
             project,
             target,
             scope,
-            payload.profile,
             settings.docker_allowed_target_images,
         )
     except PolicyError as exc:
@@ -148,8 +145,7 @@ def create_assessment(
         project_id=payload.project_id,
         target_id=target.id,
         scope_id=scope.id,
-        profile=payload.profile,
-        plugins=[plugin.id for plugin in plugins],
+        plugins=[plugin.manifest.id for plugin in plugins],
     )
     db.add(item)
     db.flush()
