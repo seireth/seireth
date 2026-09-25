@@ -104,7 +104,7 @@ def verify(
                     "project_id": project["id"],
                     "target_id": target["id"],
                     "scope_id": scope["id"],
-                    "profile": "passive",
+                    "plugins": ["security-headers"],
                 },
             ),
             202,
