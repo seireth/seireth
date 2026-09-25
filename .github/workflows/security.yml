@@ -29,17 +29,16 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-          cache: pip
-          cache-dependency-path: pyproject.toml
-      - name: Resolve runtime separately from audit tools
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.9"
+      - name: Install audit tools and export locked runtime dependencies
         run: |
-          python -m venv "$RUNNER_TEMP/seireth-runtime"
-          "$RUNNER_TEMP/seireth-runtime/bin/python" -m pip install .
-          "$RUNNER_TEMP/seireth-runtime/bin/python" -m pip freeze --exclude seireth > "$RUNNER_TEMP/runtime-requirements.txt"
-          python -m pip install ".[security]"
+          uv sync --locked --extra security
+          uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file "$RUNNER_TEMP/runtime-requirements.txt"
       - name: Audit resolved dependencies
         run: >-
-          python -m pip_audit --strict --no-deps --disable-pip
+          uv run --no-sync python -m pip_audit --strict --no-deps --disable-pip
           -r "$RUNNER_TEMP/runtime-requirements.txt"
           --format json --output dependency-audit.json
       - uses: actions/upload-artifact@v7
