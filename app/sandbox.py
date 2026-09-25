@@ -6,7 +6,6 @@ import subprocess
 from copy import deepcopy
 from dataclasses import dataclass
 from time import monotonic
-from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
@@ -53,11 +52,6 @@ def validate_journal(journal):
             raise ValueError("invalid journal fields")
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise ValueError("invalid operation journal") from exc
-
-
-class Sandbox(Protocol):
-    def execute(self, url: str, timeout_seconds: float = 5) -> dict[str, str]: ...
-    def cleanup(self) -> CleanupOutcome: ...
 
 
 class InMemorySandbox:
