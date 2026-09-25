@@ -3,9 +3,6 @@
 from .base import PluginRegistry
 from .security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 
-registry = PluginRegistry(
-    plugins=(SECURITY_HEADERS_PLUGIN,),
-    defaults=("security-headers",),
-)
+registry = PluginRegistry(plugins=(SECURITY_HEADERS_PLUGIN,))
 
 __all__ = ["registry"]

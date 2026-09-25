@@ -73,7 +73,6 @@ class PluginResult:
 @dataclass(frozen=True)
 class PluginRegistry:
     plugins: tuple[Plugin, ...]
-    defaults: tuple[str, ...]
     _by_id: MappingProxyType = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -90,32 +89,24 @@ class PluginRegistry:
         ids = [plugin.manifest.id for plugin in plugins]
         if len(ids) != len(set(ids)):
             raise ValueError("plugin IDs must be unique")
-        if not self.defaults:
-            raise ValueError("at least one default plugin is required")
-        if len(self.defaults) != len(set(self.defaults)):
-            raise ValueError("default plugin IDs must be unique")
         by_id = {plugin.manifest.id: plugin for plugin in plugins}
-        if any(plugin_id not in by_id for plugin_id in self.defaults):
-            raise ValueError("default plugin is not registered")
         object.__setattr__(self, "plugins", plugins)
         object.__setattr__(self, "_by_id", MappingProxyType(by_id))
 
-    def select(self, ids: list[str] | None) -> list[Plugin]:
+    def select(self, ids: list[str]) -> list[Plugin]:
         """Resolve an ordered, nonempty selection against the approved registry."""
 
-        if ids is not None and (
-            not isinstance(ids, list)
-            or any(not isinstance(value, str) for value in ids)
+        if not isinstance(ids, list) or any(
+            not isinstance(value, str) for value in ids
         ):
             raise ValueError("invalid plugin selection")
-        selected = list(self.defaults if ids is None else ids)
-        if not selected:
+        if not ids:
             raise ValueError("at least one plugin is required")
-        if len(selected) != len(set(selected)):
+        if len(ids) != len(set(ids)):
             raise ValueError("duplicate plugins are not allowed")
-        if any(plugin_id not in self._by_id for plugin_id in selected):
+        if any(plugin_id not in self._by_id for plugin_id in ids):
             raise ValueError("unknown or inactive plugin")
-        return [self._by_id[plugin_id] for plugin_id in selected]
+        return [self._by_id[plugin_id] for plugin_id in ids]
 
     def catalog(self) -> list[dict]:
         return [

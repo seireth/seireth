@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
-        return f"https://{host}:{self.api_port}"
+        return f"http://{host}:{self.api_port}"
 
 
 settings = Settings()
