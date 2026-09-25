@@ -117,7 +117,7 @@ jobs:
       - name: Verify real cancellation and crash recovery
         env:
           SEIRETH_DOCKER_TESTS: "1"
-        run: python -m pytest tests/test_api_process.py --basetemp artifacts/api-process
+        run: python -m pytest tests/test_api_lifecycle.py --basetemp artifacts/api-process
       - name: Collect diagnostics
         if: always()
         run: |

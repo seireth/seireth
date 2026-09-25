@@ -1,8 +1,4 @@
-"""Migration and CLI behavior, including commands without an operator .env."""
-
-import os
-import subprocess
-import sys
+"""Versioned schema, migration behavior, and database constraints."""
 
 import pytest
 from alembic import command
@@ -62,32 +58,15 @@ def test_migration_connection_has_separate_timeouts(database):
     assert observed == [("30s", "5min")]
 
 
-def test_cli_help_and_tests_do_not_load_operator_settings(tmp_path):
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("SEIRETH_")
-    }
-    for arguments in (["--help"], ["test", "--help"]):
-        result = subprocess.run(
-            [sys.executable, "-m", "app", *arguments],
-            cwd=tmp_path,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode == 0, result.stderr
-
-
 def test_status_constraint(database):
-    # A CHECK violation is independent of whether a referenced project exists.
     with database.engine.begin() as connection:
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError) as error:
             connection.execute(
                 text(
-                    "INSERT INTO assessments (id, project_id, target_id, scope_id, profile, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', 'passive', '[\"security-headers\"]'::json, 'unknown', now())"
+                    "INSERT INTO assessments (id, project_id, target_id, scope_id, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', '[\"security-headers\"]'::json, 'unknown', now())"
                 )
             )
+    assert error.value.orig.diag.constraint_name == "assessment_status_valid"
 
 
 def test_baseline_round_trip(database):
@@ -128,10 +107,10 @@ def test_plugin_migration_backfills_existing_assessments(database):
         )
         connection.exec_driver_sql(
             "INSERT INTO assessments "
-            "(id, project_id, target_id, scope_id, profile, status, "
+            "(id, project_id, target_id, scope_id, status, "
             "cleanup_pending, result, created_at) "
             "VALUES ('old-assessment', 'old-project', 'old-target', 'old-scope', "
-            "'passive', 'completed', false, "
+            "'completed', false, "
             '\'{"plugin":"security-headers","finding_count":1}\'::json, now())'
         )
         connection.execute(
@@ -177,75 +156,3 @@ def test_missing_journal_is_rejected_by_database(database):
                 )
             )
     assert error.value.orig.diag.column_name == "operation_journal"
-
-
-@pytest.mark.parametrize("migration_status", [0, 1])
-def test_docker_startup_gates_api_on_temporary_migration(monkeypatch, migration_status):
-    from app.__main__ import main
-
-    calls = []
-
-    def compose(command):
-        calls.append(command)
-        return migration_status if "run" in command else 0
-
-    monkeypatch.setattr(sys, "argv", ["app", "docker-up"])
-    monkeypatch.setattr(subprocess, "call", compose)
-    assert main() == migration_status
-    migration = next(call for call in calls if "run" in call)
-    assert "--rm" in migration
-    assert any(
-        "stop" in call and "api" in call for call in calls[: calls.index(migration)]
-    )
-    api_started = any("up" in call and "api" in call for call in calls)
-    assert api_started == (migration_status == 0)
-
-
-@pytest.mark.parametrize("status", [0, 1, 17])
-def test_docker_up_waits_and_propagates_readiness_failure(monkeypatch, capsys, status):
-    from app.__main__ import main
-
-    calls = []
-
-    def compose(command):
-        calls.append(command)
-        return status if "--wait-timeout" in command else 0
-
-    monkeypatch.setattr(
-        sys, "argv", ["app", "docker-up", "--api-ready-timeout-seconds", "7.2"]
-    )
-    monkeypatch.setattr(subprocess, "call", compose)
-    assert main() == status
-    start = calls[-1]
-    assert "--wait" in start
-    assert start[start.index("--wait-timeout") + 1] == "8"
-    error = capsys.readouterr().err
-    if status:
-        assert "API readiness" in error
-        assert "docker compose ps -a" in error
-        assert "docker compose logs api" in error
-    assert not any("down" in call for call in calls)
-
-
-@pytest.mark.parametrize("timeout", ["0", "-1", "nan", "inf", "not-a-number"])
-def test_docker_up_rejects_invalid_timeout_before_start(monkeypatch, timeout):
-    from app.__main__ import main
-
-    monkeypatch.setattr(
-        sys, "argv", ["app", "docker-up", "--api-ready-timeout-seconds", timeout]
-    )
-    with pytest.raises(SystemExit) as error:
-        main()
-    assert error.value.code == 2
-
-
-def test_docker_up_missing_cli_reports_stage(monkeypatch, capsys):
-    from app.__main__ import main
-
-    def unavailable(*args):
-        raise FileNotFoundError("docker unavailable")
-
-    monkeypatch.setattr(sys, "argv", ["app", "docker-up"])
-    monkeypatch.setattr(subprocess, "call", unavailable)
-    assert main() == 1
-    assert "build" in capsys.readouterr().err

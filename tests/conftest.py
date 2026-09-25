@@ -1,6 +1,7 @@
 """Explicit disposable PostgreSQL databases; unit tests need no server."""
 
 import os
+from time import monotonic, sleep
 from uuid import uuid4
 
 import pytest
@@ -20,7 +21,16 @@ os.environ.update(
 )
 
 
-@pytest.fixture(scope="session")
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    """Avoid shared Windows temp directories with incompatible ownership."""
+    if os.name == "nt" and config.option.basetemp is None:
+        root = config.rootpath / "build"
+        root.mkdir(exist_ok=True)
+        config.option.basetemp = str(root / f"pytest-{uuid4().hex}")
+
+
+@pytest.fixture
 def database():
     admin_url = os.environ.get("SEIRETH_TEST_ADMIN_URL")
     if not admin_url:
@@ -51,3 +61,58 @@ def database():
         with admin.connect() as connection:
             connection.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
         admin.dispose()
+
+
+@pytest.fixture
+def fake_docker(monkeypatch):
+    from fake_docker import FakeDocker
+
+    daemon = FakeDocker()
+    daemon.install(monkeypatch)
+    return daemon
+
+
+@pytest.fixture
+def wait_until():
+    def wait(sample, predicate=bool, *, description, timeout=5, interval=0.01):
+        deadline = monotonic() + timeout
+        while True:
+            value = sample()
+            if predicate(value):
+                return value
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise AssertionError(
+                    f"Timed out waiting for {description}; last value: {value!r}"
+                )
+            sleep(min(interval, remaining))
+
+    return wait
+
+
+@pytest.fixture
+def finding_payload():
+    return {
+        "title": "Example",
+        "severity": "low",
+        "description": "Example description",
+        "remediation": "Example remediation",
+        "evidence": {"url": "http://demo-target:8080/", "observed": True},
+    }
+
+
+@pytest.fixture
+def make_plugin():
+    from app.plugins.base import Plugin, PluginManifest
+
+    def make(plugin_id, analyze_plugin):
+        return Plugin(
+            PluginManifest(
+                id=plugin_id,
+                name=plugin_id.title(),
+                description=f"Test {plugin_id} plugin",
+            ),
+            analyze_plugin,
+        )
+
+    return make
