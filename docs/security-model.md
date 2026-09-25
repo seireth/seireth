@@ -1,56 +1,55 @@
 # Security model
 
-SEIRETH is a local, single-operator development tool. Run only owned or explicitly
-authorized images. The fixed development actor is not production authentication.
-The example API binding and the database port use loopback. Setting a non-loopback
-API host exposes this unauthenticated development API; do not expose it to untrusted networks. Report vulnerabilities through [SECURITY.md](../SECURITY.md).
+SEIRETH is a local, single-operator development tool for owned or explicitly
+authorized images. The fixed development actor provides no production
+authentication. Example API/database bindings use loopback; a non-loopback API
+binding exposes an unauthenticated service. Keep it off untrusted networks.
+Report vulnerabilities through [SECURITY.md](../SECURITY.md).
 
 ## Enforced boundaries
 
 Admission and execution check project/target/scope relationships, origin/path,
-expiry, passive profile, and the operator's image allowlist. Root URL scopes include
-child paths; traversal, credentials, fragments, and ambiguous multiply encoded
-paths are rejected. Redirect responses are inspected without following them.
+expiry, plugins, and image policy. Root URL scopes include child paths; traversal,
+credentials, fragments, and ambiguous multiply encoded paths are rejected.
+Redirect responses are inspected without following them.
 
-The runner maps the registered host to the disposable target's Docker alias. It
-measures the cloned image instance, not the original remote host. HTTPS targets
-must have certificates valid for the sandbox alias; custom hostname/TLS mapping
-is not implemented.
+The runner replaces the registered hostname with Docker alias `target`, measuring
+the disposable image instance. HTTPS certificates must be valid and trusted for
+that alias; custom hostname/TLS mapping is unsupported.
 
-Targets and runners use a private internal network, no published ports, a non-root
-numeric user, dropped capabilities, no-new-privileges, read-only filesystems, and
-CPU/memory/PID limits. Neither gets the Docker socket. Scope expiry and cancellation
-interrupt actual runner operations. Cleanup independently verifies each resource.
+Targets and runners have an internal network, no published ports or Docker socket,
+a non-root numeric user, dropped capabilities, no-new-privileges, read-only
+filesystems, and CPU/memory/PID limits. Scope expiry and cancellation interrupt
+runner operations; cleanup independently verifies each resource.
 
 ## Privileged and remaining boundaries
 
-The API itself has the host Docker socket and therefore substantial host control.
-The image allowlist does not protect a compromised API process, operator, or Docker
-daemon. Containers share a kernel and are not appropriate for arbitrary hostile
-workloads. Source-code scope checks do not prove target ownership. Image tags are
-mutable. There is no multi-user authentication, tenant isolation, or production TLS.
+The API's Docker socket grants substantial host control. Allowlisting cannot
+protect a compromised API, operator, or daemon. Tags are mutable; containers share
+a kernel and are unsuitable for arbitrary hostile workloads. Scope checks do not
+prove ownership. Multi-user authentication, tenant isolation, and production TLS
+are absent; audit records are not tamper-proof evidence.
 
-The in-memory backend simulates headers without network access. The current plugin
-checks only three header presences; it does not validate values or prove security.
-Audit events are application records, not tamper-proof evidence.
+The in-memory backend simulates headers without networking. The
+[header checks](assessments.md#header-checks) provide limited value checks, not
+proof of security or complete CSP validation.
 
 ## Cleanup and failure
 
-Each resource carries assessment/attempt labels and has a persisted name. Cleanup
-checks ownership and resource IDs before removal and uses successful enumeration
-to verify absence. Creation intent is durable before launching Docker; absence
-does not resolve an interrupted creation with no known resource ID.
-Docker errors, permissions failures, timeouts, or ownership mismatches never mean
-successful cleanup. Mismatched resources are left untouched and reported unverified.
+Resources have persisted names and assessment/attempt labels. Cleanup verifies
+ownership, records observed IDs before removal, and uses successful enumeration
+to verify absence. Creation intent is durable before Docker runs. An absent
+resource whose creation is uncertain and ID unknown remains pending indefinitely;
+an identified, removed resource can be verified. Elapsed time is not evidence.
+Errors, permission failures, timeouts, and ownership mismatches never certify
+cleanup; mismatched resources remain untouched.
 
-A terminal `cancelled` result after execution requires verified cleanup. Unverified
-cleanup produces `failed` with `cleanup_verified: false` and `cleanup_pending: true`;
-startup and a background check every 30 seconds revisit cleanup
-without retrying that assessment. Crash-interrupted work is retried once only after
-verified cleanup and renewed policy checks. An unknown cleanup outcome requires
-operator investigation even though execution has stopped.
+Post-execution cancellation requires verified cleanup. Otherwise the assessment
+fails with `cleanup_verified: false` and `cleanup_pending: true`.
+[Reconciliation](architecture.md#recovery) revisits cleanup without rerunning failed
+assessments; investigate unknown outcomes even after execution stops.
 
-Inspect affected resources using exact labels/names:
+Inspect exact labels/names and API logs:
 
 ```bash
 docker ps -a --filter label=seireth.assessment=ASSESSMENT_ID
@@ -58,8 +57,7 @@ docker network ls --filter label=seireth.assessment=ASSESSMENT_ID
 docker compose logs api
 ```
 
-Do not use global Docker prune on a shared daemon.
-
-Every attempt requires a journal. Missing or corrupt journals cannot certify
-cleanup or authorize a retry. Inspect the journal and daemon activity before
-resolving persistent uncertainty; do not clear flags just because resources are absent.
+Every attempt requires a journal. Missing/corrupt journals cannot certify cleanup
+or authorize retries. Inspect journal and daemon activity before resolving
+uncertainty; never clear flags merely because resources are absent, or use global
+Docker prune on a shared daemon.

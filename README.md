@@ -13,13 +13,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue" alt="Apache License 2.0"></a>
 </p>
 
-SEIRETH runs bounded security assessments against authorized containerized
-targets, records findings and audit events, and destroys the assessment
-environment afterward.
+SEIRETH runs authorized HTTP security checks against disposable containers,
+stores findings and audit events, and verifies sandbox cleanup. Docker assessments
+inspect a new instance of an approved image, not the original remote host.
 
-**MVP-0:** a working local API with one passive HTTP security-header plugin.
-It uses PostgreSQL 18, versioned Alembic migrations, and a process-local worker. It is not a multi-user production
-service or a general internet scanner.
+**MVP-0:** a local API with one passive security-header plugin and PostgreSQL 18
+persistence. It is not a multi-user production service or general internet scanner.
 
 ## How it works
 
@@ -31,33 +30,28 @@ flowchart LR
     D --> E[Record outcome]
 ```
 
-- **Bounded requests:** project, target, origin, path, and expiry checks.
-- **Operator-controlled images:** requests select only allowlisted target images.
-- **Disposable Docker resources:** a private network, restricted target, and runner.
-- **Queryable outcomes:** JSON findings, cleanup status, and an audit trail.
+Requests are bounded by project, target, origin, path, expiry, and an operator
+image allowlist. Docker provides a private network, restricted target, and runner;
+the API exposes JSON findings, cleanup status, and audit events.
 
 ## Getting started
 
-Follow [the setup guide](docs/getting-started.md) for Python 3.14, PostgreSQL,
-and native or Docker startup. The default in-memory backend simulates responses;
-real assessments require Docker and access to its privileged socket.
-
-After setup, `python -m app verify` exercises project registration, authorization,
-assessment execution, results, cleanup, and audit ordering. See [Assessments](docs/assessments.md)
-for API states and cancellation, and [Contributing](CONTRIBUTING.md) for development checks.
+Follow [Getting started](docs/getting-started.md) for Python 3.14 and PostgreSQL
+setup. The example configuration selects `inmemory`, which simulates responses.
+Real checks require Docker and API access to its privileged socket.
 
 ## Documentation
 
-| Guide | What it covers |
+| Guide | Purpose |
 | --- | --- |
-| [Getting started](docs/getting-started.md) | Setup, verification, and troubleshooting |
-| [Architecture](docs/architecture.md) | Current components and data flow |
-| [Configuration](docs/configuration.md) | Settings, defaults, and image policy |
-| [Assessments](docs/assessments.md) | Requests, polling, cancellation, and results |
-| [Security model](docs/security-model.md) | Isolation boundaries and limitations |
-| [Roadmap](docs/roadmap.md) | Implemented capabilities and future work |
+| [Getting started](docs/getting-started.md) | Run, verify, stop, and troubleshoot |
+| [Configuration](docs/configuration.md) | Required settings, defaults, and Compose overrides |
+| [Assessments](docs/assessments.md) | Submit requests and interpret results |
+| [Architecture](docs/architecture.md) | Understand execution, persistence, and recovery |
+| [Plugin development](docs/plugins.md) | Add approved checks |
+| [Security model](docs/security-model.md) | Understand boundaries and investigate cleanup |
+| [Roadmap](docs/roadmap.md) | Future priorities and directions |
+| [Contributing](CONTRIBUTING.md) | Develop, test, and change schemas |
 
-Use only targets you are authorized to assess. Report SEIRETH vulnerabilities
-through the process in [SECURITY.md](SECURITY.md).
-
+Use only authorized targets. Report vulnerabilities through [SECURITY.md](SECURITY.md).
 Licensed under [Apache 2.0](LICENSE).

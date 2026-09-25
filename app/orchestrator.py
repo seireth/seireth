@@ -4,9 +4,16 @@ import logging
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from pydantic import ValidationError
+
 from .config import settings
 from .execution import Cancelled, Interrupted
-from .plugins import PluginFinding, security_headers
+from .plugins.base import (
+    HttpObservation,
+    Plugin,
+    PluginResponse,
+    PluginResult,
+)
 from .sandbox import DockerSandbox, InMemorySandbox
 
 logger = logging.getLogger(__name__)
@@ -37,16 +44,30 @@ class Outcome:
     status: str = "completed"
     error: str | None = None
     cleanup_verified: bool = False
-    findings: list[PluginFinding] = field(default_factory=list)
+    plugin_results: list[PluginResult] = field(default_factory=list)
     cleanup_reason: str | None = None
 
 
-def execute(sandbox, url, context) -> Outcome:
+def execute(sandbox, url, context, plugins: list[Plugin]) -> Outcome:
     outcome = Outcome()
     try:
         context.check()
-        outcome.findings = security_headers(sandbox, url)
+        headers = sandbox.execute(url)
+        observation = HttpObservation(url=url, headers=headers)
         context.check()
+        for plugin in plugins:
+            try:
+                response = PluginResponse.model_validate(
+                    plugin.analyze(observation.model_copy(deep=True)), strict=True
+                )
+            except ValidationError as exc:
+                raise ValueError(
+                    f"plugin {plugin.manifest.id} returned an invalid response"
+                ) from exc
+            outcome.plugin_results.append(
+                PluginResult(plugin.manifest.id, response.findings)
+            )
+            context.check()
     except Cancelled:
         outcome.status, outcome.error = "cancelled", "assessment cancelled"
     except Interrupted:

@@ -52,7 +52,7 @@ def bounded_url(candidate: str, registered: str) -> bool:
     return base == "/" or path == base or path.startswith(base + "/")
 
 
-def validate(project, target, scope, profile: str, allowed_images: list[str]) -> None:
+def validate(project, target, scope, allowed_images: list[str]) -> None:
     if not project or project.owner_actor != ACTOR or not target or not scope:
         raise PolicyError("valid authorization scope required")
     if (
@@ -65,7 +65,5 @@ def validate(project, target, scope, profile: str, allowed_images: list[str]) ->
         scope.allowed_url, target.url
     ):
         raise PolicyError("authorization expired or outside registered target")
-    if profile != "passive":
-        raise PolicyError("MVP-0 only supports the passive profile")
     if target.image not in allowed_images:
         raise PolicyError("target image is not in the trusted image allowlist")

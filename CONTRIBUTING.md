@@ -1,84 +1,116 @@
-# Contributing to Seireth
+# Contributing to SEIRETH
 
-Thank you for helping improve Seireth.
-
-Please read the [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
-
-## Before contributing
-
-Read the [architecture](docs/architecture.md) and [security model](docs/security-model.md), especially the boundaries around authorization, isolation, cleanup, evidence, and auditability. Contributions must preserve the principle that assessments are authorized, scoped, and isolated.
+Read the [Code of Conduct](CODE_OF_CONDUCT.md), [architecture](docs/architecture.md),
+and [security model](docs/security-model.md). Preserve authorized, scoped,
+isolated assessments and their cleanup, evidence, and audit guarantees.
 
 ## Proposing changes
 
-For a substantial change, open an issue first to describe the problem, proposed approach, security implications, and affected components. Small documentation fixes may be submitted directly.
+Open an issue for substantial changes, describing the problem, approach, security
+implications, and affected components. Small documentation fixes can go directly
+to a PR. Keep changes focused; update docs for behavior, interfaces, security,
+and roadmap changes.
 
-Keep changes focused. Update related documentation when behavior, interfaces, security requirements, or the roadmap changes.
+Use synthetic targets/data. Never include credentials, private target information,
+production data, or undisclosed vulnerabilities in issues, commits, tests, or PRs.
+Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
-## Security-sensitive changes
+Changes affecting authorization, sandboxing/network restrictions, cleanup, secrets,
+authentication, project isolation, evidence, or audit events should include
+failure-path tests and explain how boundaries remain intact. Add tests for behavior
+changes, handle authorization/cleanup/audit failures explicitly, and never weaken
+secure defaults to pass checks. Keep generated files, databases, credentials,
+and build output out of commits.
 
-Do not include real credentials, private target information, production data, or undisclosed vulnerabilities in issues, commits, tests, or pull requests. Use synthetic targets and test data.
+## Development setup
 
-Changes affecting authorization, sandboxing, network restrictions, cleanup, secrets, authentication, project isolation, evidence, or audit events should include failure-path tests and explain how the security boundary is preserved. Report vulnerabilities privately as described in [`SECURITY.md`](SECURITY.md), rather than opening a public issue.
-
-## Development expectations
-
-Use Python 3.14 and an activated virtual environment. Install the development tools:
+Follow [setup](docs/getting-started.md), then install tools in the activated
+Python 3.14 environment. Use `python -m ...` for the same interpreter across platforms.
 
 ```bash
 python -m pip install -e ".[test,quality,security]"
-```
-
-Run the same fast checks as CI:
-
-```bash
-python -m pytest
 python -m ruff check .
 python -m ruff format --check .
 ```
 
-Tests set their own environment and create a disposable PostgreSQL database.
-Set `SEIRETH_TEST_ADMIN_URL` following [Getting started](docs/getting-started.md).
-Never use an operator or production database as the test database. For automatic import/lint fixes and formatting:
+For automatic import/lint fixes and formatting:
 
 ```bash
 python -m ruff check --fix .
 python -m ruff format .
 ```
 
-Audit your development environment's installed dependencies with:
+## Tests
+
+Tests set their own environment. Each database-backed test creates and drops only
+its uniquely named database. Explicitly configure `SEIRETH_TEST_ADMIN_URL` with
+create-database permissions on a local/disposable PostgreSQL server, never an
+operator/production database. Adjust these example credentials to your setup.
+
+```powershell
+# PowerShell
+$env:SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
+python -m app test
+```
+
+```bash
+# macOS / Linux
+export SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
+python -m app test
+```
+
+`python -m pytest` is equivalent. CI runs unit/API tests and the Ruff checks above.
+Windows defaults to a fresh `build/pytest-<unique-id>` per run to avoid shared-temp
+permission errors; `--basetemp` overrides it. Artifacts remain in ignored `build/`.
+Pure tests need no PostgreSQL:
+
+```bash
+python -m pytest tests/test_scope_urls.py tests/test_verify.py tests/test_docker_sandbox.py
+```
+
+For sandbox changes, run the [Docker walkthrough](docs/getting-started.md#real-docker-assessment),
+check that no assessment containers/networks remain, then run lifecycle tests.
+They require the built demo and pulled runner images; the demo's `/slow` path
+briefly delays responses for cancellation/crash-recovery tests.
+
+```powershell
+# PowerShell, with SEIRETH_TEST_ADMIN_URL already set
+$env:SEIRETH_DOCKER_TESTS='1'
+python -m pytest tests/test_api_process.py
+```
+
+```bash
+# macOS / Linux, with SEIRETH_TEST_ADMIN_URL already set
+SEIRETH_DOCKER_TESTS=1 python -m pytest tests/test_api_process.py
+```
+
+CI uses a disposable Docker daemon and uploads verification output and diagnostic logs.
+
+## Dependency audit
 
 ```bash
 python -m pip_audit --skip-editable
 ```
 
-The security workflow resolves runtime dependencies in a separate environment,
-excluding test and audit tools from its report. It runs on PRs, pushes to `main`,
-weekly, and on demand. Audit errors and known vulnerabilities fail the job.
+This audits installed development dependencies. The security workflow separately
+resolves runtime dependencies, excluding test/audit tools. It runs on PRs, pushes
+to `main`, weekly, and on demand; audit errors and known vulnerabilities fail it.
 
-For sandbox changes, run the [real Docker walkthrough](docs/getting-started.md)
-and check that no assessment containers or networks remain. CI runs this on a
-disposable Docker daemon and uploads verification output and diagnostic logs.
+## Schema changes
 
-Development expectations:
+Add a revision after the current Alembic head in `app/migrations/versions`:
 
-- Use the repository's configured formatter, linter, and test commands.
-- Run Python tools through the active environment (`python -m pytest` and
-  `python -m uvicorn ...`) so Windows and Unix setups use the same interpreter.
-- Add or update tests for behavior changes.
-- Keep error handling explicit; do not silently ignore failed authorization, cleanup, or audit operations.
-- Do not weaken secure defaults to make a test or local setup pass.
-- Keep generated files, local databases, credentials, and build output out of commits.
+```bash
+python -m alembic revision --autogenerate -m "describe schema change"
+```
+
+Review generated operations before applying them. Never edit deployed revisions,
+including `0001_initial_schema`. Run `python -m app migrate` before native API
+startup; the API neither checks revisions nor applies migrations. Docker startup
+uses the [migration-gated command](docs/getting-started.md#real-docker-assessment).
 
 ## Pull requests
 
-Schema changes add a new Alembic revision after `0001_initial_schema`; do not edit
-the baseline after deployment. Follow the [migration and reset guide](docs/getting-started.md#schema-changes).
-
-Pull requests should explain:
-
-- What changed and why
-- How the change was tested
-- Any security, compatibility, migration, or operational impact
-- Any documentation or follow-up work that remains
-
-By contributing, you agree that your contributions are provided under the repository's Apache License 2.0.
+Explain what changed and why, tests performed, security/compatibility/migration/
+operational impacts, and remaining documentation or follow-up work.
+Contributions are licensed under the repository's Apache License 2.0.

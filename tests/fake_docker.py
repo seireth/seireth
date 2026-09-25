@@ -11,6 +11,9 @@ class FakeDocker:
         self.calls = []
         self.create_hook = None
         self.available = True
+        self.headers = {}
+        self.kept = set()
+        self.remove_error = False
 
     def add(self, sandbox, kind):
         name = sandbox.resources[kind]
@@ -40,12 +43,14 @@ class FakeDocker:
         elif "inspect" in args:
             output = json.dumps([self.live[args[-1]]])
         elif args[0] == "rm" or args[:2] == ["network", "rm"]:
+            if self.remove_error:
+                return subprocess.CompletedProcess(args, 1, "", "removal failed")
             for name, resource in list(self.live.items()):
-                if resource["Id"] == args[-1]:
+                if resource["Id"] == args[-1] and name not in self.kept:
                     del self.live[name]
             output = args[-1]
         elif "--attach" in args:
-            output = "{}"
+            output = json.dumps(self.headers)
         else:
             output = args[-1]
         return subprocess.CompletedProcess(args, 0, output, "")

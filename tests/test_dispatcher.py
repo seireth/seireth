@@ -5,11 +5,13 @@ from threading import Event, Thread
 from time import monotonic, sleep
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
-from app import models
+from app import models, worker
 from app.config import settings
 from app.execution import ExecutionContext
+from app.plugins.base import Plugin, PluginManifest, PluginRegistry
+from app.plugins.security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 from app.sandbox import CleanupOutcome, InMemorySandbox, new_journal
 from app.worker import AssessmentDispatcher
 
@@ -40,7 +42,7 @@ def assessment(database):
             project_id=project.id,
             target_id=target.id,
             scope_id=scope.id,
-            profile="passive",
+            plugins=["security-headers"],
         )
         db.add(item)
         db.commit()
@@ -60,28 +62,17 @@ def test_execution_revalidates_policy(database, assessment, monkeypatch, change)
         if change == "expiry":
             scope.expires_at = models.now() - timedelta(seconds=1)
         elif change == "relationship":
-            scope.project_id = (
-                "mismatch"  # Test via the policy object instead of violating FK.
-            )
-            db.expunge(scope)
-            from app.policy import PolicyError, validate
-
-            with pytest.raises(PolicyError):
-                validate(
-                    db.get(models.Project, item.project_id),
-                    db.get(models.Target, item.target_id),
-                    scope,
-                    item.profile,
-                    settings.docker_allowed_target_images,
-                )
-            item.status = "cancelled"
+            other_project = models.Project(name="other")
+            db.add(other_project)
+            db.flush()
+            scope.project_id = other_project.id
         else:
             monkeypatch.setattr(settings, "docker_allowed_target_images", [])
         db.commit()
     called = []
     monkeypatch.setattr(InMemorySandbox, "execute", lambda *a: called.append(True))
     AssessmentDispatcher()._run(assessment, Event())
-    assert read(database, assessment).status in {"failed", "cancelled"}
+    assert read(database, assessment).status == "failed"
     assert not called
 
 
@@ -111,26 +102,18 @@ def test_running_visible_duplicate_claims_and_terminal_redispatch(
     assert read(database, assessment).status == "completed"
     with database.SessionLocal() as db:
         assert (
-            len(
-                list(
-                    db.scalars(
-                        select(models.Attempt).where(
-                            models.Attempt.assessment_id == assessment
-                        )
-                    )
-                )
+            db.scalar(
+                select(func.count())
+                .select_from(models.Attempt)
+                .where(models.Attempt.assessment_id == assessment)
             )
             == 1
         )
         assert (
-            len(
-                list(
-                    db.scalars(
-                        select(models.Finding).where(
-                            models.Finding.assessment_id == assessment
-                        )
-                    )
-                )
+            db.scalar(
+                select(func.count())
+                .select_from(models.Finding)
+                .where(models.Finding.assessment_id == assessment)
             )
             == 3
         )
@@ -253,16 +236,98 @@ def test_recovery_policy(database, assessment, monkeypatch, mode):
         dispatcher._run(assessment, Event())
         item = read(database, assessment)
         assert item.status == "completed"
+        assert item.plugins == ["security-headers"]
         assert item.result["attempt"] == 2
         assert item.result["finding_count"] == 3
+        assert item.result["plugins"] == [
+            {"id": "security-headers", "finding_count": 3}
+        ]
     if mode == "cleanup":
         assert read(database, assessment).cleanup_pending
         monkeypatch.setattr(
             InMemorySandbox, "cleanup", lambda self: CleanupOutcome(True)
         )
-        dispatcher.recover()
+        dispatcher.recover(include_failed_cleanup=True)
         assert not read(database, assessment).cleanup_pending
         assert read(database, assessment).status == "failed"
+
+
+def test_plugin_failure_persists_no_findings_after_verified_cleanup(
+    database, assessment, monkeypatch
+):
+    calls = []
+
+    def broken(observation):
+        calls.append(observation.url)
+        raise RuntimeError("synthetic plugin failure")
+
+    monkeypatch.setattr(
+        worker,
+        "plugin_registry",
+        PluginRegistry(
+            (
+                SECURITY_HEADERS_PLUGIN,
+                Plugin(
+                    PluginManifest(
+                        id="broken", name="Broken", description="Test failure"
+                    ),
+                    broken,
+                ),
+            ),
+        ),
+    )
+    with database.SessionLocal() as db:
+        db.get(models.Assessment, assessment).plugins = ["security-headers", "broken"]
+        db.commit()
+    AssessmentDispatcher()._run(assessment, Event())
+    assert len(calls) == 1
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, assessment)
+        assert item.status == "failed"
+        assert item.result["cleanup_verified"]
+        assert item.findings == []
+        assert (
+            db.scalar(
+                select(models.Evidence.id).where(
+                    models.Evidence.assessment_id == assessment
+                )
+            )
+            is None
+        )
+
+
+def test_running_dispatcher_recovers_transient_finalization_failure(
+    database, assessment, monkeypatch, wait_until
+):
+    original_finish = worker.finish
+    calls = 0
+
+    def fail_once(*args, **kwargs):
+        nonlocal calls
+        item = args[1]
+        if item.id != assessment:
+            return original_finish(*args, **kwargs)
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("synthetic finalization failure")
+        return original_finish(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "finish", fail_once)
+    monkeypatch.setattr(worker, "RECONCILE_INTERVAL_SECONDS", 0.02)
+    dispatcher = AssessmentDispatcher()
+    dispatcher.start()
+    try:
+        wait_until(
+            lambda: read(database, assessment).status,
+            lambda status: status == "completed",
+            description="assessment completion after finalization recovery",
+        )
+        item = read(database, assessment)
+        assert item.status == "completed"
+        assert item.result["attempt"] == 2
+        assert calls == 2
+    finally:
+        dispatcher.stop()
 
 
 def test_only_one_dispatcher_and_lock_loss_stops_work(database):
@@ -293,9 +358,6 @@ def test_recovery_does_not_requeue_after_ownership_loss(
     database, assessment, monkeypatch
 ):
     dispatcher = AssessmentDispatcher()
-    # Settle attempts left by the preceding ownership-loss test before injecting
-    # loss into this specific attempt's recovery.
-    dispatcher.recover()
     interrupted(database, assessment)
 
     def lose_ownership(self):
@@ -346,60 +408,50 @@ def pending_docker(database, assessment):
             )
         )
         db.commit()
-    yield sandbox
-    with database.SessionLocal() as db:
-        # These are synthetic daemon resources, so do not leave an artificial
-        # pending attempt for unrelated tests sharing the disposable database.
-        db.get(models.Assessment, assessment).cleanup_pending = False
-        db.commit()
+    return sandbox
 
 
 def test_pending_cleanup_survives_restart_and_resolves_once(
-    database, assessment, pending_docker, monkeypatch
+    database, assessment, pending_docker, fake_docker
 ):
-    from fake_docker import FakeDocker
-
-    daemon = FakeDocker()
-    daemon.install(monkeypatch)
     for _ in range(3):
-        AssessmentDispatcher().recover(failed_only=True)
+        AssessmentDispatcher().recover(include_failed_cleanup=True)
         item = read(database, assessment)
         assert item.status == "failed" and item.cleanup_pending
         assert "network" in item.result["cleanup_reason"]
-    daemon.add(pending_docker, "network")
+    fake_docker.add(pending_docker, "network")
     dispatcher = AssessmentDispatcher()
-    dispatcher.recover(failed_only=True)
-    dispatcher.recover(failed_only=True)
+    dispatcher.recover(include_failed_cleanup=True)
+    dispatcher.recover(include_failed_cleanup=True)
     item = read(database, assessment)
     assert item.status == "failed"
     assert not item.cleanup_pending and item.result["cleanup_verified"]
     assert item.result["cleanup_reason"] is None
     assert item.result["error"] == "original execution failure"
-    assert not daemon.live
+    assert not fake_docker.live
     with database.SessionLocal() as db:
-        events = list(
-            db.scalars(
-                select(models.AuditEvent).where(
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(models.AuditEvent)
+                .where(
                     models.AuditEvent.resource_id == assessment,
                     models.AuditEvent.action == "assessment.cleanup_verified",
                 )
             )
+            == 1
         )
-        assert len(events) == 1
         assert (
             db.get(models.Attempt, pending_docker.attempt_id).error
             == "original execution failure"
         )
 
 
-def test_recovery_fences_old_journal_writer(
-    database, assessment, pending_docker, monkeypatch
+def test_recovery_rejects_stale_journal_writes(
+    database, assessment, pending_docker, fake_docker
 ):
-    from fake_docker import FakeDocker
-
     from app.execution import Interrupted
 
-    FakeDocker().install(monkeypatch)
     dispatcher = AssessmentDispatcher()
     stale = dispatcher._journal_writer(
         assessment,
@@ -407,12 +459,14 @@ def test_recovery_fences_old_journal_writer(
         pending_docker.journal["owner"],
         recovery=True,
     )
-    dispatcher.recover(failed_only=True)
+    dispatcher.recover(include_failed_cleanup=True)
     with pytest.raises(Interrupted, match="no longer owns"):
         stale(pending_docker.journal)
 
 
-def test_advancing_checks_durable_cancellation(database, assessment, pending_docker):
+def test_journal_advancement_rejects_persisted_cancellation(
+    database, assessment, pending_docker
+):
     from app.execution import Cancelled
 
     with database.SessionLocal() as db:
@@ -430,37 +484,32 @@ def test_advancing_checks_durable_cancellation(database, assessment, pending_doc
         db.commit()
 
 
-def test_periodic_cleanup_skips_active_attempts(
-    database, assessment, pending_docker, monkeypatch
+def test_periodic_recovery_skips_owned_attempts_and_recovers_orphans(
+    database, assessment, pending_docker, fake_docker
 ):
-    from fake_docker import FakeDocker
-
-    daemon = FakeDocker()
-    daemon.install(monkeypatch)
     dispatcher = AssessmentDispatcher()
     dispatcher._events[assessment] = Event()
-    dispatcher.recover(failed_only=True)
-    assert not daemon.calls
+    dispatcher.recover(include_failed_cleanup=True)
+    assert not fake_docker.calls
     dispatcher._events.clear()
     with database.SessionLocal() as db:
         db.get(models.Assessment, assessment).status = "running"
         db.commit()
-    dispatcher.recover(failed_only=True)
-    assert not daemon.calls
+    dispatcher.recover(include_failed_cleanup=True)
+    assert fake_docker.calls
+    item = read(database, assessment)
+    assert item.status == "failed"
+    assert item.cleanup_pending
     with database.SessionLocal() as db:
         db.get(models.Assessment, assessment).status = "failed"
         db.commit()
 
 
 def test_background_cleanup_runs_without_blocking_new_assessments(
-    database, assessment, pending_docker, monkeypatch
+    database, assessment, pending_docker, monkeypatch, fake_docker, wait_until
 ):
-    from fake_docker import FakeDocker
-
     from app import worker
 
-    daemon = FakeDocker()
-    daemon.install(monkeypatch)
     monkeypatch.setattr(worker, "RECONCILE_INTERVAL_SECONDS", 0.02)
     dispatcher = AssessmentDispatcher()
     dispatcher.start()
@@ -472,35 +521,59 @@ def test_background_cleanup_runs_without_blocking_new_assessments(
                 project_id=old.project_id,
                 target_id=old.target_id,
                 scope_id=old.scope_id,
-                profile="passive",
+                plugins=["security-headers"],
             )
             db.add(new)
             db.commit()
             new_id = new.id
         dispatcher.submit(new_id)
-        deadline = monotonic() + 5
-        while read(database, new_id).status != "completed" and monotonic() < deadline:
-            sleep(0.01)
+        wait_until(
+            lambda: read(database, new_id).status,
+            lambda status: status == "completed",
+            description="new assessment completion during background cleanup",
+        )
         assert read(database, new_id).status == "completed"
         assert read(database, assessment).cleanup_pending
-        daemon.add(pending_docker, "network")
-        deadline = monotonic() + 5
-        while read(database, assessment).cleanup_pending and monotonic() < deadline:
-            sleep(0.01)
+        fake_docker.add(pending_docker, "network")
+        wait_until(
+            lambda: read(database, assessment).cleanup_pending,
+            lambda pending: not pending,
+            description="background cleanup verification",
+        )
         assert not read(database, assessment).cleanup_pending
     finally:
         dispatcher.stop()
     assert dispatcher._reconciler is None
 
 
-def test_cleanup_stops_on_owner_loss(database, assessment, pending_docker, monkeypatch):
-    from fake_docker import FakeDocker
+def test_failed_cleanup_runs_after_dispatcher_becomes_ready(
+    database, pending_docker, monkeypatch
+):
+    from app.sandbox import DockerSandbox
 
+    entered, release = Event(), Event()
+
+    def blocked_cleanup(self):
+        entered.set()
+        assert release.wait(5)
+        return CleanupOutcome(False, "daemon unavailable")
+
+    monkeypatch.setattr(DockerSandbox, "cleanup", blocked_cleanup)
+    dispatcher = AssessmentDispatcher()
+    dispatcher.start()
+    try:
+        assert dispatcher.ready
+        assert entered.wait(5)
+        assert dispatcher.ready
+    finally:
+        release.set()
+        dispatcher.stop()
+
+
+def test_cleanup_stops_on_owner_loss(database, assessment, pending_docker, fake_docker):
     from app.execution import Interrupted
 
-    daemon = FakeDocker()
-    daemon.install(monkeypatch)
-    daemon.add(pending_docker, "network")
+    fake_docker.add(pending_docker, "network")
     dispatcher = AssessmentDispatcher()
     dispatcher._lost.set()
     pending_docker.persist_journal = dispatcher._journal_writer(
@@ -510,6 +583,6 @@ def test_cleanup_stops_on_owner_loss(database, assessment, pending_docker, monke
         recovery=True,
     )
     assert not pending_docker.cleanup().verified
-    assert not daemon.calls
+    assert not fake_docker.calls
     with pytest.raises(Interrupted):
         pending_docker.persist_journal(pending_docker.journal)

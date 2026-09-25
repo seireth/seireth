@@ -6,7 +6,6 @@ import subprocess
 import sys
 from datetime import timedelta
 from pathlib import Path
-from time import monotonic, sleep
 
 import httpx
 import pytest
@@ -24,16 +23,6 @@ def docker(*args):
     return subprocess.check_output(["docker", *args], text=True, timeout=20).strip()
 
 
-def wait_until(check, seconds=30):
-    deadline = monotonic() + seconds
-    while monotonic() < deadline:
-        value = check()
-        if value:
-            return value
-        sleep(0.05)
-    raise AssertionError("Timed out waiting for Docker lifecycle")
-
-
 @pytest.mark.parametrize(
     "backend,action",
     [
@@ -42,7 +31,7 @@ def wait_until(check, seconds=30):
         pytest.param("docker", "crash", marks=docker_only),
     ],
 )
-def test_real_api_lifecycle(database, tmp_path, backend, action):
+def test_real_api_lifecycle(database, tmp_path, backend, action, wait_until):
     # Reserve an ephemeral local port, then launch a separate actual API process.
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -84,7 +73,7 @@ def test_real_api_lifecycle(database, tmp_path, backend, action):
             except httpx.TransportError:
                 return False
 
-        wait_until(ready)
+        wait_until(ready, description="API readiness", timeout=30, interval=0.05)
         return process
 
     aid = None
@@ -128,15 +117,20 @@ def test_real_api_lifecycle(database, tmp_path, backend, action):
                     "project_id": project["id"],
                     "target_id": target["id"],
                     "scope_id": scope["id"],
+                    "plugins": ["security-headers"],
                 },
             )
             aid = assessment["id"]
+            assert assessment["plugins"] == ["security-headers"]
             selector = f"label=seireth.assessment={aid}"
             wait_until(
                 lambda: (
                     "seireth-assessment-runner-"
                     in docker("ps", "--filter", selector, "--format", "{{.Names}}")
-                )
+                ),
+                description="Docker runner startup",
+                timeout=30,
+                interval=0.05,
             )
             if action == "crash":
                 process.kill()
@@ -147,20 +141,25 @@ def test_real_api_lifecycle(database, tmp_path, backend, action):
                 assert response.status_code == 202
                 assert response.json()["status"] == "cancelling"
 
-            def terminal():
-                report = client.get(f"/api/v1/assessments/{aid}/results").json()
-                return (
-                    report
-                    if report["status"] in {"completed", "cancelled", "failed"}
-                    else None
-                )
-
-            report = wait_until(terminal, 60)
+            report = wait_until(
+                lambda: client.get(f"/api/v1/assessments/{aid}/results").json(),
+                lambda report: report["status"] in {"completed", "cancelled", "failed"},
+                description="Docker assessment completion",
+                timeout=60,
+                interval=0.05,
+            )
             assert report["status"] == (
                 "completed" if action == "crash" else "cancelled"
             ), report
             assert report["result"]["cleanup_verified"]
             assert report["result"]["attempt"] == (2 if action == "crash" else 1)
+            assert client.get(f"/api/v1/assessments/{aid}").json()["plugins"] == [
+                "security-headers"
+            ]
+            if action == "crash":
+                assert report["result"]["plugins"] == [
+                    {"id": "security-headers", "finding_count": 3}
+                ]
             assert len(report["findings"]) == (3 if action == "crash" else 0)
             assert not docker(
                 "ps", "-a", "--filter", selector, "--format", "{{.Names}}"

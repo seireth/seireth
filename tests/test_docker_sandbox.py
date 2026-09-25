@@ -1,37 +1,43 @@
-"""Docker command failure paths without a daemon."""
+"""Docker execution, creation journals, and cleanup without a daemon."""
 
 import json
 import subprocess
 import sys
+from copy import deepcopy
 from threading import Event
 from time import monotonic
 
 import pytest
 
 from app.execution import Cancelled, ExecutionContext
+from app.orchestrator import execute
+from app.plugins import registry
 from app.sandbox import _FETCH, DockerSandbox, new_journal
 
 
 @pytest.fixture
-def sandbox():
-    return DockerSandbox(
-        "demo:local",
-        runner_image="python:3.14-slim",
-        target_host="demo-target",
-        operation_journal=new_journal(),
-    )
+def make_sandbox():
+    def make(journal, persist=None):
+        return DockerSandbox(
+            "demo:local",
+            runner_image="python:3.14-slim",
+            target_host="demo-target",
+            operation_journal=journal,
+            persist_journal=persist,
+        )
+
+    return make
 
 
-def test_restricted_owned_commands(sandbox, monkeypatch):
-    calls = []
+@pytest.fixture
+def sandbox(make_sandbox):
+    return make_sandbox(new_journal())
 
-    def run(args, timeout, **kwargs):
-        calls.append(args)
-        output = json.dumps({"X-Test": "ok"}) if "--attach" in args else "a" * 64
-        return subprocess.CompletedProcess(args, 0, output, "")
 
-    monkeypatch.setattr(sandbox, "_run", run)
+def test_restricted_owned_commands(sandbox, fake_docker):
+    fake_docker.headers = {"X-Test": "ok"}
     assert sandbox.execute("http://demo-target:8080") == {"X-Test": "ok"}
+    calls = fake_docker.calls
     assert "--internal" in calls[0]
     for args in (call for call in calls if call[0] == "create"):
         for flag in [
@@ -46,68 +52,27 @@ def test_restricted_owned_commands(sandbox, monkeypatch):
         assert "--rm" not in args
 
 
-def test_daemon_failure_never_means_cleanup_success(sandbox, monkeypatch):
-    monkeypatch.setattr(
-        sandbox,
-        "_run",
-        lambda args, *a, **k: subprocess.CompletedProcess(
-            args, 1, "", "daemon unavailable"
-        ),
-    )
+def test_daemon_failure_never_means_cleanup_success(sandbox, fake_docker):
+    fake_docker.available = False
     assert not sandbox.cleanup().verified
 
 
 @pytest.mark.parametrize(
     "failure", [None, "runner", "target", "network", "ownership", "remove-error"]
 )
-def test_cleanup_checks_each_resource(sandbox, monkeypatch, failure):
-    present = set(sandbox.resources.values())
-    identities = {
-        name: f"{index:064x}"
-        for index, name in enumerate(sandbox.resources.values(), 1)
-    }
-    removed = []
-
-    def run(args, *a, **kwargs):
-        output = ""
-        if args[:2] == ["network", "ls"] or args[0] == "ps":
-            output = "\n".join(present)
-        elif "inspect" in args:
-            labels = sandbox.labels if failure != "ownership" else {}
-            output = json.dumps(
-                [
-                    {
-                        "Id": identities[args[-1]],
-                        "Labels": labels,
-                        "Config": {"Labels": labels},
-                    }
-                ]
-            )
-        else:
-            name = next(
-                name for name, identity in identities.items() if identity == args[-1]
-            )
-            removed.append(name)
-            if failure == "remove-error":
-                return subprocess.CompletedProcess(args, 1, "", "failed")
-            if name != sandbox.resources.get(failure):
-                present.discard(name)
-        return subprocess.CompletedProcess(args, 0, output, "")
-
-    monkeypatch.setattr(sandbox, "_run", run)
-    assert sandbox.cleanup().verified is (failure is None)
+def test_cleanup_checks_each_resource(sandbox, failure, fake_docker):
+    identities = {fake_docker.add(sandbox, kind) for kind in sandbox.resources}
     if failure == "ownership":
-        assert not removed
-    else:
-        assert set(removed) == set(sandbox.resources.values())
+        for record in fake_docker.live.values():
+            record["Labels"] = record["Config"]["Labels"] = {}
+    fake_docker.kept = {sandbox.resources.get(failure)}
+    fake_docker.remove_error = failure == "remove-error"
+    assert sandbox.cleanup().verified is (failure is None)
+    removed = {call[-1] for call in fake_docker.calls if "rm" in call}
+    assert removed == (set() if failure == "ownership" else identities)
 
 
-def test_cleanup_of_absent_resources_is_idempotent(sandbox, monkeypatch):
-    monkeypatch.setattr(
-        sandbox,
-        "_run",
-        lambda args, *a, **k: subprocess.CompletedProcess(args, 0, "", ""),
-    )
+def test_cleanup_of_absent_resources_is_idempotent(sandbox, fake_docker):
     assert sandbox.cleanup().verified
     assert sandbox.cleanup().verified
 
@@ -133,31 +98,22 @@ def test_real_subprocess_is_killed_on_interruption(sandbox, monkeypatch, reason)
     assert processes[0].poll() is not None
 
 
-def test_network_created_before_cli_timeout_is_reconciled(sandbox, monkeypatch):
-    from app.orchestrator import execute
+def test_network_created_before_cli_timeout_is_reconciled(sandbox, fake_docker):
+    def timeout_after_creation(sandbox, kind):
+        fake_docker.add(sandbox, kind)
+        raise TimeoutError("client timed out after daemon created network")
 
-    live = set()
-
-    def run(args, *a, **kwargs):
-        output = ""
-        if args[:2] == ["network", "create"]:
-            live.add(sandbox.resources["network"])
-            raise TimeoutError("client timed out after daemon created network")
-        if args[:2] == ["network", "ls"]:
-            output = "\n".join(live)
-        elif args[:2] == ["network", "inspect"]:
-            output = json.dumps([{"Id": "a" * 64, "Labels": sandbox.labels}])
-        elif args[:2] == ["network", "rm"]:
-            assert args[-1] == "a" * 64
-            live.discard(sandbox.resources["network"])
-        return subprocess.CompletedProcess(args, 0, output, "")
-
-    monkeypatch.setattr(sandbox, "_run", run)
+    fake_docker.create_hook = timeout_after_creation
     context = ExecutionContext(Event(), Event(), monotonic() + 5)
-    outcome = execute(sandbox, "http://demo-target:8080", context)
+    outcome = execute(
+        sandbox,
+        "http://demo-target:8080",
+        context,
+        registry.select(["security-headers"]),
+    )
     assert outcome.status == "failed"
     assert outcome.cleanup_verified
-    assert not live
+    assert not fake_docker.live
 
 
 def test_runner_does_not_follow_redirects():
@@ -200,3 +156,112 @@ def test_runner_does_not_follow_redirects():
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def context():
+    return ExecutionContext(Event(), Event(), monotonic() + 5)
+
+
+def test_late_creation_is_not_certified_absent(fake_docker, make_sandbox):
+    persisted = []
+    sandbox = make_sandbox(
+        new_journal(), lambda journal, advancing: persisted.append(deepcopy(journal))
+    )
+
+    def timeout(sandbox, kind):
+        assert persisted[-1]["resources"][kind]["state"] == "uncertain"
+        raise TimeoutError("daemon still creating")
+
+    fake_docker.create_hook = timeout
+    outcome = execute(
+        sandbox,
+        "http://demo-target:8080",
+        context(),
+        registry.select(["security-headers"]),
+    )
+    assert outcome.status == "failed"
+    assert outcome.error == "assessment deadline exceeded"
+    assert not outcome.cleanup_verified
+    assert "network: creation outcome unknown" in outcome.cleanup_reason
+    for _ in range(3):
+        assert not sandbox.cleanup().verified
+    assert (
+        len([call for call in fake_docker.calls if call[:2] == ["network", "create"]])
+        == 1
+    )
+    fake_docker.add(sandbox, "network")
+    assert sandbox.cleanup().verified
+    assert not fake_docker.live
+    assert persisted[-1]["resources"]["network"]["state"] == "removed"
+
+
+@pytest.mark.parametrize(
+    "boundary", ["before_intent", "after_intent", "after_creation"]
+)
+def test_cleanup_requires_proven_resource_state_after_crash(
+    boundary, fake_docker, make_sandbox
+):
+    stored = new_journal()
+
+    def persist(journal, advancing):
+        nonlocal stored
+        state = journal["resources"]["network"]["state"]
+        if boundary == "before_intent" and state == "uncertain":
+            raise OSError("journal commit failed")
+        if boundary == "after_creation" and state == "created":
+            raise OSError("journal commit failed after Docker replied")
+        stored = deepcopy(journal)
+
+    sandbox = make_sandbox(stored, persist)
+    if boundary == "after_intent":
+        fake_docker.create_hook = lambda *args: (_ for _ in ()).throw(
+            TimeoutError("crash before request reached daemon")
+        )
+    with pytest.raises((OSError, TimeoutError)):
+        sandbox.execute("http://demo-target:8080")
+    recovered = DockerSandbox(
+        "demo:local",
+        runner_image="python:3.14-slim",
+        resources=sandbox.resources,
+        assessment_id=sandbox.assessment_id,
+        attempt_id=sandbox.attempt_id,
+        operation_journal=stored,
+    )
+    assert recovered.cleanup().verified is (boundary != "after_intent")
+    if boundary == "before_intent":
+        assert not any("create" in call for call in fake_docker.calls)
+    assert not fake_docker.live
+
+
+@pytest.mark.parametrize(
+    "journal", [None, {}, {"version": 1, "owner": "invalid", "resources": {}}]
+)
+def test_invalid_journal_is_rejected(journal, make_sandbox):
+    with pytest.raises(ValueError, match="invalid operation journal"):
+        make_sandbox(journal)
+
+
+def test_persist_observed_id_before_removing_late_resource(fake_docker, make_sandbox):
+    journal = new_journal()
+    journal["resources"]["network"]["state"] = "uncertain"
+    sandbox = make_sandbox(journal)
+    fake_docker.add(sandbox, "network")
+
+    def cannot_persist(journal, advancing):
+        if journal["resources"]["network"]["state"] == "created":
+            raise OSError("database unavailable")
+
+    sandbox.persist_journal = cannot_persist
+    assert not sandbox.cleanup().verified
+    assert sandbox.resources["network"] in fake_docker.live
+    assert not any("rm" in call for call in fake_docker.calls)
+
+
+def test_known_identity_cannot_be_replaced(fake_docker, make_sandbox):
+    sandbox = make_sandbox(new_journal())
+    sandbox.journal["resources"]["network"] = {"state": "created", "id": "a" * 64}
+    fake_docker.add(sandbox, "network")
+    cleanup = sandbox.cleanup()
+    assert not cleanup.verified
+    assert "identity mismatch" in cleanup.reason
+    assert fake_docker.live

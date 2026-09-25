@@ -5,6 +5,8 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .constraints import TargetImage
+
 
 class Settings(BaseSettings):
     """Runtime settings for the API and persistence layer."""
@@ -17,8 +19,8 @@ class Settings(BaseSettings):
     assessment_timeout_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
 
     docker_runner_image: str = "python:3.14-slim"
-    docker_target_image: str
-    docker_allowed_target_images: list[str]
+    docker_target_image: TargetImage
+    docker_allowed_target_images: list[TargetImage]
 
     docker_memory: str = "256m"
     docker_cpus: float = 0.5
