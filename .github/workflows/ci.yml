@@ -67,7 +67,9 @@ jobs:
       - name: Start PostgreSQL
         run: docker compose up --wait --wait-timeout 60 postgres
       # conftest creates and drops a uniquely named PostgreSQL database.
-      - run: python -m pytest --basetemp artifacts/pytest
+      - run: |
+          mkdir -p artifacts
+          python -m pytest --basetemp artifacts/pytest
       - name: PostgreSQL diagnostics
         if: failure()
         run: docker compose logs --no-color postgres
