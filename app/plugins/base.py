@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     JsonValue,
     ValidationError,
+    field_validator,
 )
 
 from ..constraints import (
@@ -51,6 +52,13 @@ class PluginFinding(ContractModel):
     description: str = Field(min_length=1)
     remediation: str = Field(min_length=1)
     evidence: dict[str, JsonValue]
+
+    @field_validator("description", "remediation")
+    @classmethod
+    def require_nonblank_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("finding text must not be blank")
+        return value
 
 
 class PluginResponse(ContractModel):
