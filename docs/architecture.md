@@ -1,57 +1,51 @@
 # Architecture
 
-SEIRETH is one Python 3.14 FastAPI application with PostgreSQL 18, synchronous
-SQLAlchemy/Psycopg, and a two-thread process-local dispatcher. No Redis, separate
-worker service, frontend, or Go service is required.
+SEIRETH is one Python 3.14 FastAPI application with synchronous SQLAlchemy/Psycopg,
+PostgreSQL 18, and a two-thread process-local dispatcher. Redis, separate workers,
+a frontend, and Go services are not dependencies.
 
-## Startup and persistence
+## Persistence and ownership
 
-Alembic revision files create and evolve the schema. Run `python -m app migrate`
-explicitly for native startup. `python -m app docker-up` stops any existing API,
-waits for PostgreSQL, runs migrations with `docker compose run --rm`, then starts
-the API only on success and waits for its healthcheck. Both services use the same
-application image. The fresh `0001_initial_schema` revision defines the complete schema;
-subsequent changes add revisions. Every attempt requires an operation journal.
-The API does not check migration revisions or run DDL. One PostgreSQL advisory lock
-guards the dispatcher for the application lifetime; a second API process refuses to start. Ownership loss interrupts work.
+PostgreSQL is authoritative; executor threads and events are transient, not a
+distributed queue. Queued work survives restart. A lifetime PostgreSQL advisory
+lock permits one dispatcher per database; a second API refuses startup, and
+ownership loss interrupts work.
 
-## Execution
+Alembic owns schema changes: `0001_initial_schema` is the baseline;
+`0002_plugin_selection` adds selection and remediation. The API neither runs DDL
+nor checks migration revisions. Follow [startup](getting-started.md) and
+[schema-change instructions](../CONTRIBUTING.md#schema-changes).
 
-1. Admission validates project ownership, target, scope, profile, and image policy.
-2. The API persists `queued` and its audit event, then submits the assessment ID.
-3. The worker locks the assessment row, rechecks policy, creates a durable attempt
-   with resource names and an operation journal, and commits `running` before
-   issuing Docker commands. Each resource's creation intent is committed before
-   its command, and its ID before advancing to container startup. Containers are
-   created separately from startup and removed explicitly by cleanup.
-4. The orchestrator fetches response headers once and passes them to the selected
-   built-in plugins in request order. Orchestration owns cleanup. Plugin IDs and
-   descriptions live in `app/plugins/` and are listed through the API.
-5. Findings remain buffered until successful execution and verified cleanup.
-6. Finalization locks the assessment and commits results, findings, evidence,
-   attempt outcome, and terminal audit event together.
+## Execution and transactions
 
-Policy rules live in `app/policy.py`; state transitions and finalization live in
-`app/lifecycle.py`. The remaining API, database, worker, plugin, sandbox, and
-verification modules keep their existing responsibilities.
+1. Admission validates ownership, target, scope, plugins, and image policy;
+   commits `queued` with its audit event; then submits the assessment ID.
+2. The worker locks the assessment, rechecks policy, and commits `running` with
+   a durable attempt, resource names, and operation journal before Docker commands.
+   Creation intent precedes each command; resource IDs are committed before
+   container startup. Creation, startup, and cleanup removal are separate operations.
+3. The immutable registry resolves plugins in request order. The orchestrator
+   fetches headers once, passes each plugin an independent typed observation,
+   and owns cleanup. Findings remain buffered until execution and cleanup succeed.
+4. Finalization locks the assessment and atomically commits results, findings,
+   evidence, attempt outcome, and terminal audit event.
+
+`app/policy.py` owns authorization rules; `app/lifecycle.py` owns transitions and
+finalization. [Plugin manifests](plugins.md) produce the API catalog.
 
 ## Recovery
 
-Resource names and assessment/attempt ownership labels survive process failure.
-Startup reconciles interrupted attempts before retrying once (two attempts total).
-Only crash/shutdown interruptions qualify. Cancellation, deadline expiry, policy
-rejection, and plugin errors are not retried automatically. Every retry requires
-verified cleanup and current authorization. Failed cleanup remains recorded and
-is revisited at startup and every 30 seconds by a separate reconciliation thread,
-without re-executing the failed assessment or blocking other assessments.
+Persisted names and assessment/attempt labels survive crashes. Startup reconciles
+interrupted attempts before allowing one retry (two attempts total), requiring
+verified cleanup and current authorization. Only crash/shutdown interruptions
+qualify; cancellation, deadlines, policy rejection, and plugin errors do not.
+Normal shutdown interrupts work and performs bounded cleanup.
 
-Journal ownership tokens fence stale workers after recovery takes over. Journal
-writes use short row-locked transactions; Docker commands run outside those
-transactions. Cleanup verifies ownership and records observed IDs before removal.
-An absent resource with uncertain creation remains pending indefinitely. An
-identified, removed resource can be marked verified; time alone is not evidence.
+A separate reconciliation thread revisits failed cleanup immediately after startup
+and every 30 seconds without re-executing failed assessments or blocking readiness
+or unrelated work. It also recovers orphaned nonterminal work.
 
-The API is deliberately single-process. PostgreSQL stores authoritative state;
-the thread pool and events are transient execution mechanisms, not a distributed
-queue. Queued work survives restart. Normal shutdown interrupts active work and
-performs bounded cleanup; a later startup may retry the interrupted attempt.
+Journal ownership tokens fence stale workers. Journal writes use short row-locked
+transactions; Docker commands run outside them. See the
+[cleanup guarantees](security-model.md#cleanup-and-failure) for resource ownership,
+uncertain creation, and verification requirements.
