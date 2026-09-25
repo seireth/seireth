@@ -13,10 +13,11 @@ from sqlalchemy import select, text
 from . import db as database
 from . import models
 from .config import settings
+from .constraints import MAX_ASSESSMENT_ATTEMPTS
 from .execution import Cancelled, ExecutionContext, Interrupted
 from .lifecycle import audit, finish, transition
 from .orchestrator import Outcome, execute, sandbox_for
-from .plugins import select_plugins
+from .plugins import registry as plugin_registry
 from .policy import PolicyError, validate
 from .sandbox import new_journal, validate_journal
 
@@ -143,14 +144,13 @@ class AssessmentDispatcher:
             project,
             target,
             scope,
-            assessment.profile,
             settings.docker_allowed_target_images,
         )
         try:
-            select_plugins(assessment.plugins, assessment.profile)
+            plugins = plugin_registry.select(assessment.plugins)
         except ValueError as exc:
             raise PolicyError(str(exc)) from exc
-        return target, scope
+        return target, scope, plugins
 
     def _assert_owner(self, db):
         if self._lost.is_set():
@@ -200,13 +200,15 @@ class AssessmentDispatcher:
         return persist
 
     def _watch_cleanup(self):
-        while not self._shutdown.wait(RECONCILE_INTERVAL_SECONDS):
+        while not self._shutdown.is_set():
             if self._lost.is_set():
                 return
             try:
-                self.recover(failed_only=True)
+                self.recover(include_failed_cleanup=True)
             except Exception:
-                logger.exception("pending cleanup reconciliation failed")
+                logger.exception("background assessment reconciliation failed")
+            if self._shutdown.wait(RECONCILE_INTERVAL_SECONDS):
+                return
 
     def _run(self, assessment_id, cancel_event):
         try:
@@ -217,10 +219,10 @@ class AssessmentDispatcher:
                 if not item or item.status != "queued":
                     return
                 try:
-                    target, scope = self._policy(db, item)
+                    target, scope, plugins = self._policy(db, item)
                     previous = latest_attempt(db, item.id)
                     number = previous.number + 1 if previous else 1
-                    if number > 2:
+                    if number > MAX_ASSESSMENT_ATTEMPTS:
                         raise PolicyError("crash recovery retry limit reached")
                 except PolicyError as exc:
                     item.result = {
@@ -266,12 +268,8 @@ class AssessmentDispatcher:
                 item.cleanup_pending = True
                 transition(db, item, "running", {"attempt": number})
                 db.commit()
-                attempt_id, url, plugin_ids = (
-                    attempt.id,
-                    scope.allowed_url,
-                    list(item.plugins),
-                )
-            outcome = execute(sandbox, url, context, plugin_ids)
+                attempt_id, url = attempt.id, scope.allowed_url
+            outcome = execute(sandbox, url, context, plugins)
             if self._lost.is_set():
                 return  # A new owner must reconcile; never overwrite its decisions.
             # The cancellation row lock serializes cancellation against completion.
@@ -303,30 +301,22 @@ class AssessmentDispatcher:
             with self._lock:
                 self._events.pop(assessment_id, None)
 
-    def recover(self, *, failed_only=False):
-        # Never reconcile active workers in the periodic pass. Startup recovery
-        # runs before the API accepts requests and before queued work is submitted.
+    def recover(self, *, include_failed_cleanup=False):
+        """Serialize startup recovery and optional failed-cleanup reconciliation."""
         with self._reconcile_lock:
-            self._recover(failed_only=failed_only)
+            self._recover(include_failed_cleanup=include_failed_cleanup)
 
-    def _recover(self, *, failed_only=False):
-        with database.SessionLocal() as db:
-            ids = list(
-                db.scalars(
-                    select(models.Assessment.id)
-                    .where(
-                        (
-                            models.Assessment.status.in_(
-                                ["running", "recovering", "cancelling"]
-                            )
-                        )
-                        | models.Assessment.cleanup_pending
-                    )
-                    .where(
-                        models.Assessment.status == "failed" if failed_only else True
-                    )
-                )
+    def _recover(self, *, include_failed_cleanup):
+        recoverable = models.Assessment.status.in_(
+            ["running", "recovering", "cancelling"]
+        )
+        if include_failed_cleanup:
+            recoverable = recoverable | (
+                (models.Assessment.status == "failed")
+                & models.Assessment.cleanup_pending.is_(True)
             )
+        with database.SessionLocal() as db:
+            ids = list(db.scalars(select(models.Assessment.id).where(recoverable)))
         for assessment_id in ids:
             if self._shutdown.is_set():
                 return
@@ -421,7 +411,7 @@ class AssessmentDispatcher:
                 else:
                     try:
                         self._policy(db, item)
-                        if attempt.number >= 2:
+                        if attempt.number >= MAX_ASSESSMENT_ATTEMPTS:
                             raise PolicyError("crash recovery retry limit reached")
                     except PolicyError as exc:
                         finish(db, item, attempt, Outcome("failed", str(exc), True))
@@ -432,8 +422,6 @@ class AssessmentDispatcher:
                             db, item, "queued", {"retry_after_attempt": attempt.number}
                         )
                 db.commit()
-        if failed_only:
-            return
         with database.SessionLocal() as db:
             queued = list(
                 db.scalars(

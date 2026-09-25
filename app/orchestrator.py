@@ -4,9 +4,16 @@ import logging
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from pydantic import ValidationError
+
 from .config import settings
 from .execution import Cancelled, Interrupted
-from .plugins import PluginResult, select_plugins
+from .plugins.base import (
+    HttpObservation,
+    Plugin,
+    PluginResponse,
+    PluginResult,
+)
 from .sandbox import DockerSandbox, InMemorySandbox
 
 logger = logging.getLogger(__name__)
@@ -41,16 +48,24 @@ class Outcome:
     cleanup_reason: str | None = None
 
 
-def execute(sandbox, url, context, plugin_ids: list[str]) -> Outcome:
+def execute(sandbox, url, context, plugins: list[Plugin]) -> Outcome:
     outcome = Outcome()
     try:
         context.check()
-        plugins = select_plugins(plugin_ids, "passive")
         headers = sandbox.execute(url)
+        observation = HttpObservation(url=url, headers=headers)
         context.check()
         for plugin in plugins:
+            try:
+                response = PluginResponse.model_validate(
+                    plugin.analyze(observation.model_copy(deep=True)), strict=True
+                )
+            except ValidationError as exc:
+                raise ValueError(
+                    f"plugin {plugin.manifest.id} returned an invalid response"
+                ) from exc
             outcome.plugin_results.append(
-                PluginResult(plugin.id, plugin.run(headers, url))
+                PluginResult(plugin.manifest.id, response.findings)
             )
             context.check()
     except Cancelled:
