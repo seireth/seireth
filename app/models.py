@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from enum import StrEnum
-from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
@@ -15,6 +14,15 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from .constraints import (
+    FINDING_SEVERITY_MAX_LENGTH,
+    FINDING_TITLE_MAX_LENGTH,
+    MAX_ASSESSMENT_ATTEMPTS,
+    NAME_MAX_LENGTH,
+    PLUGIN_ID_MAX_LENGTH,
+    STORED_URL_MAX_LENGTH,
+    TARGET_IMAGE_MAX_LENGTH,
+)
 from .db import Base
 
 
@@ -40,10 +48,7 @@ class Project(Base):
     """A project groups targets, authorization, and assessment activity."""
 
     __tablename__ = "projects"
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    name: Mapped[str] = mapped_column(String(200))
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH))
     owner_actor: Mapped[str] = mapped_column(
         String(200), default="local-development", index=True
     )
@@ -54,51 +59,41 @@ class Target(Base):
     """An authorized software target that may be assessed."""
 
     __tablename__ = "targets"
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
-    name: Mapped[str] = mapped_column(String(200))
-    image: Mapped[str] = mapped_column(String(300))
-    url: Mapped[str] = mapped_column(String(500))
+    project_id: Mapped[str] = mapped_column(ForeignKey(Project.id), index=True)
+    name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH))
+    image: Mapped[str] = mapped_column(String(TARGET_IMAGE_MAX_LENGTH))
+    url: Mapped[str] = mapped_column(String(STORED_URL_MAX_LENGTH))
 
 
 class AuthorizationScope(Base):
     """A time-bounded URL scope authorizing testing of a target."""
 
     __tablename__ = "authorization_scopes"
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
-    target_id: Mapped[str] = mapped_column(ForeignKey("targets.id"))
-    allowed_url: Mapped[str] = mapped_column(String(500))
+    project_id: Mapped[str] = mapped_column(ForeignKey(Project.id), index=True)
+    target_id: Mapped[str] = mapped_column(ForeignKey(Target.id))
+    allowed_url: Mapped[str] = mapped_column(String(STORED_URL_MAX_LENGTH))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class Assessment(Base):
-    """A single execution of a selected assessment profile."""
+    """A single execution of selected assessment plugins."""
 
     __tablename__ = "assessments"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('queued', 'running', 'cancelling', 'recovering', 'completed', 'failed', 'cancelled')",
+            "status IN ("
+            + ", ".join(f"'{status.value}'" for status in AssessmentStatus)
+            + ")",
             name="assessment_status_valid",
         ),
     )
     cleanup_pending: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
-    target_id: Mapped[str] = mapped_column(ForeignKey("targets.id"))
-    scope_id: Mapped[str] = mapped_column(ForeignKey("authorization_scopes.id"))
-    profile: Mapped[str] = mapped_column(String(50))
-    plugins: Mapped[list[str]] = mapped_column(
-        JSON, default=lambda: ["security-headers"]
-    )
+    project_id: Mapped[str] = mapped_column(ForeignKey(Project.id), index=True)
+    target_id: Mapped[str] = mapped_column(ForeignKey(Target.id))
+    scope_id: Mapped[str] = mapped_column(ForeignKey(AuthorizationScope.id))
+    plugins: Mapped[list[str]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(30), default=AssessmentStatus.queued)
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -109,13 +104,10 @@ class Finding(Base):
     """A normalized security finding produced by an assessment."""
 
     __tablename__ = "findings"
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id"), index=True)
-    plugin: Mapped[str] = mapped_column(String(100))
-    title: Mapped[str] = mapped_column(String(300))
-    severity: Mapped[str] = mapped_column(String(30))
+    assessment_id: Mapped[str] = mapped_column(ForeignKey(Assessment.id), index=True)
+    plugin: Mapped[str] = mapped_column(String(PLUGIN_ID_MAX_LENGTH))
+    title: Mapped[str] = mapped_column(String(FINDING_TITLE_MAX_LENGTH))
+    severity: Mapped[str] = mapped_column(String(FINDING_SEVERITY_MAX_LENGTH))
     description: Mapped[str] = mapped_column(Text)
     remediation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -124,10 +116,7 @@ class Evidence(Base):
     """Evidence captured while validating an assessment finding."""
 
     __tablename__ = "evidence"
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id"), index=True)
+    assessment_id: Mapped[str] = mapped_column(ForeignKey(Assessment.id), index=True)
     kind: Mapped[str] = mapped_column(String(100))
     data: Mapped[dict] = mapped_column(JSON)
 
@@ -136,9 +125,6 @@ class AuditEvent(Base):
     """Append-oriented record of a security-sensitive platform action."""
 
     __tablename__ = "audit_events"
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
     project_id: Mapped[str] = mapped_column(String(36), index=True)
     action: Mapped[str] = mapped_column(String(100))
     resource_id: Mapped[str] = mapped_column(String(36))
@@ -152,12 +138,12 @@ class Attempt(Base):
     __tablename__ = "attempts"
     __table_args__ = (
         UniqueConstraint("assessment_id", "number", name="attempt_number_unique"),
-        CheckConstraint("number BETWEEN 1 AND 2", name="attempt_number_bounded"),
+        CheckConstraint(
+            f"number BETWEEN 1 AND {MAX_ASSESSMENT_ATTEMPTS}",
+            name="attempt_number_bounded",
+        ),
     )
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    assessment_id: Mapped[str] = mapped_column(ForeignKey("assessments.id"), index=True)
+    assessment_id: Mapped[str] = mapped_column(ForeignKey(Assessment.id), index=True)
     number: Mapped[int] = mapped_column(Integer)
     backend: Mapped[str] = mapped_column(String(20))
     resources: Mapped[dict] = mapped_column(JSON)
