@@ -9,7 +9,7 @@ updates:
       - dependencies
       - github_actions
   # Python dependencies in pyproject.toml
-  - package-ecosystem: pip
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
