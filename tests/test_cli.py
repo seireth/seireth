@@ -151,3 +151,45 @@ def test_docker_up_socket_probe_failure_stops_before_services(
     assert _docker_up(120) == 1
     assert len(calls) == 1
     assert "docker-up failed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "stage,verbs",
+    [
+        ("build", ["build"]),
+        ("stop API", ["build", "stop"]),
+        ("start PostgreSQL", ["build", "stop", "up"]),
+    ],
+)
+def test_docker_up_stage_failure_prevents_following_commands(
+    monkeypatch, capsys, socket_group, stage, verbs
+):
+    from app.__main__ import main
+
+    calls = []
+
+    def compose(command, **kwargs):
+        calls.append(command)
+        return 17 if len(calls) == len(verbs) else 0
+
+    monkeypatch.setattr(sys, "argv", ["app", "docker-up"])
+    monkeypatch.setattr(subprocess, "call", compose)
+    assert main() == 17
+    assert [command[2] for command in calls] == verbs
+    if stage == "start PostgreSQL":
+        assert calls[-1][-1] == "postgres"
+    assert stage in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("status", [0, 17])
+def test_test_command_forwards_arguments_and_exit_status(monkeypatch, status):
+    from app.__main__ import main
+
+    calls = []
+    arguments = ["-k", "schema", "--maxfail=1"]
+    monkeypatch.setattr(sys, "argv", ["app", "test", *arguments])
+    monkeypatch.setattr(
+        subprocess, "call", lambda command: calls.append(command) or status
+    )
+    assert main() == status
+    assert calls == [[sys.executable, "-m", "pytest", *arguments]]

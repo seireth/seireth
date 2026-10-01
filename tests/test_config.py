@@ -16,19 +16,20 @@ from app.config import Settings
 )
 def test_verification_uses_connectable_address(host, expected):
     assert (
-        Settings(api_host=host, api_port=9000).api_base_url == f"http://{expected}:9000"
+        Settings(_env_file=None, api_host=host, api_port=9000).api_base_url
+        == f"http://{expected}:9000"
     )
 
 
 @pytest.mark.parametrize("port", [-1, 0, 65536, 70000])
 def test_invalid_api_port_is_rejected(port):
     with pytest.raises(ValidationError):
-        Settings(api_port=port)
+        Settings(_env_file=None, api_port=port)
 
 
 def test_runner_image_uses_environment_override(monkeypatch):
     monkeypatch.setenv("SEIRETH_DOCKER_RUNNER_IMAGE", "python:custom")
-    assert Settings().docker_runner_image == "python:custom"
+    assert Settings(_env_file=None).docker_runner_image == "python:custom"
 
 
 @pytest.mark.parametrize(
@@ -50,3 +51,27 @@ def test_target_image_settings_respect_storage_limit(monkeypatch, field, length)
         assert getattr(settings, field) == (
             ["demo:local", image] if field.endswith("images") else image
         )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("database_url", "sqlite:///test.db"),
+        ("database_url", "postgresql://user:pass@localhost/test"),
+        ("sandbox_backend", "unknown"),
+    ],
+)
+def test_unsupported_runtime_configuration_is_rejected(field, value):
+    with pytest.raises(ValidationError) as error:
+        Settings(_env_file=None, **{field: value})
+    assert error.value.errors()[0]["loc"] == (field,)
+
+
+@pytest.mark.parametrize(
+    "field", ["assessment_timeout_seconds", "docker_timeout_seconds"]
+)
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
+def test_execution_timeouts_must_be_finite_and_positive(field, value):
+    with pytest.raises(ValidationError) as error:
+        Settings(_env_file=None, **{field: value})
+    assert error.value.errors()[0]["loc"] == (field,)

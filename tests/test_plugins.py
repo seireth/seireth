@@ -81,6 +81,9 @@ def test_registry_is_ordered_validated_and_catalog_backed(make_plugin):
     local = PluginRegistry((SECURITY_HEADERS_PLUGIN, second))
     assert [item["id"] for item in local.catalog()] == ["security-headers", "second"]
     assert [plugin.manifest.id for plugin in local.select(["second"])] == ["second"]
+    assert [
+        plugin.manifest.id for plugin in local.select(["second", "security-headers"])
+    ] == ["second", "security-headers"]
     assert [plugin.manifest.id for plugin in registry.select(["security-headers"])] == [
         "security-headers"
     ]
@@ -126,4 +129,10 @@ def test_registry_revalidates_manifests_at_construction():
     plugin = Plugin(bypassed_manifest, lambda observation: PluginResponse(findings=()))
 
     with pytest.raises(ValueError, match="invalid manifest"):
+        PluginRegistry((plugin,))
+
+
+def test_registry_rejects_noncallable_analyzer():
+    plugin = Plugin(SECURITY_HEADERS_PLUGIN.manifest, None)
+    with pytest.raises(ValueError, match="must satisfy the plugin contract"):
         PluginRegistry((plugin,))

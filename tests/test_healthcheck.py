@@ -1,18 +1,16 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
-import pytest
-
 from app.healthcheck import healthy
 
 
-@pytest.mark.parametrize("statuses", [[503, 503, 200], [503, 503, 503], [500], [204]])
-def test_health_probe_requires_http_200(statuses):
+def test_health_probe_requires_http_200_and_rejects_exited_api():
     current = [503]
+    paths = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            assert self.path == "/health"
+            paths.append(self.path)
             self.send_response(current[0])
             self.end_headers()
 
@@ -24,13 +22,15 @@ def test_health_probe_requires_http_200(statuses):
     thread.start()
     url = f"http://127.0.0.1:{server.server_port}/health"
     try:
-        for status in statuses:
+        for status in (200, 503, 500, 204):
             current[0] = status
             assert healthy(url) is (status == 200)
     finally:
         server.shutdown()
         server.server_close()
         thread.join()
+    assert paths == ["/health"] * 4
+    assert not thread.is_alive()
     assert not healthy(url)  # An exited API cannot be healthy.
 
 

@@ -46,7 +46,7 @@ class Settings(BaseSettings):
 
         host = self.api_host.strip("[]")
         host = {"0.0.0.0": "127.0.0.1", "::": "::1"}.get(host, host)
-        if ":" in host and not host.startswith("["):
+        if ":" in host:
             host = f"[{host}]"
         return f"http://{host}:{self.api_port}"
 

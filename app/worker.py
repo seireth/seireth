@@ -169,8 +169,7 @@ class AssessmentDispatcher:
             with database.SessionLocal() as db:
                 item = db.get(models.Assessment, assessment_id, with_for_update=True)
                 self._assert_owner(db)
-                attempt = db.get(models.Attempt, attempt_id)
-                latest = latest_attempt(db, assessment_id)
+                attempt = latest_attempt(db, assessment_id)
                 allowed = (
                     {"recovering", "cancelling", "failed"}
                     if recovery
@@ -179,8 +178,7 @@ class AssessmentDispatcher:
                 if (
                     not item
                     or not attempt
-                    or not latest
-                    or latest.id != attempt_id
+                    or attempt.id != attempt_id
                     or item.status not in allowed
                     or not attempt.operation_journal
                     or attempt.operation_journal["owner"] != token
@@ -275,15 +273,14 @@ class AssessmentDispatcher:
             # The cancellation row lock serializes cancellation against completion.
             with database.SessionLocal() as db:
                 item = db.get(models.Assessment, assessment_id, with_for_update=True)
-                latest = latest_attempt(db, assessment_id)
+                attempt = latest_attempt(db, assessment_id)
                 if (
                     self._lost.is_set()
                     or item.status not in {"running", "cancelling"}
-                    or not latest
-                    or latest.id != attempt_id
+                    or not attempt
+                    or attempt.id != attempt_id
                 ):
                     return
-                attempt = db.get(models.Attempt, attempt_id)
                 self._assert_owner(db)
                 if (
                     hasattr(sandbox, "journal")

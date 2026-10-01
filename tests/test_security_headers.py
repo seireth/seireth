@@ -84,3 +84,25 @@ def test_every_finding_has_actionable_remediation():
     findings = response({}).findings
     assert len(findings) == 3
     assert all(finding.remediation for finding in findings)
+    assert {finding.evidence["header"] for finding in findings} == {
+        "x-content-type-options",
+        "content-security-policy",
+        "x-frame-options",
+    }
+    assert all(
+        finding.evidence == {"url": URL, "header": finding.evidence["header"]}
+        for finding in findings
+    )
+
+
+def test_protected_response_with_mixed_case_header_names_has_no_findings():
+    assert (
+        response(
+            {
+                "x-CoNtEnT-tYpE-oPtIoNs": "NoSniff",
+                "CONTENT-security-POLICY": "default-src 'self'",
+                "x-FRAME-options": "DENY",
+            }
+        ).findings
+        == ()
+    )

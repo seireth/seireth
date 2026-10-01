@@ -15,12 +15,17 @@ Use synthetic targets/data. Never include credentials, private target informatio
 production data, or undisclosed vulnerabilities in issues, commits, tests, or PRs.
 Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
-Changes affecting authorization, sandboxing/network restrictions, cleanup, secrets,
-authentication, project isolation, evidence, or audit events should include
-failure-path tests and explain how boundaries remain intact. Add tests for behavior
-changes, handle authorization/cleanup/audit failures explicitly, and never weaken
-secure defaults to pass checks. Keep databases, credentials, and build output out
-of commits. Commit the generated dependency lock alongside its manifest.
+Add tests for behavior changes. Keep databases, credentials, and build output out
+of commits; commit the generated dependency lock alongside its manifest.
+
+## Security-sensitive changes
+
+Changes to authorization, scope, sandboxing, networking, cleanup, secrets,
+runtime access, authentication, project or tenant isolation, evidence, reports,
+audit integrity, or dependency, image and plugin execution must include
+failure-path tests and explain how boundaries remain intact. Fail closed when
+security prerequisites cannot be verified; handle failures explicitly and never
+weaken secure defaults to pass checks.
 
 ## Development setup
 
@@ -66,8 +71,13 @@ permission errors; `--basetemp` overrides it. Artifacts remain in ignored `build
 Pure tests need no PostgreSQL:
 
 ```bash
-python -m pytest tests/test_policy.py tests/test_verify.py tests/test_docker_sandbox.py
+python -m pytest -m "not database and not docker"
 ```
+
+The `database` marker covers tests using the disposable database fixture and direct
+database checks. `python -m pytest -m database` selects them; missing
+`SEIRETH_TEST_ADMIN_URL` is an error. The `docker` marker identifies real Docker
+cases; it does not enable them. Set `SEIRETH_DOCKER_TESTS=1` as shown below.
 
 For sandbox changes, run the [Docker walkthrough](docs/getting-started.md#real-docker-assessment),
 check that no assessment containers/networks remain, then run lifecycle tests.
@@ -77,12 +87,12 @@ briefly delays responses for cancellation/crash-recovery tests.
 ```powershell
 # PowerShell, with SEIRETH_TEST_ADMIN_URL already set
 $env:SEIRETH_DOCKER_TESTS='1'
-python -m pytest tests/test_api_lifecycle.py
+python -m pytest -m docker tests/test_api_process_lifecycle.py
 ```
 
 ```bash
 # macOS / Linux, with SEIRETH_TEST_ADMIN_URL already set
-SEIRETH_DOCKER_TESTS=1 python -m pytest tests/test_api_lifecycle.py
+SEIRETH_DOCKER_TESTS=1 python -m pytest -m docker tests/test_api_process_lifecycle.py
 ```
 
 CI uses a disposable Docker daemon and uploads verification output and diagnostic logs.
@@ -93,10 +103,9 @@ CI uses a disposable Docker daemon and uploads verification output and diagnosti
 python -m pip_audit --skip-editable
 ```
 
-This audits installed development dependencies. The security workflow separately
-exports runtime dependencies from `uv.lock`, excluding test/audit tools. It runs
-on PRs, pushes to `main`, weekly, and on demand; audit errors and known
-vulnerabilities fail it.
+This audits installed development dependencies. The [security workflow](.github/workflows/security.yml)
+audits locked runtime dependencies, excluding test/audit tools, and fails on audit
+errors or known vulnerabilities.
 
 ## Updating dependencies
 
@@ -111,14 +120,12 @@ sync can remove development tools. Direct Python commands do not synchronize.
 After changing dependency declarations, run `uv lock`. For deliberate upgrades,
 run `uv lock --upgrade-package PACKAGE` (or `uv lock --upgrade` for a full refresh),
 then `uv sync --locked --all-extras`, checks, and the dependency audit. Commit the
-manifest and lock together. Dependabot checks Python dependencies, Actions,
-Dockerfiles, and the Compose PostgreSQL image weekly. Python minor/major and
-PostgreSQL major upgrades are planned separately; local Compose images are excluded.
-Dependabot supplies its standard dependency and ecosystem labels automatically.
+manifest and lock together. [Dependabot configuration](.github/dependabot.yml)
+defines update schedules and exclusions; Python minor/major and PostgreSQL major
+upgrades are planned separately.
 
 Keep the exact uv version in the project configuration, both workflows, Dockerfile,
-and setup instructions aligned when upgrading uv. No exported requirements file
-is committed: the security workflow creates its runtime-only export temporarily.
+and setup instructions aligned when upgrading uv.
 
 ## Schema changes
 

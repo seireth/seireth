@@ -2,7 +2,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from app import models
 from app.api import app
 from app.config import settings
 
@@ -70,7 +72,7 @@ def test_scope_is_required(client, project, target):
 
 
 def test_passive_assessment_returns_json_and_cleanup(
-    client, project, assessment_payload, wait_until
+    client, project, assessment_payload, wait_until, database
 ):
     result = client.post(
         "/api/v1/assessments",
@@ -93,11 +95,49 @@ def test_passive_assessment_returns_json_and_cleanup(
         {"id": "security-headers", "finding_count": 3}
     ]
     assert report["result"]["finding_count"] == 3
-    assert report["findings"]
+    assert len(report["findings"]) == report["result"]["finding_count"] == 3
     assert all(
         finding["plugin"] == "security-headers" for finding in report["findings"]
     )
     assert all(finding["remediation"] for finding in report["findings"])
+    with database.SessionLocal() as db:
+        findings = list(
+            db.scalars(
+                select(models.Finding).where(
+                    models.Finding.assessment_id == report["assessment_id"]
+                )
+            )
+        )
+        evidence = list(
+            db.scalars(
+                select(models.Evidence).where(
+                    models.Evidence.assessment_id == report["assessment_id"]
+                )
+            )
+        )
+        assert len(findings) == len(evidence) == 3
+        assert {finding.id for finding in findings} == {
+            finding["id"] for finding in report["findings"]
+        }
+        for stored in findings:
+            returned = next(
+                item for item in report["findings"] if item["id"] == stored.id
+            )
+            fields = ("plugin", "title", "severity", "description", "remediation")
+            assert {field: getattr(stored, field) for field in fields} == {
+                field: returned[field] for field in fields
+            }
+        assert {item.kind for item in evidence} == {"http-response"}
+        assert {item.data["header"] for item in evidence} == {
+            "x-content-type-options",
+            "content-security-policy",
+            "x-frame-options",
+        }
+        assert all(
+            item.data
+            == {"header": item.data["header"], "url": "http://demo-target:8080/"}
+            for item in evidence
+        )
     assessment = (client.get(result.headers["location"])).json()
     assert assessment["status"] == "completed"
     assert assessment["cleanup_pending"] is False
@@ -218,13 +258,9 @@ def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monke
     from app.api import dispatcher
 
     catalog = (client.get("/api/v1/plugins")).json()
-    assert catalog == [
-        {
-            "id": "security-headers",
-            "name": "HTTP security headers",
-            "description": "Check three browser security headers on the target response.",
-        }
-    ]
+    assert [item["id"] for item in catalog] == ["security-headers"]
+    assert all(set(item) == {"id", "name", "description"} for item in catalog)
+    assert all(item["name"].strip() and item["description"].strip() for item in catalog)
     monkeypatch.setattr(dispatcher, "submit", lambda assessment_id: None)
     response = client.post(
         "/api/v1/assessments",
@@ -277,3 +313,188 @@ def test_scope_cannot_escape_target_origin_or_path(client, scope_payload, allowe
         json={**scope_payload, "allowed_url": allowed_url},
     )
     assert response.status_code == 400
+
+
+@pytest.fixture
+def dispatch_calls(client, monkeypatch):
+    from app.api import dispatcher
+
+    calls = {"submit": [], "cancel": []}
+    for method, recorded in calls.items():
+        monkeypatch.setattr(dispatcher, method, recorded.append)
+    return calls
+
+
+def snapshot(database):
+    with database.engine.connect() as connection:
+        return {
+            table.name: [
+                dict(row)
+                for row in connection.execute(
+                    select(table).order_by(table.c.id)
+                ).mappings()
+            ]
+            for table in database.Base.metadata.sorted_tables
+        }
+
+
+def submission(graph):
+    return {
+        "project_id": graph.project.id,
+        "target_id": graph.target.id,
+        "scope_id": graph.scope.id,
+        "plugins": ["security-headers"],
+    }
+
+
+@pytest.mark.parametrize(
+    "operation", ["target", "scope", "assessment", "read", "results", "cancel", "audit"]
+)
+def test_foreign_project_access_is_denied_without_side_effects(
+    client, database, assessment_graph, dispatch_calls, operation
+):
+    graph = assessment_graph(owner="other-actor", status="completed")
+    aid, pid = graph.assessment.id, graph.project.id
+    requests = {
+        "target": ("post", "/api/v1/targets", {"project_id": pid, "name": "foreign"}),
+        "scope": (
+            "post",
+            "/api/v1/authorization-scopes",
+            {
+                "project_id": pid,
+                "target_id": graph.target.id,
+                "allowed_url": graph.target.url,
+                "expires_at": graph.scope.expires_at.isoformat(),
+            },
+        ),
+        "assessment": ("post", "/api/v1/assessments", submission(graph)),
+        "read": ("get", f"/api/v1/assessments/{aid}", None),
+        "results": ("get", f"/api/v1/assessments/{aid}/results", None),
+        "cancel": ("post", f"/api/v1/assessments/{aid}/cancel", None),
+        "audit": ("get", f"/api/v1/projects/{pid}/audit-events", None),
+    }
+    before = snapshot(database)
+    method, path, payload = requests[operation]
+    response = client.request(method, path, json=payload)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "project access denied"
+    assert snapshot(database) == before
+    assert dispatch_calls == {"submit": [], "cancel": []}
+
+
+@pytest.mark.parametrize("field", ["project_id", "target_id", "scope_id"])
+def test_assessment_rejects_cross_project_identifiers(
+    client, database, assessment_graph, dispatch_calls, field
+):
+    first, second = assessment_graph(), assessment_graph()
+    payload = submission(first)
+    payload[field] = submission(second)[field]
+    before = snapshot(database)
+    response = client.post("/api/v1/assessments", json=payload)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "valid authorization scope required"
+    assert snapshot(database) == before
+    assert dispatch_calls == {"submit": [], "cancel": []}
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_scope_rejects_missing_or_cross_project_target(
+    client, database, assessment_graph, dispatch_calls, missing
+):
+    first, second = assessment_graph(), assessment_graph()
+    before = snapshot(database)
+    response = client.post(
+        "/api/v1/authorization-scopes",
+        json={
+            "project_id": first.project.id,
+            "target_id": "missing" if missing else second.target.id,
+            "allowed_url": first.target.url,
+            "expires_at": first.scope.expires_at.isoformat(),
+        },
+    )
+    assert response.status_code == 400
+    assert snapshot(database) == before
+    assert dispatch_calls == {"submit": [], "cancel": []}
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("get", "/api/v1/assessments/missing"),
+        ("get", "/api/v1/assessments/missing/results"),
+        ("post", "/api/v1/assessments/missing/cancel"),
+        ("get", "/api/v1/projects/missing/audit-events"),
+        ("post", "/api/v1/targets"),
+        ("post", "/api/v1/authorization-scopes"),
+        ("post", "/api/v1/assessments"),
+    ],
+)
+def test_missing_resources_return_404_without_side_effects(
+    client, database, dispatch_calls, method, path
+):
+    payload = (
+        {
+            "project_id": "missing",
+            "target_id": "missing",
+            "allowed_url": "http://demo-target:8080/",
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+        if "authorization-scopes" in path
+        else {"project_id": "missing", "name": "missing"}
+    )
+    if path == "/api/v1/assessments":
+        payload = {
+            "project_id": "missing",
+            "target_id": "missing",
+            "scope_id": "missing",
+            "plugins": ["security-headers"],
+        }
+    before = snapshot(database)
+    response = client.request(method, path, json=payload if method == "post" else None)
+    assert response.status_code == 404
+    assert snapshot(database) == before
+    assert dispatch_calls == {"submit": [], "cancel": []}
+
+
+def test_health_returns_503_when_dispatcher_unavailable(client, monkeypatch):
+    from app.api import dispatcher
+
+    monkeypatch.setattr(dispatcher, "_executor", None)
+    response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "assessment dispatcher unavailable"
+
+
+def test_repeated_active_cancellation_is_idempotent(
+    client, database, assessment_graph, dispatch_calls
+):
+    graph = assessment_graph(status="running")
+    path = f"/api/v1/assessments/{graph.assessment.id}/cancel"
+    for _ in range(2):
+        response = client.post(path)
+        assert response.status_code == 202
+        assert response.json()["status"] == "cancelling"
+    with database.SessionLocal() as db:
+        events = list(
+            db.scalars(
+                select(models.AuditEvent).where(
+                    models.AuditEvent.resource_id == graph.assessment.id
+                )
+            )
+        )
+        assert [event.action for event in events] == ["assessment.cancelling"]
+        assert db.get(models.Assessment, graph.assessment.id).status == "cancelling"
+    assert dispatch_calls == {"submit": [], "cancel": [graph.assessment.id] * 2}
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
+def test_terminal_assessments_cannot_be_cancelled(
+    client, database, assessment_graph, dispatch_calls, status
+):
+    graph = assessment_graph(status=status)
+    before = snapshot(database)
+    response = client.post(f"/api/v1/assessments/{graph.assessment.id}/cancel")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "assessment is no longer cancellable"
+    assert snapshot(database) == before
+    assert dispatch_calls == {"submit": [], "cancel": []}

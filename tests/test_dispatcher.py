@@ -1,15 +1,16 @@
 """Regression tests through the real PostgreSQL-backed dispatcher."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from threading import Event, Thread
 from time import monotonic, sleep
+from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 
-from app import models, worker
+from app import execution, models, policy, worker
 from app.config import settings
-from app.execution import ExecutionContext
+from app.execution import ExecutionContext, Interrupted
 from app.plugins.base import Plugin, PluginManifest, PluginRegistry
 from app.plugins.security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 from app.sandbox import CleanupOutcome, InMemorySandbox, new_journal
@@ -17,36 +18,24 @@ from app.worker import AssessmentDispatcher
 
 
 @pytest.fixture
-def assessment(database):
-    with database.SessionLocal() as db:
-        project = models.Project(name="lifecycle")
-        db.add(project)
-        db.flush()
-        target = models.Target(
-            project_id=project.id,
-            name="demo",
-            image=settings.docker_target_image,
-            url="http://demo-target:8080/",
-        )
-        db.add(target)
-        db.flush()
-        scope = models.AuthorizationScope(
-            project_id=project.id,
-            target_id=target.id,
-            allowed_url=target.url,
-            expires_at=models.now() + timedelta(minutes=5),
-        )
-        db.add(scope)
-        db.flush()
-        item = models.Assessment(
-            project_id=project.id,
-            target_id=target.id,
-            scope_id=scope.id,
-            plugins=["security-headers"],
-        )
-        db.add(item)
-        db.commit()
-        return item.id
+def assessment(assessment_graph):
+    return assessment_graph().assessment.id
+
+
+@pytest.fixture
+def execution_clock(monkeypatch):
+    clock = SimpleNamespace(wall=models.now(), elapsed=0.0)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock.wall.astimezone(tz) if tz else clock.wall.replace(tzinfo=None)
+
+    monkeypatch.setattr(worker, "datetime", FixedDatetime)
+    monkeypatch.setattr(policy, "datetime", FixedDatetime)
+    monkeypatch.setattr(worker, "monotonic", lambda: clock.elapsed)
+    monkeypatch.setattr(execution, "monotonic", lambda: clock.elapsed)
+    return clock
 
 
 def read(database, assessment):
@@ -98,6 +87,7 @@ def test_running_visible_duplicate_claims_and_terminal_redispatch(
     finally:
         release.set()
         thread.join(5)
+        assert not thread.is_alive()
     dispatcher._run(assessment, Event())
     assert read(database, assessment).status == "completed"
     with database.SessionLocal() as db:
@@ -120,7 +110,9 @@ def test_running_visible_duplicate_claims_and_terminal_redispatch(
 
 
 @pytest.mark.parametrize("reason", ["cancel", "timeout", "expiry", "shutdown"])
-def test_active_execution_stops_and_cleans(database, assessment, monkeypatch, reason):
+def test_active_execution_stops_and_cleans(
+    database, assessment, monkeypatch, reason, execution_clock
+):
     entered, cleaned = Event(), Event()
 
     def blocking(self, *args):
@@ -134,12 +126,12 @@ def test_active_execution_stops_and_cleans(database, assessment, monkeypatch, re
         InMemorySandbox, "cleanup", lambda self: cleaned.set() or CleanupOutcome(True)
     )
     if reason == "timeout":
-        monkeypatch.setattr(settings, "assessment_timeout_seconds", 0.1)
+        monkeypatch.setattr(settings, "assessment_timeout_seconds", 30)
     if reason == "expiry":
         with database.SessionLocal() as db:
             item = db.get(models.Assessment, assessment)
             db.get(models.AuthorizationScope, item.scope_id).expires_at = (
-                models.now() + timedelta(seconds=0.2)
+                execution_clock.wall + timedelta(seconds=30)
             )
             db.commit()
     dispatcher, cancel = AssessmentDispatcher(), Event()
@@ -154,6 +146,8 @@ def test_active_execution_stops_and_cleans(database, assessment, monkeypatch, re
             cancel.set()
         elif reason == "shutdown":
             dispatcher._shutdown.set()
+        else:
+            execution_clock.elapsed = 31
         thread.join(5)
         assert not thread.is_alive()
         assert cleaned.is_set()
@@ -168,9 +162,19 @@ def test_active_execution_stops_and_cleans(database, assessment, monkeypatch, re
             }[reason]
         )
         assert item.result["cleanup_verified"]
+        assert (
+            item.result["error"]
+            == {
+                "cancel": "assessment cancelled",
+                "shutdown": "execution interrupted",
+                "timeout": "assessment deadline exceeded",
+                "expiry": "assessment deadline exceeded",
+            }[reason]
+        )
     finally:
         cancel.set()
         thread.join(5)
+        assert not thread.is_alive()
 
 
 def interrupted(database, assessment, number=1, status="running"):
@@ -205,51 +209,73 @@ def test_corrupt_journal_cannot_authorize_cleanup_or_retry(database, assessment)
     assert item.result["cleanup_reason"] == "invalid operation journal"
 
 
-@pytest.mark.parametrize("mode", ["retry", "limit", "cancel", "expired", "cleanup"])
-def test_recovery_policy(database, assessment, monkeypatch, mode):
-    interrupted(
-        database,
-        assessment,
-        2 if mode == "limit" else 1,
-        "cancelling" if mode == "cancel" else "running",
-    )
-    if mode == "expired":
-        with database.SessionLocal() as db:
-            item = db.get(models.Assessment, assessment)
-            db.get(models.AuthorizationScope, item.scope_id).expires_at = (
-                models.now() - timedelta(seconds=1)
-            )
-            db.commit()
-    if mode == "cleanup":
-        monkeypatch.setattr(
-            InMemorySandbox,
-            "cleanup",
-            lambda self: CleanupOutcome(False, "daemon unavailable"),
-        )
+def test_recovery_retries_after_verified_cleanup(database, assessment):
+    interrupted(database, assessment)
     dispatcher = AssessmentDispatcher()
     dispatcher.recover()
-    expected = (
-        "queued" if mode == "retry" else "cancelled" if mode == "cancel" else "failed"
-    )
-    assert read(database, assessment).status == expected
-    if mode == "retry":
-        dispatcher._run(assessment, Event())
-        item = read(database, assessment)
-        assert item.status == "completed"
-        assert item.plugins == ["security-headers"]
-        assert item.result["attempt"] == 2
-        assert item.result["finding_count"] == 3
-        assert item.result["plugins"] == [
-            {"id": "security-headers", "finding_count": 3}
-        ]
-    if mode == "cleanup":
-        assert read(database, assessment).cleanup_pending
-        monkeypatch.setattr(
-            InMemorySandbox, "cleanup", lambda self: CleanupOutcome(True)
+    queued = read(database, assessment)
+    assert queued.status == "queued"
+    assert not queued.cleanup_pending and queued.result is None
+    dispatcher._run(assessment, Event())
+    item = read(database, assessment)
+    assert item.status == "completed"
+    assert item.plugins == ["security-headers"]
+    assert item.result["attempt"] == 2
+    assert item.result["finding_count"] == 3
+    assert item.result["plugins"] == [{"id": "security-headers", "finding_count": 3}]
+
+
+def test_recovery_enforces_retry_limit(database, assessment):
+    interrupted(database, assessment, number=2)
+    AssessmentDispatcher().recover()
+    item = read(database, assessment)
+    assert item.status == "failed" and not item.cleanup_pending
+    assert item.result["error"] == "crash recovery retry limit reached"
+    assert item.result["cleanup_verified"]
+
+
+def test_recovery_preserves_cancellation(database, assessment):
+    interrupted(database, assessment, status="cancelling")
+    AssessmentDispatcher().recover()
+    item = read(database, assessment)
+    assert item.status == "cancelled" and not item.cleanup_pending
+    assert item.result["error"] == "assessment cancelled"
+    assert item.result["cleanup_verified"]
+
+
+def test_recovery_rejects_expired_authorization(database, assessment):
+    interrupted(database, assessment)
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, assessment)
+        db.get(models.AuthorizationScope, item.scope_id).expires_at = (
+            models.now() - timedelta(seconds=1)
         )
-        dispatcher.recover(include_failed_cleanup=True)
-        assert not read(database, assessment).cleanup_pending
-        assert read(database, assessment).status == "failed"
+        db.commit()
+    AssessmentDispatcher().recover()
+    item = read(database, assessment)
+    assert item.status == "failed" and not item.cleanup_pending
+    assert item.result["error"] == "authorization expired or outside registered target"
+    assert item.result["cleanup_verified"]
+
+
+def test_recovery_keeps_unverified_cleanup_pending(database, assessment, monkeypatch):
+    interrupted(database, assessment)
+    monkeypatch.setattr(
+        InMemorySandbox,
+        "cleanup",
+        lambda self: CleanupOutcome(False, "daemon unavailable"),
+    )
+    dispatcher = AssessmentDispatcher()
+    dispatcher.recover()
+    item = read(database, assessment)
+    assert item.status == "failed" and item.cleanup_pending
+    assert item.result["error"] == "sandbox cleanup could not be verified"
+    assert item.result["cleanup_reason"] == "daemon unavailable"
+    monkeypatch.setattr(InMemorySandbox, "cleanup", lambda self: CleanupOutcome(True))
+    dispatcher.recover(include_failed_cleanup=True)
+    item = read(database, assessment)
+    assert item.status == "failed" and not item.cleanup_pending
+    assert item.result["cleanup_verified"] and item.result["cleanup_reason"] is None
 
 
 def test_plugin_failure_persists_no_findings_after_verified_cleanup(
@@ -330,6 +356,67 @@ def test_running_dispatcher_recovers_transient_finalization_failure(
         dispatcher.stop()
 
 
+def test_finalization_flush_failure_rolls_back_before_retry(
+    database, assessment, caplog
+):
+    staged = []
+
+    def rows(session, model):
+        return session.scalar(
+            select(func.count())
+            .select_from(model)
+            .where(model.assessment_id == assessment)
+        )
+
+    def fail_after_flush(session, flush_context):
+        if any(
+            isinstance(item, models.Assessment)
+            and item.id == assessment
+            and item.status == "completed"
+            for item in session.identity_map.values()
+        ):
+            staged.append(
+                (rows(session, models.Finding), rows(session, models.Evidence))
+            )
+            raise RuntimeError("synthetic flushed transaction failure")
+
+    dispatcher = AssessmentDispatcher()
+    session_class = database.SessionLocal.class_
+    event.listen(session_class, "after_flush_postexec", fail_after_flush)
+    try:
+        dispatcher._run(assessment, Event())
+    finally:
+        event.remove(session_class, "after_flush_postexec", fail_after_flush)
+    assert staged == [(3, 3)]
+    assert "synthetic flushed transaction failure" in caplog.text
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, assessment)
+        assert item.status == "running" and item.result is None
+        assert rows(db, models.Finding) == rows(db, models.Evidence) == 0
+        assert list(
+            db.scalars(
+                select(models.AuditEvent.action).where(
+                    models.AuditEvent.resource_id == assessment
+                )
+            )
+        ) == ["assessment.running"]
+    dispatcher.recover()
+    dispatcher._run(assessment, Event())
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, assessment)
+        assert item.status == "completed" and item.result["attempt"] == 2
+        assert rows(db, models.Finding) == rows(db, models.Evidence) == 3
+        assert rows(db, models.Attempt) == 2
+        assert list(
+            db.scalars(
+                select(models.AuditEvent.action).where(
+                    models.AuditEvent.resource_id == assessment,
+                    models.AuditEvent.action == "assessment.completed",
+                )
+            )
+        ) == ["assessment.completed"]
+
+
 def test_only_one_dispatcher_and_lock_loss_stops_work(database):
     first, second = AssessmentDispatcher(), AssessmentDispatcher()
     first.start()
@@ -346,7 +433,7 @@ def test_only_one_dispatcher_and_lock_loss_stops_work(database):
             connection.commit()
         assert first._lost.wait(5)
         assert not first.ready
-        with pytest.raises(Exception, match="interrupted"):
+        with pytest.raises(Interrupted, match="interrupted"):
             ExecutionContext(
                 Event(), Event(), monotonic() + 5, lambda: not first._lost.is_set()
             ).check()
@@ -376,7 +463,7 @@ def test_recovery_does_not_requeue_after_ownership_loss(
 def pending_docker(database, assessment):
     from uuid import uuid4
 
-    from app.sandbox import DockerSandbox, new_journal
+    from app.sandbox import DockerSandbox
 
     attempt_id = str(uuid4())
     journal = new_journal()
@@ -450,8 +537,6 @@ def test_pending_cleanup_survives_restart_and_resolves_once(
 def test_recovery_rejects_stale_journal_writes(
     database, assessment, pending_docker, fake_docker
 ):
-    from app.execution import Interrupted
-
     dispatcher = AssessmentDispatcher()
     stale = dispatcher._journal_writer(
         assessment,
@@ -479,9 +564,6 @@ def test_journal_advancement_rejects_persisted_cancellation(
     with pytest.raises(Cancelled):
         write(pending_docker.journal, advancing=True)
     write(pending_docker.journal)  # Cancellation must still permit cleanup.
-    with database.SessionLocal() as db:
-        db.get(models.Assessment, assessment).status = "failed"
-        db.commit()
 
 
 def test_periodic_recovery_skips_owned_attempts_and_recovers_orphans(
@@ -500,16 +582,11 @@ def test_periodic_recovery_skips_owned_attempts_and_recovers_orphans(
     item = read(database, assessment)
     assert item.status == "failed"
     assert item.cleanup_pending
-    with database.SessionLocal() as db:
-        db.get(models.Assessment, assessment).status = "failed"
-        db.commit()
 
 
 def test_background_cleanup_runs_without_blocking_new_assessments(
     database, assessment, pending_docker, monkeypatch, fake_docker, wait_until
 ):
-    from app import worker
-
     monkeypatch.setattr(worker, "RECONCILE_INTERVAL_SECONDS", 0.02)
     dispatcher = AssessmentDispatcher()
     dispatcher.start()
@@ -571,8 +648,6 @@ def test_failed_cleanup_runs_after_dispatcher_becomes_ready(
 
 
 def test_cleanup_stops_on_owner_loss(database, assessment, pending_docker, fake_docker):
-    from app.execution import Interrupted
-
     fake_docker.add(pending_docker, "network")
     dispatcher = AssessmentDispatcher()
     dispatcher._lost.set()

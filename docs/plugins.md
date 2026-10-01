@@ -41,6 +41,9 @@ description/remediation, and JSON-compatible evidence. Whitespace-only finding
 text is rejected; accepted text retains its formatting. Invalid output fails the
 affected assessment without partial persistence.
 
+Analyzers run synchronously. Cancellation and deadline checks occur between
+calls; a blocking analyzer delays interruption and cleanup. Keep analysis bounded.
+
 Cover positive, negative, boundary, and relevant malformed/incomplete observations.
 Use a local `PluginRegistry` to test catalog visibility and selection; preserve
 shared registry/contract conformance. Run `python -m app test` and the
