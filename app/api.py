@@ -1,6 +1,9 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Response
+from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import models
@@ -12,12 +15,16 @@ from .policy import ACTOR as MVP_ACTOR
 from .policy import PolicyError, bounded_url, unexpired, validate
 from .schemas import (
     AssessmentCreate,
+    AssessmentEvidenceOut,
     AssessmentOut,
+    EvidenceOut,
     ProjectCreate,
     ScopeCreate,
     TargetCreate,
 )
 from .worker import dispatcher
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -189,6 +196,46 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
             for f in item.findings
         ],
     }
+
+
+@app.get(
+    "/api/v1/assessments/{assessment_id}/evidence",
+    response_model=AssessmentEvidenceOut,
+)
+def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
+    """Return validated evidence for an authorized, completed assessment."""
+    item = get_assessment(assessment_id, db)
+    evidence = []
+    if item.status == models.AssessmentStatus.completed:
+        rows = db.scalars(
+            select(models.Evidence)
+            .join(models.Finding)
+            .where(models.Finding.assessment_id == item.id)
+            .order_by(models.Evidence.id)
+        )
+        for row in rows:
+            try:
+                evidence.append(
+                    EvidenceOut(
+                        id=row.id,
+                        finding_id=row.finding_id,
+                        kind=row.kind,
+                        data=row.data,
+                    )
+                )
+            except ValidationError:
+                logger.error(
+                    "Invalid stored evidence for assessment %s, evidence %s",
+                    item.id,
+                    row.id,
+                )
+                raise HTTPException(500, "stored evidence is invalid") from None
+    return AssessmentEvidenceOut(
+        assessment_id=item.id,
+        status=item.status,
+        cleanup_pending=item.cleanup_pending,
+        evidence=evidence,
+    )
 
 
 @app.get("/api/v1/projects/{project_id}/audit-events")

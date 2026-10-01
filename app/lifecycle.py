@@ -63,13 +63,12 @@ def finish(db, assessment, attempt, outcome):
                         severity=finding.severity,
                         description=finding.description,
                         remediation=finding.remediation,
-                    )
-                )
-                db.add(
-                    models.Evidence(
-                        assessment_id=assessment.id,
-                        kind="http-response",
-                        data=finding.evidence,
+                        evidence=[
+                            models.Evidence(
+                                kind="http-response",
+                                data=finding.evidence,
+                            )
+                        ],
                     )
                 )
     assessment.result = result

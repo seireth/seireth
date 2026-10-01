@@ -110,12 +110,13 @@ def test_passive_assessment_returns_json_and_cleanup(
         )
         evidence = list(
             db.scalars(
-                select(models.Evidence).where(
-                    models.Evidence.assessment_id == report["assessment_id"]
-                )
+                select(models.Evidence)
+                .join(models.Finding)
+                .where(models.Finding.assessment_id == report["assessment_id"])
             )
         )
         assert len(findings) == len(evidence) == 3
+        assert {item.finding_id for item in evidence} == {item.id for item in findings}
         assert {finding.id for finding in findings} == {
             finding["id"] for finding in report["findings"]
         }
@@ -331,12 +332,15 @@ def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
     with database.SessionLocal() as db:
         evidence = list(
             db.scalars(
-                select(models.Evidence).where(
-                    models.Evidence.assessment_id == report["assessment_id"]
-                )
+                select(models.Evidence)
+                .join(models.Finding)
+                .where(models.Finding.assessment_id == report["assessment_id"])
             )
         )
         assert len(evidence) == 3 * len(plugins)
+        assert {item.finding_id for item in evidence} == {
+            item["id"] for item in report["findings"]
+        }
         assert secret not in str([item.data for item in evidence])
         if "cookie-security" in plugins:
             assert {
@@ -349,6 +353,221 @@ def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
                 "host-prefix",
             }
     assert secret not in caplog.text
+    returned = client.get(location + "/evidence")
+    assert returned.status_code == 200
+    entries = returned.json()["evidence"]
+    assert len(entries) == len(report["findings"])
+    assert [item["id"] for item in entries] == sorted(item["id"] for item in entries)
+    assert secret not in returned.text
+    assert {item["finding_id"]: item["data"] for item in entries} == {
+        item.finding_id: item.data for item in evidence
+    }
+
+
+@pytest.fixture
+def evidence_row(database):
+    def create(assessment_id, *, identity=None, kind="http-response", data=None):
+        with database.SessionLocal() as db:
+            evidence = models.Evidence(
+                kind=kind,
+                data=data
+                if data is not None
+                else {
+                    "url": "http://demo-target:8080/",
+                    "header": "content-security-policy",
+                },
+            )
+            if identity is not None:
+                evidence.id = identity
+            finding = models.Finding(
+                assessment_id=assessment_id,
+                plugin="security-headers",
+                title="Test finding",
+                severity="medium",
+                description="Test evidence retrieval",
+                remediation="Configure the inspected response header.",
+                evidence=[evidence],
+            )
+            db.add(finding)
+            db.commit()
+            return finding.id, evidence.id
+
+    return create
+
+
+def test_evidence_retrieval_is_scoped_ordered_read_only_and_allows_expired_scope(
+    client, database, assessment_graph, evidence_row, dispatch_calls
+):
+    first = assessment_graph(status="completed")
+    second = assessment_graph(status="completed")
+    z_finding, z_id = evidence_row(first.assessment.id, identity="z-evidence")
+    a_finding, a_id = evidence_row(first.assessment.id, identity="a-evidence")
+    evidence_row(second.assessment.id, identity="other-assessment-evidence")
+    with database.SessionLocal() as db:
+        db.get(models.AuthorizationScope, first.scope.id).expires_at = (
+            models.now() - timedelta(hours=1)
+        )
+        db.commit()
+    before = snapshot(database)
+    path = f"/api/v1/assessments/{first.assessment.id}/evidence"
+    response = client.get(path)
+    assert response.status_code == 200
+    assert response.json() == {
+        "assessment_id": first.assessment.id,
+        "status": "completed",
+        "cleanup_pending": False,
+        "evidence": [
+            {
+                "id": identity,
+                "finding_id": finding,
+                "kind": "http-response",
+                "data": {
+                    "url": "http://demo-target:8080/",
+                    "header": "content-security-policy",
+                },
+            }
+            for finding, identity in [(a_finding, a_id), (z_finding, z_id)]
+        ],
+    }
+    assert client.get(path).json() == response.json()
+    assert snapshot(database) == before
+    assert dispatch_calls == {"submit": [], "cancel": []}
+
+
+@pytest.mark.parametrize("status", [item.value for item in models.AssessmentStatus])
+def test_evidence_empty_states(
+    client, database, assessment_graph, evidence_row, status
+):
+    graph = assessment_graph(status=status)
+    if status != "completed":
+        # Even a stray stored row must not be published before successful finalization.
+        evidence_row(graph.assessment.id)
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, graph.assessment.id)
+        item.cleanup_pending = status == "failed"
+        db.commit()
+    response = client.get(f"/api/v1/assessments/{graph.assessment.id}/evidence")
+    assert response.status_code == 200
+    assert response.json() == {
+        "assessment_id": graph.assessment.id,
+        "status": status,
+        "cleanup_pending": status == "failed",
+        "evidence": [],
+    }
+
+
+def test_unknown_assessment_evidence_returns_not_found(client):
+    response = client.get("/api/v1/assessments/missing/evidence")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "assessment not found"}
+
+
+@pytest.mark.parametrize(
+    "kind,data",
+    [
+        ("unsupported-kind", {"secret": "synthetic-evidence-secret"}),
+        (
+            "http-response",
+            {
+                "url": "http://demo-target:8080/",
+                "header": "x-frame-options",
+                "cookie_value": "synthetic-evidence-secret",
+            },
+        ),
+        ("http-response", {"header": "synthetic-evidence-secret"}),
+        (
+            "http-response",
+            {"url": "ftp://synthetic-evidence-secret/", "header": "x-frame-options"},
+        ),
+        (
+            "http-response",
+            {"url": "http://demo-target:8080/", "header": "synthetic-evidence-secret"},
+        ),
+        (
+            "http-response",
+            {
+                "url": "http://demo-target:8080/",
+                "header": "set-cookie",
+                "cookie_name": "cross",
+                "rule": "samesite-none-without-secure",
+                "samesite": "none",
+                "secure": "synthetic-evidence-secret",
+            },
+        ),
+        ("http-response", ["synthetic-evidence-secret"]),
+    ],
+)
+def test_invalid_stored_evidence_fails_without_partial_response_or_secret_diagnostics(
+    client, database, assessment_graph, evidence_row, caplog, kind, data
+):
+    graph = assessment_graph(status="completed")
+    evidence_row(graph.assessment.id, identity="a-valid-evidence")
+    _, identity = evidence_row(
+        graph.assessment.id, identity="z-invalid-evidence", kind=kind, data=data
+    )
+    before = snapshot(database)
+    response = client.get(f"/api/v1/assessments/{graph.assessment.id}/evidence")
+    assert response.status_code == 500
+    assert response.json() == {"detail": "stored evidence is invalid"}
+    assert "synthetic-evidence-secret" not in response.text
+    assert "synthetic-evidence-secret" not in caplog.text
+    assert identity in caplog.text and graph.assessment.id in caplog.text
+    assert snapshot(database) == before
+
+
+@pytest.mark.parametrize("target", ["https://demo-target:8080/"], indirect=True)
+def test_repeated_cookies_and_multiple_rules_keep_their_exact_finding_links(
+    client, assessment_payload, monkeypatch, wait_until, database
+):
+    from app.plugins.base import HttpObservation
+    from app.sandbox import InMemorySandbox
+
+    secret = "synthetic-repeated-cookie-secret"
+    monkeypatch.setattr(
+        InMemorySandbox,
+        "execute",
+        lambda self, url: HttpObservation(
+            url=url,
+            headers={
+                "Set-Cookie": [
+                    f"__hOsT-session={secret}; SameSite=None",
+                    f"__hOsT-session={secret}; Secure; Path=/",
+                    f"__hOsT-session={secret}; Secure; Path=/app",
+                ]
+            },
+        ),
+    )
+    submitted = client.post(
+        "/api/v1/assessments",
+        json={**assessment_payload, "plugins": ["cookie-security"]},
+    )
+    assert submitted.status_code == 202
+    location = submitted.headers["location"]
+    report = wait_until(
+        lambda: client.get(location + "/results").json(),
+        lambda report: report["status"] in {"completed", "failed"},
+        description="repeated cookie assessment",
+    )
+    assert report["status"] == "completed"
+    assert len(report["findings"]) == 3
+    response = client.get(location + "/evidence")
+    assert response.status_code == 200
+    returned = response.json()["evidence"]
+    assert len(returned) == 3
+    assert secret not in response.text
+    assert {item["finding_id"] for item in returned} == {
+        item["id"] for item in report["findings"]
+    }
+    with database.SessionLocal() as db:
+        for entry in returned:
+            finding = db.get(models.Finding, entry["finding_id"])
+            assert entry["data"]["cookie_name"] == "__hOsT-session"
+            if entry["data"]["rule"] == "samesite-none-without-secure":
+                assert finding.title == "SameSite=None cookie lacks Secure"
+            else:
+                assert finding.title == "Invalid __Host- cookie configuration"
+            assert finding.evidence[0].id == entry["id"]
+            assert finding.evidence[0].data == entry["data"]
 
 
 @pytest.mark.parametrize(
@@ -427,7 +646,8 @@ def submission(graph):
 
 
 @pytest.mark.parametrize(
-    "operation", ["target", "scope", "assessment", "read", "results", "cancel", "audit"]
+    "operation",
+    ["target", "scope", "assessment", "read", "results", "evidence", "cancel", "audit"],
 )
 def test_foreign_project_access_is_denied_without_side_effects(
     client, database, assessment_graph, dispatch_calls, operation
@@ -449,6 +669,7 @@ def test_foreign_project_access_is_denied_without_side_effects(
         "assessment": ("post", "/api/v1/assessments", submission(graph)),
         "read": ("get", f"/api/v1/assessments/{aid}", None),
         "results": ("get", f"/api/v1/assessments/{aid}/results", None),
+        "evidence": ("get", f"/api/v1/assessments/{aid}/evidence", None),
         "cancel": ("post", f"/api/v1/assessments/{aid}/cancel", None),
         "audit": ("get", f"/api/v1/projects/{pid}/audit-events", None),
     }

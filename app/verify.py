@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
+from pydantic import ValidationError
 
 
 def require(response: httpx.Response, expected: int) -> dict:
@@ -62,6 +63,8 @@ def verify(
 ) -> dict:
     """Run the complete reachable MVP workflow against a running API."""
 
+    from .schemas import AssessmentEvidenceOut
+
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout must be finite and greater than zero")
     with httpx.Client(base_url=base_url, timeout=10) as client:
@@ -117,6 +120,24 @@ def verify(
             and results["result"]["sandbox_backend"] != expected_backend
         ):
             raise RuntimeError(f"expected {expected_backend} backend, got: {results}")
+        try:
+            evidence = AssessmentEvidenceOut.model_validate(
+                require(
+                    client.get(f"/api/v1/assessments/{assessment['id']}/evidence"),
+                    200,
+                )
+            )
+        except ValidationError:
+            raise RuntimeError("API returned invalid evidence") from None
+        if (
+            evidence.assessment_id != assessment["id"]
+            or evidence.status != "completed"
+            or evidence.cleanup_pending
+            or len(evidence.evidence) != len(results["findings"])
+            or {entry.finding_id for entry in evidence.evidence}
+            != {finding["id"] for finding in results["findings"]}
+        ):
+            raise RuntimeError("evidence did not match the completed assessment")
         audit = require(
             client.get(f"/api/v1/projects/{project['id']}/audit-events"),
             200,
@@ -138,5 +159,6 @@ def verify(
             "scope": scope,
             "assessment": assessment,
             "results": results,
+            "evidence": evidence.model_dump(mode="json"),
             "audit": audit,
         }

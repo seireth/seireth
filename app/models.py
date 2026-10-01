@@ -109,14 +109,15 @@ class Finding(Base):
     title: Mapped[str] = mapped_column(String(FINDING_TITLE_MAX_LENGTH))
     severity: Mapped[str] = mapped_column(String(FINDING_SEVERITY_MAX_LENGTH))
     description: Mapped[str] = mapped_column(Text)
-    remediation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remediation: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[list["Evidence"]] = relationship(cascade="all, delete-orphan")
 
 
 class Evidence(Base):
     """Evidence captured while validating an assessment finding."""
 
     __tablename__ = "evidence"
-    assessment_id: Mapped[str] = mapped_column(ForeignKey(Assessment.id), index=True)
+    finding_id: Mapped[str] = mapped_column(ForeignKey(Finding.id), index=True)
     kind: Mapped[str] = mapped_column(String(100))
     data: Mapped[dict] = mapped_column(JSON)
 
