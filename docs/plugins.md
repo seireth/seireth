@@ -30,16 +30,28 @@ PLUGIN = Plugin(
 
 Import it in `app/plugins/__init__.py` and add it to the registry's ordered
 `plugins` tuple. Registration enables explicit selection, never automatic
-execution. Startup rejects duplicate IDs, invalid manifests, and unsupported
-contract versions.
+execution. Startup rejects duplicate IDs and invalid manifests.
 
 ## Contract and tests
+
+Observation `headers` is a `dict[str, list[str]]`: names are lowercased,
+differently cased names merge, and values retain response order. Do not join
+repeated `Set-Cookie` fields or split them on commas, which also occur in cookie
+expiry dates. The security-header plugin inspects the last value of each checked
+header. Each sandbox validates and returns an `HttpObservation` containing the
+original authorized URL. Docker's internal `target` alias is only used for the
+runner request. The orchestrator reuses this validated observation.
 
 Each analyzer receives an independent copy of the shared HTTP observation and
 returns `PluginResponse`. Findings require bounded title/severity, nonblank
 description/remediation, and JSON-compatible evidence. Whitespace-only finding
 text is rejected; accepted text retains its formatting. Invalid output fails the
 affected assessment without partial persistence.
+
+The cookie plugin retains only names, rule IDs, and normalized requirement values
+or booleans in findings/evidence. Never put cookie values, complete cookie fields,
+or arbitrary attribute values in output or diagnostics. Observation validation
+errors omit input values; sandbox validation suppresses raw exception chains.
 
 Analyzers run synchronously. Cancellation and deadline checks occur between
 calls; a blocking analyzer delays interruption and cleanup. Keep analysis bounded.

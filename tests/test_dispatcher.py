@@ -11,7 +11,8 @@ from sqlalchemy import event, func, select, text
 from app import execution, models, policy, worker
 from app.config import settings
 from app.execution import ExecutionContext, Interrupted
-from app.plugins.base import Plugin, PluginManifest, PluginRegistry
+from app.plugins.base import HttpObservation, Plugin, PluginManifest, PluginRegistry
+from app.plugins.cookie_security import PLUGIN as COOKIE_SECURITY_PLUGIN
 from app.plugins.security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 from app.sandbox import CleanupOutcome, InMemorySandbox, new_journal
 from app.worker import AssessmentDispatcher
@@ -279,7 +280,7 @@ def test_recovery_keeps_unverified_cleanup_pending(database, assessment, monkeyp
 
 
 def test_plugin_failure_persists_no_findings_after_verified_cleanup(
-    database, assessment, monkeypatch
+    database, assessment, monkeypatch, caplog
 ):
     calls = []
 
@@ -293,6 +294,7 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
         PluginRegistry(
             (
                 SECURITY_HEADERS_PLUGIN,
+                COOKIE_SECURITY_PLUGIN,
                 Plugin(
                     PluginManifest(
                         id="broken", name="Broken", description="Test failure"
@@ -303,8 +305,20 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
         ),
     )
     with database.SessionLocal() as db:
-        db.get(models.Assessment, assessment).plugins = ["security-headers", "broken"]
+        db.get(models.Assessment, assessment).plugins = [
+            "security-headers",
+            "cookie-security",
+            "broken",
+        ]
         db.commit()
+    monkeypatch.setattr(
+        InMemorySandbox,
+        "execute",
+        lambda self, url: HttpObservation(
+            url=url,
+            headers={"Set-Cookie": ["cross=synthetic-cookie-secret; SameSite=None"]},
+        ),
+    )
     AssessmentDispatcher()._run(assessment, Event())
     assert len(calls) == 1
     with database.SessionLocal() as db:
@@ -320,6 +334,7 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
             )
             is None
         )
+    assert "synthetic-cookie-secret" not in caplog.text
 
 
 def test_running_dispatcher_recovers_transient_finalization_failure(

@@ -36,6 +36,10 @@ are absent; audit records are not tamper-proof evidence.
 The in-memory backend simulates headers without networking. The
 [header checks](assessments.md#header-checks) provide limited value checks, not
 proof of security or complete CSP validation.
+The passive [cookie checks](assessments.md#cookie-checks) inspect only response
+attribute requirements, skip malformed fields, and do not infer cookie purpose
+or validate login flows. Cookie values are not retained in findings/evidence or
+included in validation diagnostics.
 
 ## Cleanup and failure
 
