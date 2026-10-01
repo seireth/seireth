@@ -31,6 +31,9 @@ migration revisions. Follow [startup](getting-started.md) and
 4. Finalization locks the assessment and atomically commits results, findings,
    evidence, attempt outcome, and terminal audit event.
 
+Evidence has a required `finding_id`; assessment and project ownership derive
+from that finding.
+
 `app/policy.py` owns authorization rules; `app/lifecycle.py` owns transitions and
 finalization. [Plugin manifests](plugins.md) produce the API catalog.
 

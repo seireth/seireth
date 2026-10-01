@@ -87,14 +87,54 @@ for findings. Example successful response with one finding (illustrative IDs/tim
 ```
 
 `result.plugins` preserves selection order with per-plugin counts; `finding_count`
-is the total. Zero findings does not establish security. Older findings may have
-null remediation.
+is the total. Zero findings does not establish security.
 
 Execution errors populate `result.error`. Inspect cleanup independently:
 unverified cleanup produces `failed`, even after cancellation. Both responses
 include `cleanup_pending`; `result.cleanup_reason` explains uncertainty. Follow the
 [cleanup procedure](security-model.md#cleanup-and-failure); reconciliation can
 update cleanup fields after execution becomes terminal.
+
+## Retrieve evidence
+
+`GET /api/v1/assessments/{assessment_id}/evidence` returns `assessment_id`,
+`status`, `cleanup_pending`, and an `evidence` array ordered by evidence ID.
+Match each entry's `finding_id` to the finding's `id` in the results response.
+
+```json
+{
+  "assessment_id": "assessment-id",
+  "status": "completed",
+  "cleanup_pending": false,
+  "evidence": [{
+    "id": "evidence-id",
+    "finding_id": "finding-id",
+    "kind": "http-response",
+    "data": {
+      "url": "http://demo-target:8080/",
+      "header": "content-security-policy"
+    }
+  }]
+}
+```
+
+| Evidence payload | Public fields |
+| --- | --- |
+| Security header | `url`, `header` (`x-content-type-options`, `content-security-policy`, or `x-frame-options`) |
+| SameSite cookie | `url`, `header="set-cookie"`, `cookie_name`, `rule="samesite-none-without-secure"`, `samesite="none"`, `secure` |
+| Secure prefix cookie | `url`, `header="set-cookie"`, `cookie_name`, `rule="secure-prefix"`, `secure`, `https` |
+| Host prefix cookie | `url`, `header="set-cookie"`, `cookie_name`, `rule="host-prefix"`, `secure`, `https`, `domain_present`, `root_path` |
+
+All listed fields are required; URLs must use HTTP(S), cookie names preserve their
+spelling, and booleans must be JSON `true` or `false`. Cookie values and complete
+header fields are never returned; unlisted fields are rejected.
+Invalid stored evidence causes HTTP 500 with `stored evidence is invalid`;
+the entire response fails. See [diagnostic redaction](security-model.md).
+
+Access uses the same project authorization as results: unknown assessments
+return 404 and denied project access returns 403. Expired scopes still allow reads.
+The array is empty unless the assessment is completed with findings.
+Retrieval runs no assessment and writes no database records or audit events.
 
 ## Header checks
 
@@ -133,7 +173,7 @@ discarded attributes.
 Findings identify cookie names and explain remediation. Stored evidence contains
 only names, rule IDs, the response URL, and normalized requirement values or
 booleans. Cookie values and complete fields are excluded from findings, evidence,
-and diagnostics. Evidence is not exposed by the current results endpoint.
+and diagnostics. Retrieve evidence separately using the endpoint above.
 
 There are no general warnings for absent `Secure`, `HttpOnly`, or explicit
 `SameSite`, and no login, replay, cookie-jar, newer-prefix, or full browser-policy
