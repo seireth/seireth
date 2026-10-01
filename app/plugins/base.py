@@ -1,9 +1,8 @@
-"""Versioned, JSON-compatible contract for response-analysis plugins."""
+"""Typed, JSON-compatible contract for response-analysis plugins."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -21,24 +20,35 @@ from ..constraints import (
     StoredHttpUrl,
 )
 
-PLUGIN_CONTRACT_VERSION = 1
 _PLUGIN_ID_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(
-        extra="forbid", frozen=True, strict=True, revalidate_instances="always"
+        extra="forbid",
+        frozen=True,
+        strict=True,
+        revalidate_instances="always",
+        hide_input_in_errors=True,
     )
 
 
 class HttpObservation(ContractModel):
-    contract_version: Literal[1] = PLUGIN_CONTRACT_VERSION
     url: StoredHttpUrl
-    headers: dict[str, str]
+    headers: dict[str, list[str]]
+
+    @field_validator("headers")
+    @classmethod
+    def normalize_headers(cls, headers: dict[str, list[str]]) -> dict[str, list[str]]:
+        normalized: dict[str, list[str]] = {}
+        for name, values in headers.items():
+            if not values:
+                raise ValueError("header fields require at least one value")
+            normalized.setdefault(name.lower(), []).extend(values)
+        return normalized
 
 
 class PluginManifest(ContractModel):
-    contract_version: Literal[1] = PLUGIN_CONTRACT_VERSION
     id: str = Field(
         min_length=1, max_length=PLUGIN_ID_MAX_LENGTH, pattern=_PLUGIN_ID_PATTERN
     )
@@ -62,7 +72,6 @@ class PluginFinding(ContractModel):
 
 
 class PluginResponse(ContractModel):
-    contract_version: Literal[1] = PLUGIN_CONTRACT_VERSION
     findings: tuple[PluginFinding, ...]
 
 
