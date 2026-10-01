@@ -8,10 +8,10 @@ it if needed) and installs dependencies in `.venv`. Stop if a command fails.
 
 ### First-time setup
 
-Install uv once per computer; skip if `uv --version` already reports 0.12.9:
+Install uv once per computer; skip if `uv --version` already reports 0.12.21:
 
 ```powershell
-$installer = Invoke-RestMethod 'https://astral.sh/uv/0.12.9/install.ps1'
+$installer = Invoke-RestMethod 'https://astral.sh/uv/0.12.21/install.ps1'
 Invoke-Expression $installer
 ```
 
@@ -38,10 +38,10 @@ python -m app serve
 
 ### First-time setup
 
-Install uv once per computer; skip if `uv --version` already reports 0.12.9:
+Install uv once per computer; skip if `uv --version` already reports 0.12.21:
 
 ```bash
-curl -LsSf https://astral.sh/uv/0.12.9/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.12.21/install.sh | sh
 ```
 
 Open a new terminal, return to the repository, then run:
