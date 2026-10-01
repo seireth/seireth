@@ -258,7 +258,7 @@ def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monke
     from app.api import dispatcher
 
     catalog = (client.get("/api/v1/plugins")).json()
-    assert [item["id"] for item in catalog] == ["security-headers"]
+    assert [item["id"] for item in catalog] == ["security-headers", "cookie-security"]
     assert all(set(item) == {"id", "name", "description"} for item in catalog)
     assert all(item["name"].strip() and item["description"].strip() for item in catalog)
     monkeypatch.setattr(dispatcher, "submit", lambda assessment_id: None)
@@ -270,6 +270,85 @@ def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monke
     assert response.json()["plugins"] == ["security-headers"]
     stored = (client.get(response.headers["location"])).json()
     assert stored["plugins"] == ["security-headers"]
+
+
+@pytest.mark.parametrize(
+    "plugins",
+    [
+        ["security-headers"],
+        ["cookie-security"],
+        ["security-headers", "cookie-security"],
+        ["cookie-security", "security-headers"],
+    ],
+)
+def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
+    client, assessment_payload, monkeypatch, database, wait_until, caplog, plugins
+):
+    from app.plugins.base import HttpObservation
+    from app.sandbox import InMemorySandbox
+
+    secret = "cookie-secret-not-for-storage"
+    calls = []
+
+    def response(self, url):
+        calls.append(url)
+        return HttpObservation(
+            url=url,
+            headers={
+                "Set-Cookie": [
+                    f"theme={secret}; SameSite=Lax",
+                    f"cross={secret}; SameSite=None",
+                    f"__Secure-session={secret}",
+                    f"__Host-session={secret}; Secure; Domain={secret}; Path=/{secret}",
+                ]
+            },
+        )
+
+    monkeypatch.setattr(InMemorySandbox, "execute", response)
+    submitted = client.post(
+        "/api/v1/assessments", json={**assessment_payload, "plugins": plugins}
+    )
+    assert submitted.status_code == 202
+    assert submitted.json()["plugins"] == plugins
+    location = submitted.headers["location"]
+    report = wait_until(
+        lambda: client.get(location + "/results").json(),
+        lambda report: report["status"] in {"completed", "failed", "cancelled"},
+        description="cookie assessment completion",
+    )
+    assert report["status"] == "completed", report
+    assert report["result"]["plugins"] == [
+        {"id": plugin, "finding_count": 3} for plugin in plugins
+    ]
+    assert (
+        report["result"]["finding_count"] == len(report["findings"]) == 3 * len(plugins)
+    )
+    assert {item["plugin"] for item in report["findings"]} == set(plugins)
+    assert report["result"]["cleanup_verified"] and not report["cleanup_pending"]
+    assert client.get(location).json()["plugins"] == plugins
+    assert len(calls) == 1
+    assert secret not in str(report)
+    with database.SessionLocal() as db:
+        evidence = list(
+            db.scalars(
+                select(models.Evidence).where(
+                    models.Evidence.assessment_id == report["assessment_id"]
+                )
+            )
+        )
+        assert len(evidence) == 3 * len(plugins)
+        assert secret not in str([item.data for item in evidence])
+        if "cookie-security" in plugins:
+            assert {
+                item.data["rule"]
+                for item in evidence
+                if item.data["header"] == "set-cookie"
+            } == {
+                "samesite-none-without-secure",
+                "secure-prefix",
+                "host-prefix",
+            }
+    assert secret not in caplog.text
 
 
 @pytest.mark.parametrize(

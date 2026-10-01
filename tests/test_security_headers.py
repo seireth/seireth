@@ -9,7 +9,11 @@ URL = "http://demo-target:8080/"
 
 
 def response(headers):
-    return analyze(HttpObservation(url=URL, headers=headers))
+    return analyze(
+        HttpObservation(
+            url=URL, headers={name: [value] for name, value in headers.items()}
+        )
+    )
 
 
 def finding_headers(headers):
@@ -106,3 +110,16 @@ def test_protected_response_with_mixed_case_header_names_has_no_findings():
         ).findings
         == ()
     )
+
+
+@pytest.mark.parametrize(
+    "values,reported", [(["invalid", "nosniff"], False), (["nosniff", "invalid"], True)]
+)
+def test_repeated_security_headers_use_last_value(values, reported):
+    response = analyze(
+        HttpObservation(url=URL, headers={"X-Content-Type-Options": values})
+    )
+    assert (
+        "x-content-type-options"
+        in {item.evidence["header"] for item in response.findings}
+    ) is reported

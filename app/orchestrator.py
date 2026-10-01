@@ -8,12 +8,7 @@ from pydantic import ValidationError
 
 from .config import settings
 from .execution import Cancelled, Interrupted
-from .plugins.base import (
-    HttpObservation,
-    Plugin,
-    PluginResponse,
-    PluginResult,
-)
+from .plugins.base import Plugin, PluginResponse, PluginResult
 from .sandbox import DockerSandbox, InMemorySandbox
 
 logger = logging.getLogger(__name__)
@@ -52,8 +47,7 @@ def execute(sandbox, url, context, plugins: list[Plugin]) -> Outcome:
     outcome = Outcome()
     try:
         context.check()
-        headers = sandbox.execute(url)
-        observation = HttpObservation(url=url, headers=headers)
+        observation = sandbox.execute(url)
         context.check()
         for plugin in plugins:
             try:

@@ -18,7 +18,7 @@ URL = "http://demo-target:8080/"
 
 
 def test_plugin_contract_round_trips_through_json(finding_payload):
-    observation = HttpObservation(url=URL, headers={"Example": "value"})
+    observation = HttpObservation(url=URL, headers={"Example": ["value"]})
     restored_observation = HttpObservation.model_validate_json(
         observation.model_dump_json()
     )
@@ -28,6 +28,35 @@ def test_plugin_contract_round_trips_through_json(finding_payload):
     )
     assert restored_observation == observation
     assert restored_response == plugin_response
+
+
+def test_observation_merges_case_insensitive_repeated_headers_in_order():
+    observation = HttpObservation(
+        url=URL,
+        headers={
+            "Set-Cookie": ["first=synthetic", "second=synthetic"],
+            "set-cookie": ["third=synthetic"],
+        },
+    )
+    assert observation.headers == {
+        "set-cookie": ["first=synthetic", "second=synthetic", "third=synthetic"]
+    }
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [],
+        {"Set-Cookie": "synthetic-secret"},
+        {"Set-Cookie": [1]},
+        {"Set-Cookie": []},
+        {1: ["synthetic-secret"]},
+    ],
+)
+def test_observation_rejects_invalid_headers_without_echoing_values(headers):
+    with pytest.raises(ValidationError) as error:
+        HttpObservation(url=URL, headers=headers)
+    assert "synthetic-secret" not in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -109,22 +138,11 @@ def test_registry_rejects_invalid_selections(selection, make_plugin):
         local.select(selection)
 
 
-def test_manifest_rejects_unsupported_contract_version():
-    with pytest.raises(ValidationError):
-        PluginManifest(
-            contract_version=2,
-            id="future",
-            name="Future",
-            description="Unsupported contract",
-        )
-
-
 def test_registry_revalidates_manifests_at_construction():
     bypassed_manifest = PluginManifest.model_construct(
-        contract_version=2,
-        id="future",
-        name="Future",
-        description="Unsupported contract",
+        id="Invalid ID",
+        name="Invalid",
+        description="Invalid plugin ID bypassing model validation",
     )
     plugin = Plugin(bypassed_manifest, lambda observation: PluginResponse(findings=()))
 

@@ -30,7 +30,7 @@ async def lifespan(_app: FastAPI):
         dispatcher.stop()
 
 
-app = FastAPI(title="Seireth MVP-0", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Seireth MVP", version="0.1.0", lifespan=lifespan)
 
 
 def authorize_project(db: Session, project_id: str) -> models.Project:

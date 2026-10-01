@@ -9,7 +9,10 @@ from time import monotonic
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
+
 from .execution import ExecutionContext
+from .plugins.base import HttpObservation
 
 
 @dataclass(frozen=True)
@@ -57,14 +60,18 @@ def validate_journal(journal):
 class InMemorySandbox:
     """Deterministic backend with no network access."""
 
-    def __init__(self, headers=None, context: ExecutionContext | None = None):
-        self.headers = headers or {}
+    def __init__(
+        self,
+        headers: dict[str, list[str]] | None = None,
+        context: ExecutionContext | None = None,
+    ):
+        self.headers = {} if headers is None else headers
         self.context = context
 
-    def execute(self, url: str, timeout_seconds: float = 5) -> dict[str, str]:
+    def execute(self, url: str, timeout_seconds: float = 5) -> HttpObservation:
         if self.context:
             self.context.check()
-        return dict(self.headers)
+        return _validated_observation(url, self.headers)
 
     def cleanup(self) -> CleanupOutcome:
         return CleanupOutcome(True)
@@ -86,7 +93,10 @@ while time.monotonic() < deadline:
             response = opener.open(url, timeout=min(2, max(0.1, deadline - time.monotonic())))
         except urllib.error.HTTPError as error:
             response = error
-        print(json.dumps(dict(response.headers.items())))
+        headers = {}
+        for name, value in response.headers.items():
+            headers.setdefault(name.lower(), []).append(value)
+        print(json.dumps(headers))
         break
     except OSError as error:
         last_error = error
@@ -94,6 +104,14 @@ while time.monotonic() < deadline:
 else:
     raise last_error
 """
+
+
+def _validated_observation(url: str, headers: object) -> HttpObservation:
+    try:
+        return HttpObservation(url=url, headers=headers)
+    except ValidationError:
+        # Exception chains must not expose raw response or cookie values.
+        raise RuntimeError("sandbox returned invalid headers") from None
 
 
 class DockerSandbox:
@@ -216,7 +234,7 @@ class DockerSandbox:
             )
         )
 
-    def execute(self, url: str, timeout_seconds: float = 5) -> dict[str, str]:
+    def execute(self, url: str, timeout_seconds: float = 5) -> HttpObservation:
         target_url = self._target_url(url)
         labels = [
             arg
@@ -275,10 +293,11 @@ class DockerSandbox:
         )
         if result.returncode:
             raise RuntimeError("Docker runner failed")
-        headers = json.loads(result.stdout)
-        if not isinstance(headers, dict):
-            raise RuntimeError("runner returned invalid headers")
-        return {str(k): str(v) for k, v in headers.items()}
+        try:
+            headers = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            raise RuntimeError("runner returned invalid JSON") from None
+        return _validated_observation(url, headers)
 
     def _owned_id(self, kind, name):
         """Absence is only an observation, not proof that creation has settled."""

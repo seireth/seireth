@@ -222,3 +222,86 @@ def test_real_api_lifecycle(
     assert len(report["findings"]) == expected_findings
     assert not docker("ps", "-a", "--filter", selector, "--format", "{{.Names}}")
     assert not docker("network", "ls", "--filter", selector, "--format", "{{.Name}}")
+
+
+@docker_only
+@pytest.mark.docker
+@pytest.mark.parametrize("api_process", ["docker"], indirect=True)
+def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
+    api_process, database, wait_until, tmp_path
+):
+    from sqlalchemy import select
+
+    client = api_process.client
+
+    def post(path, payload):
+        response = client.post(path, json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    project = post("/api/v1/projects", {"name": "Cookie assessment"})
+    target = post(
+        "/api/v1/targets",
+        {
+            "project_id": project["id"],
+            "name": "cookies",
+            "url": "http://demo-target:8080/cookies",
+        },
+    )
+    scope = post(
+        "/api/v1/authorization-scopes",
+        {
+            "project_id": project["id"],
+            "target_id": target["id"],
+            "allowed_url": target["url"],
+            "expires_at": (models.now() + timedelta(minutes=5)).isoformat(),
+        },
+    )
+    selection = ["security-headers", "cookie-security"]
+    assessment = post(
+        "/api/v1/assessments",
+        {
+            "project_id": project["id"],
+            "target_id": target["id"],
+            "scope_id": scope["id"],
+            "plugins": selection,
+        },
+    )
+    aid = api_process.assessment_id = assessment["id"]
+    report = wait_until(
+        lambda: client.get(f"/api/v1/assessments/{aid}/results").json(),
+        lambda report: report["status"] in {"completed", "cancelled", "failed"},
+        description="real cookie assessment completion",
+        timeout=60,
+        interval=0.05,
+    )
+    assert report["status"] == "completed", report
+    assert report["result"]["plugins"] == [
+        {"id": plugin, "finding_count": 3} for plugin in selection
+    ]
+    assert report["result"]["finding_count"] == len(report["findings"]) == 6
+    assert report["result"]["cleanup_verified"] and not report["cleanup_pending"]
+    with database.SessionLocal() as db:
+        evidence = list(
+            db.scalars(
+                select(models.Evidence).where(models.Evidence.assessment_id == aid)
+            )
+        )
+        assert len(evidence) == 6
+        assert {
+            item.data["cookie_name"]
+            for item in evidence
+            if item.data["header"] == "set-cookie"
+        } == {"cross_site", "__Secure-demo", "__Host-demo"}
+    for secret in (
+        "synthetic-theme",
+        "synthetic-cross-site",
+        "synthetic-secure-prefix",
+        "synthetic-host-prefix",
+    ):
+        assert secret not in str(report)
+        assert secret not in str([item.data for item in evidence])
+        assert secret not in (tmp_path / "api.log").read_text()
+    selector = f"label=seireth.assessment={aid}"
+    assert not docker("ps", "-a", "--filter", selector, "--format", "{{.Names}}")
+    assert not docker("network", "ls", "--filter", selector, "--format", "{{.Name}}")

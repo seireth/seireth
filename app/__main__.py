@@ -84,7 +84,7 @@ def main() -> int:
 
     subparsers.add_parser("test", help="Run pytest, forwarding all following arguments")
 
-    check = subparsers.add_parser("verify", help="Run the MVP-0 API workflow")
+    check = subparsers.add_parser("verify", help="Run the MVP API workflow")
     check.add_argument("--base-url", default=None)
     check.add_argument("--timeout-seconds", type=positive_timeout, default=120)
     check.add_argument("--expected-backend", choices=("inmemory", "docker"))

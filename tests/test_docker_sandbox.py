@@ -12,7 +12,8 @@ import pytest
 from app.execution import Cancelled, ExecutionContext
 from app.orchestrator import execute
 from app.plugins import registry
-from app.sandbox import _FETCH, DockerSandbox, new_journal
+from app.plugins.base import HttpObservation
+from app.sandbox import _FETCH, DockerSandbox, InMemorySandbox, new_journal
 
 
 @pytest.fixture
@@ -38,9 +39,21 @@ def sandbox(make_sandbox):
 def test_restricted_owned_commands(sandbox, fake_docker, custom_limits):
     if custom_limits:
         sandbox.memory, sandbox.cpus, sandbox.pids_limit = "128m", 0.25, 32
-    fake_docker.headers = {"X-Test": "ok"}
-    assert sandbox.execute("http://demo-target:8080") == {"X-Test": "ok"}
+    fake_docker.headers = {
+        "X-Test": ["ok"],
+        "Set-Cookie": ["first=synthetic"],
+        "set-cookie": ["second=synthetic"],
+    }
+    observation = sandbox.execute("http://demo-target:8080/app?test=1")
+    assert isinstance(observation, HttpObservation)
+    assert str(observation.url) == "http://demo-target:8080/app?test=1"
+    assert observation.headers == {
+        "x-test": ["ok"],
+        "set-cookie": ["first=synthetic", "second=synthetic"],
+    }
     calls = fake_docker.calls
+    runner = next(call for call in calls if "python" in call)
+    assert runner[-2] == "http://target:8080/app?test=1"
     assert "--internal" in calls[0]
     expected_labels = {
         "seireth.assessment": sandbox.assessment_id,
@@ -82,7 +95,7 @@ def test_wrong_host_is_rejected_before_docker_calls(sandbox, fake_docker):
     "status,output,error",
     [
         pytest.param(1, "", RuntimeError, id="nonzero-exit"),
-        pytest.param(0, "not JSON", json.JSONDecodeError, id="malformed-json"),
+        pytest.param(0, "not JSON", RuntimeError, id="malformed-json"),
         pytest.param(0, "[]", RuntimeError, id="non-object-headers"),
     ],
 )
@@ -94,6 +107,68 @@ def test_invalid_runner_response_still_allows_cleanup(
         sandbox.execute("http://demo-target:8080/")
     assert sandbox.cleanup().verified
     assert not fake_docker.live
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "synthetic-cookie-secret invalid JSON",
+        '{"Set-Cookie": "synthetic-cookie-secret"}',
+        '{"Set-Cookie": ["synthetic-cookie-secret", 1]}',
+        '{"Set-Cookie": ["synthetic-cookie-secret"], "X-Test": []}',
+        '{"Set-Cookie": ["synthetic-cookie-secret"], "X-Test": null}',
+        '[["Set-Cookie", "synthetic-cookie-secret"]]',
+    ],
+)
+def test_invalid_runner_output_is_not_logged_and_always_cleans_up(
+    sandbox, fake_docker, output, execution_context, caplog
+):
+    fake_docker.runner_output = output
+    outcome = execute(
+        sandbox,
+        "http://demo-target:8080/",
+        execution_context,
+        registry.select(["cookie-security"]),
+    )
+    assert outcome.status == "failed"
+    assert outcome.cleanup_verified
+    assert not outcome.plugin_results
+    assert not fake_docker.live
+    assert "synthetic-cookie-secret" not in caplog.text
+
+
+def test_simulated_backend_preserves_values_and_returns_independent_observations():
+    sandbox = InMemorySandbox(
+        headers={"Set-Cookie": ["first=synthetic"], "set-cookie": ["second=synthetic"]}
+    )
+    observation = sandbox.execute("http://demo-target:8080/app?test=1")
+    assert isinstance(observation, HttpObservation)
+    assert str(observation.url) == "http://demo-target:8080/app?test=1"
+    assert observation.headers == {
+        "set-cookie": ["first=synthetic", "second=synthetic"]
+    }
+    observation.headers["set-cookie"].append("changed=synthetic")
+    assert sandbox.execute("http://demo-target:8080/app?test=1").headers == {
+        "set-cookie": ["first=synthetic", "second=synthetic"]
+    }
+
+
+@pytest.mark.parametrize(
+    "headers", [[], {"Set-Cookie": "synthetic-cookie-secret"}, {"Set-Cookie": []}]
+)
+def test_simulated_backend_rejects_invalid_headers_without_logging_values(
+    headers, execution_context, caplog
+):
+    outcome = execute(
+        InMemorySandbox(headers=headers),
+        "http://demo-target:8080/",
+        execution_context,
+        registry.select(["cookie-security"]),
+    )
+    assert outcome.status == "failed"
+    assert outcome.cleanup_verified
+    assert not outcome.plugin_results
+    assert "synthetic-cookie-secret" not in caplog.text
 
 
 def test_daemon_failure_never_means_cleanup_success(sandbox, fake_docker):
@@ -177,7 +252,8 @@ def test_network_created_before_cli_timeout_is_reconciled(sandbox, fake_docker):
     assert not fake_docker.live
 
 
-def test_runner_does_not_follow_redirects():
+@pytest.mark.parametrize("status", [200, 302, 400])
+def test_runner_preserves_repeated_headers_without_following_redirects(status):
     # Exercise the actual embedded runner against a local owned HTTP server.
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
@@ -187,8 +263,12 @@ def test_runner_does_not_follow_redirects():
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             paths.append(self.path)
-            self.send_response(302)
+            self.send_response(status)
             self.send_header("Location", "/outside-scope")
+            self.send_header(
+                "Set-Cookie", "first=synthetic; Expires=Wed, 21 Oct 2037 07:28:00 GMT"
+            )
+            self.send_header("set-cookie", "second=synthetic; SameSite=None")
             self.end_headers()
 
         def log_message(self, *args):
@@ -211,7 +291,11 @@ def test_runner_does_not_follow_redirects():
             timeout=5,
         )
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout)["Location"] == "/outside-scope"
+        assert json.loads(result.stdout)["location"] == ["/outside-scope"]
+        assert json.loads(result.stdout)["set-cookie"] == [
+            "first=synthetic; Expires=Wed, 21 Oct 2037 07:28:00 GMT",
+            "second=synthetic; SameSite=None",
+        ]
         assert paths == ["/allowed"]
     finally:
         server.shutdown()

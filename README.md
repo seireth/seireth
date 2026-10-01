@@ -17,8 +17,9 @@ SEIRETH runs authorized HTTP security checks against disposable containers,
 stores findings and audit events, and verifies sandbox cleanup. Docker assessments
 inspect a new instance of an approved image, not the original remote host.
 
-**MVP-0:** a local API with one passive security-header plugin and PostgreSQL 18
-persistence. It is not a multi-user production service or general internet scanner.
+**MVP:** a local API with passive security-header and cookie plugins and
+PostgreSQL 18 persistence. It is not a multi-user production service or general
+internet scanner.
 
 ## How it works
 

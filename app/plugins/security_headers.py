@@ -34,7 +34,7 @@ def analyze(observation: HttpObservation) -> PluginResponse:
 
     url = str(observation.url)
     observed = {
-        name.lower(): value.strip() for name, value in observation.headers.items()
+        name: values[-1].strip() for name, values in observation.headers.items()
     }
     findings = []
 

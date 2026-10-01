@@ -21,6 +21,10 @@ Get selectable plugin IDs from `GET /api/v1/plugins`. The catalog lists reviewed
 built-ins with stable `id`, `name`, and `description`. Submit an explicit, nonnull,
 nonempty selection of unique active IDs. See [Plugin development](plugins.md) to add checks.
 
+The built-ins are `security-headers` and `cookie-security`. Select either or both,
+for example `"plugins": ["security-headers", "cookie-security"]`. Registering a
+plugin never automatically selects it; existing requests remain explicit.
+
 Submit this body, replacing placeholder IDs with those returned above:
 
 ```json
@@ -103,6 +107,39 @@ update cleanup fields after execution becomes terminal.
 Bare `*`, scheme-only sources, and report-only framing policies do not qualify.
 See the [implementation](../app/plugins/security_headers.py) for exact matching.
 These checks do not fully validate CSP, prove security, or assess every response.
+
+## Cookie checks
+
+`cookie-security` analyzes every separate `Set-Cookie` field on the single assessed
+response. It emits low-severity configuration findings, not exploit claims:
+
+| Check | Reported configuration |
+| --- | --- |
+| SameSite compatibility | `SameSite=None` without `Secure` |
+| `__Secure-` prefix | Missing `Secure` or an HTTP response URL |
+| `__Host-` prefix | Missing `Secure`, HTTP, a nonempty `Domain`, or missing explicit `Path=/` |
+
+Each field can produce one finding per violated rule; failed requirements for a
+prefix are combined. Attribute names, SameSite values, and prefix matching are
+case-insensitive; findings preserve the original cookie name. Repeated cookie
+names are inspected separately. The parser retains only `Secure`, `SameSite`,
+`Domain`, and `Path`. It ignores attribute values longer than 1,024 bytes after
+trimming spaces and tabs; an ignored duplicate never replaces an earlier accepted
+value. `Secure` counts by presence after this length check, and the last retained
+value wins for the other attributes. Other attributes are discarded. Malformed
+fields are skipped without failing the run, including malformed content in
+discarded attributes.
+
+Findings identify cookie names and explain remediation. Stored evidence contains
+only names, rule IDs, the response URL, and normalized requirement values or
+booleans. Cookie values and complete fields are excluded from findings, evidence,
+and diagnostics. Evidence is not exposed by the current results endpoint.
+
+There are no general warnings for absent `Secure`, `HttpOnly`, or explicit
+`SameSite`, and no login, replay, cookie-jar, newer-prefix, or full browser-policy
+validation. Zero findings does not establish cookie security. The owned demo's
+`/cookies` path emits four fields: one ordinary cookie and three violations.
+Selecting both plugins there produces six findings (three per plugin).
 
 ## Cancellation and audit
 

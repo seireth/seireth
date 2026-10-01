@@ -24,8 +24,10 @@ migration revisions. Follow [startup](getting-started.md) and
    Creation intent precedes each command; resource IDs are committed before
    container startup. Creation, startup, and cleanup removal are separate operations.
 3. The immutable registry resolves plugins in request order. The orchestrator
-   fetches headers once, passes each plugin an independent typed observation,
-   and owns cleanup. Findings remain buffered until execution and cleanup succeed.
+   fetches once through the sandbox, which validates an observation containing the
+   original authorized URL and ordered repeated headers. The orchestrator gives
+   each plugin an independent deep copy and owns cleanup. Findings remain buffered
+   until execution and cleanup succeed.
 4. Finalization locks the assessment and atomically commits results, findings,
    evidence, attempt outcome, and terminal audit event.
 
