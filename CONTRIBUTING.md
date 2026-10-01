@@ -129,15 +129,15 @@ and setup instructions aligned when upgrading uv.
 
 ## Schema changes
 
-Add a revision after the current Alembic head in `app/migrations/versions`:
+For subsequent incremental schema changes, add a revision after the current
+Alembic head in `app/migrations/versions`:
 
 ```bash
 python -m alembic revision --autogenerate -m "describe schema change"
 ```
 
-Review generated operations before applying them. Never edit deployed revisions,
-including `0001_initial_schema`. Run `python -m app migrate` before native API
-startup; the API neither checks revisions nor applies migrations. Docker startup
+Run `python -m app migrate` before native API startup; the API neither checks
+revisions nor applies migrations. Docker startup
 uses the [migration-gated command](docs/getting-started.md#real-docker-assessment).
 
 ## Pull requests

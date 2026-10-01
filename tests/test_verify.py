@@ -80,12 +80,21 @@ def test_invalid_timeout_is_rejected(value):
         ("cleanup", "sandbox cleanup was not verified"),
         ("backend", "expected docker backend"),
         ("audit", "unexpected audit trail"),
+        ("evidence-http", "500:.*stored evidence is invalid"),
+        ("evidence-payload", "API returned invalid evidence"),
+        ("evidence-assessment", "evidence did not match the completed assessment"),
+        ("evidence-status", "evidence did not match the completed assessment"),
+        ("evidence-cleanup", "evidence did not match the completed assessment"),
+        ("evidence-empty", "evidence did not match the completed assessment"),
+        ("evidence-finding", "evidence did not match the completed assessment"),
     ],
 )
 def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
     results = {
         "status": "failed" if failure == "failed" else "completed",
-        "findings": [] if failure == "empty" else [{"title": "example"}],
+        "findings": []
+        if failure == "empty"
+        else [{"id": "finding-1", "title": "example"}],
         "result": {
             "cleanup_verified": failure != "cleanup",
             "sandbox_backend": "inmemory",
@@ -101,6 +110,32 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
     ]
     if failure == "audit":
         actions = actions[:-1]
+    evidence = {
+        "assessment_id": "other-assessment"
+        if failure == "evidence-assessment"
+        else "assessment-1",
+        "status": "failed" if failure == "evidence-status" else "completed",
+        "cleanup_pending": failure == "evidence-cleanup",
+        "evidence": []
+        if failure == "evidence-empty"
+        else [
+            {
+                "id": "evidence-1",
+                "finding_id": "other-finding"
+                if failure == "evidence-finding"
+                else "finding-1",
+                "kind": "http-response",
+                "data": {
+                    "url": "http://demo-target:8080/",
+                    "header": "content-security-policy",
+                },
+            }
+        ],
+    }
+    if failure == "evidence-payload":
+        evidence["evidence"][0]["data"]["cookie_value"] = (
+            "synthetic-private-cookie-value"
+        )
     routes = {
         ("GET", "/health"): (200, {"status": "ok"}),
         ("POST", "/api/v1/projects"): (200, {"id": "project-1"}),
@@ -108,6 +143,11 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
         ("POST", "/api/v1/authorization-scopes"): (200, {"id": "scope-1"}),
         ("POST", "/api/v1/assessments"): (202, {"id": "assessment-1"}),
         ("GET", "/api/v1/assessments/assessment-1/results"): (200, results),
+        ("GET", "/api/v1/assessments/assessment-1/evidence"): (
+            (500, {"detail": "stored evidence is invalid"})
+            if failure == "evidence-http"
+            else (200, evidence)
+        ),
         ("GET", "/api/v1/projects/project-1/audit-events"): (
             200,
             [{"action": action} for action in actions],
@@ -126,12 +166,16 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
         "Client",
         lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs),
     )
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(RuntimeError, match=message) as error:
         verify.verify(
             "http://test",
             expected_backend="docker" if failure == "backend" else "inmemory",
         )
+    assert "synthetic-private-cookie-value" not in str(error.value)
     assert ("GET", "/api/v1/assessments/assessment-1/results") in observed
     assert (("GET", "/api/v1/projects/project-1/audit-events") in observed) is (
         failure == "audit"
+    )
+    assert (("GET", "/api/v1/assessments/assessment-1/evidence") in observed) is (
+        failure == "audit" or failure.startswith("evidence-")
     )

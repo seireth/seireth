@@ -328,9 +328,9 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
         assert item.findings == []
         assert (
             db.scalar(
-                select(models.Evidence.id).where(
-                    models.Evidence.assessment_id == assessment
-                )
+                select(models.Evidence.id)
+                .join(models.Finding)
+                .where(models.Finding.assessment_id == assessment)
             )
             is None
         )
@@ -377,11 +377,13 @@ def test_finalization_flush_failure_rolls_back_before_retry(
     staged = []
 
     def rows(session, model):
-        return session.scalar(
-            select(func.count())
-            .select_from(model)
-            .where(model.assessment_id == assessment)
-        )
+        query = select(func.count()).select_from(model)
+        if model is models.Evidence:
+            query = query.join(models.Finding)
+            owner = models.Finding
+        else:
+            owner = model
+        return session.scalar(query.where(owner.assessment_id == assessment))
 
     def fail_after_flush(session, flush_context):
         if any(

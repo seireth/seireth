@@ -53,6 +53,10 @@ or booleans in findings/evidence. Never put cookie values, complete cookie field
 or arbitrary attribute values in output or diagnostics. Observation validation
 errors omit input values; sandbox validation suppresses raw exception chains.
 
+For a new evidence format, extend `EvidenceOut` in `app/schemas.py` and add
+retrieval tests. The [evidence endpoint](assessments.md#retrieve-evidence) rejects
+fields outside those models.
+
 Analyzers run synchronously. Cancellation and deadline checks occur between
 calls; a blocking analyzer delays interruption and cleanup. Keep analysis bounded.
 

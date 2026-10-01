@@ -1,4 +1,4 @@
-"""Fresh PostgreSQL foundation; frozen independently of application models."""
+"""Current PostgreSQL baseline, defined independently of application models."""
 
 import sqlalchemy as sa
 from alembic import op
@@ -68,6 +68,7 @@ def upgrade():
         sa.Column("project_id", sa.String(36), nullable=False),
         sa.Column("target_id", sa.String(36), nullable=False),
         sa.Column("scope_id", sa.String(36), nullable=False),
+        sa.Column("plugins", sa.JSON(), nullable=False),
         sa.Column("status", sa.String(30), nullable=False),
         sa.Column("result", sa.JSON(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -100,16 +101,6 @@ def upgrade():
     )
     op.create_index("ix_attempts_assessment_id", "attempts", ["assessment_id"])
     op.create_table(
-        "evidence",
-        sa.Column("id", sa.String(36), nullable=False),
-        sa.Column("assessment_id", sa.String(36), nullable=False),
-        sa.Column("kind", sa.String(100), nullable=False),
-        sa.Column("data", sa.JSON(), nullable=False),
-        sa.ForeignKeyConstraint(["assessment_id"], [ASSESSMENT_ID_REFERENCE]),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index("ix_evidence_assessment_id", "evidence", ["assessment_id"])
-    op.create_table(
         "findings",
         sa.Column("id", sa.String(36), nullable=False),
         sa.Column("assessment_id", sa.String(36), nullable=False),
@@ -117,15 +108,26 @@ def upgrade():
         sa.Column("title", sa.String(300), nullable=False),
         sa.Column("severity", sa.String(30), nullable=False),
         sa.Column("description", sa.Text(), nullable=False),
+        sa.Column("remediation", sa.Text(), nullable=False),
         sa.ForeignKeyConstraint(["assessment_id"], [ASSESSMENT_ID_REFERENCE]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_findings_assessment_id", "findings", ["assessment_id"])
+    op.create_table(
+        "evidence",
+        sa.Column("id", sa.String(36), nullable=False),
+        sa.Column("finding_id", sa.String(36), nullable=False),
+        sa.Column("kind", sa.String(100), nullable=False),
+        sa.Column("data", sa.JSON(), nullable=False),
+        sa.ForeignKeyConstraint(["finding_id"], ["findings.id"]),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index("ix_evidence_finding_id", "evidence", ["finding_id"])
 
 
 def downgrade():
-    op.drop_table("findings")
     op.drop_table("evidence")
+    op.drop_table("findings")
     op.drop_table("attempts")
     op.drop_table("assessments")
     op.drop_table("authorization_scopes")

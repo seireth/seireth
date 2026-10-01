@@ -97,6 +97,9 @@ python -m app docker-up
 python -m app verify --expected-backend docker
 ```
 
+Verification checks findings, evidence associations, cleanup, and the audit trail;
+its JSON output includes `results` and `evidence`.
+
 `docker-up` builds the API, detects the Docker socket group for its non-root user,
 waits for PostgreSQL, applies migrations, and waits for API health. Compose selects
 the Docker backend; `--expected-backend` only checks results. Use `docker-up` for

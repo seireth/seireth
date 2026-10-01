@@ -147,6 +147,10 @@ def test_real_api_lifecycle(
         assert result["results"]["status"] == expected_status
         assert result["results"]["result"]["finding_count"] == expected_findings
         assert result["results"]["result"]["attempt"] == expected_attempt
+        assert len(result["evidence"]["evidence"]) == expected_findings
+        assert {entry["finding_id"] for entry in result["evidence"]["evidence"]} == {
+            finding["id"] for finding in result["results"]["findings"]
+        }
         return
 
     def post(path, data):
@@ -284,15 +288,28 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
     with database.SessionLocal() as db:
         evidence = list(
             db.scalars(
-                select(models.Evidence).where(models.Evidence.assessment_id == aid)
+                select(models.Evidence)
+                .join(models.Finding)
+                .where(models.Finding.assessment_id == aid)
             )
         )
         assert len(evidence) == 6
+        assert {item.finding_id for item in evidence} == {
+            item["id"] for item in report["findings"]
+        }
         assert {
             item.data["cookie_name"]
             for item in evidence
             if item.data["header"] == "set-cookie"
         } == {"cross_site", "__Secure-demo", "__Host-demo"}
+    evidence_response = client.get(f"/api/v1/assessments/{aid}/evidence")
+    assert evidence_response.status_code == 200
+    returned = evidence_response.json()
+    assert returned["status"] == "completed" and not returned["cleanup_pending"]
+    assert len(returned["evidence"]) == 6
+    assert {item["finding_id"]: item["data"] for item in returned["evidence"]} == {
+        item.finding_id: item.data for item in evidence
+    }
     for secret in (
         "synthetic-theme",
         "synthetic-cross-site",
@@ -300,6 +317,7 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
         "synthetic-host-prefix",
     ):
         assert secret not in str(report)
+        assert secret not in evidence_response.text
         assert secret not in str([item.data for item in evidence])
         assert secret not in (tmp_path / "api.log").read_text()
     selector = f"label=seireth.assessment={aid}"

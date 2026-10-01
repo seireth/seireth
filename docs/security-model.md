@@ -41,6 +41,10 @@ attribute requirements, skip malformed fields, and do not infer cookie purpose
 or validate login flows. Cookie values are not retained in findings/evidence or
 included in validation diagnostics.
 
+[Evidence retrieval](assessments.md#retrieve-evidence) checks project authorization
+before reading evidence. Invalid stored payloads fail the entire request;
+diagnostics contain assessment/evidence IDs, never payloads or validation details.
+
 ## Cleanup and failure
 
 Resources have persisted names and assessment/attempt labels. Cleanup verifies

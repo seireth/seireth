@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -39,3 +40,58 @@ class AssessmentOut(BaseModel):
     plugins: list[str]
     cleanup_pending: bool = False
     result: dict | None = None
+
+
+class HeaderEvidenceData(BaseModel):
+    """Public response evidence; arbitrary stored JSON is never exposed."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
+    url: StoredHttpUrl
+    header: Literal[
+        "x-content-type-options", "content-security-policy", "x-frame-options"
+    ]
+
+
+class CookieEvidenceData(HeaderEvidenceData):
+    header: Literal["set-cookie"]
+    cookie_name: str = Field(min_length=1)
+    secure: bool
+
+
+class SameSiteEvidenceData(CookieEvidenceData):
+    rule: Literal["samesite-none-without-secure"]
+    samesite: Literal["none"]
+
+
+class SecurePrefixEvidenceData(CookieEvidenceData):
+    rule: Literal["secure-prefix"]
+    https: bool
+
+
+class HostPrefixEvidenceData(CookieEvidenceData):
+    rule: Literal["host-prefix"]
+    https: bool
+    domain_present: bool
+    root_path: bool
+
+
+class EvidenceOut(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
+    id: str
+    finding_id: str
+    kind: Literal["http-response"]
+    data: (
+        HeaderEvidenceData
+        | SameSiteEvidenceData
+        | SecurePrefixEvidenceData
+        | HostPrefixEvidenceData
+    )
+
+
+class AssessmentEvidenceOut(BaseModel):
+    assessment_id: str
+    status: AssessmentStatus
+    cleanup_pending: bool
+    evidence: list[EvidenceOut]
