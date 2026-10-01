@@ -1,34 +1,35 @@
 version: 2
 updates:
-  # Github actions
+  # Actions referenced by workflows, including commit-pinned actions.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    labels:
-      - dependencies
-      - github_actions
-  # Python dependencies in pyproject.toml
+
+  # Runtime and development dependencies in pyproject.toml and uv.lock.
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
-    labels:
-      - dependencies
-      - python
-  # API Dockerfile and Docker Compose configuration
+
+  # Application and demo Dockerfiles, including the uv build stage.
   - package-ecosystem: docker
+    directories: [/, /examples/demo-target]
+    schedule:
+      interval: weekly
+    ignore:
+      # Python 3.14 is shared with CI, Ruff, and the sandbox runner.
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
+
+  # Monitor the database, excluding images built locally by Compose.
+  - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
-    labels:
-      - dependencies
-      - docker
-  # Docker image used by the example target
-  - package-ecosystem: docker
-    directory: /examples/demo-target
-    schedule:
-      interval: weekly
-    labels:
-      - dependencies
-      - docker
+    allow:
+      - dependency-name: postgres
+    ignore:
+      # Major database upgrades require a separate data migration plan.
+      - dependency-name: postgres
+        update-types: [version-update:semver-major]

@@ -24,8 +24,11 @@ runner operations; cleanup independently verifies each resource.
 
 ## Privileged and remaining boundaries
 
-The API's Docker socket grants substantial host control. Allowlisting cannot
-protect a compromised API, operator, or daemon. Tags are mutable; containers share
+The API and demo images default to UID/GID 65532. `docker-up` gives the API the
+mounted Docker socket's group as a supplementary group; it never changes socket
+permissions. Application files remain root-owned. The API's Docker socket still
+grants substantial host control. Allowlisting cannot protect a compromised API,
+operator, or daemon. Tags are mutable; containers share
 a kernel and are unsuitable for arbitrary hostile workloads. Scope checks do not
 prove ownership. Multi-user authentication, tenant isolation, and production TLS
 are absent; audit records are not tamper-proof evidence.

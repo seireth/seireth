@@ -2,7 +2,7 @@ name: seireth
 
 services:
   postgres:
-    image: postgres:18
+    image: postgres:18-trixie
     environment:
       POSTGRES_USER: seireth
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -28,6 +28,8 @@ services:
   api:
     image: ${COMPOSE_PROJECT_NAME:-seireth}-app:local
     build: .
+    # docker-up detects the mounted socket's group before starting the API.
+    group_add: ["${SEIRETH_DOCKER_SOCKET_GID:-65532}"]
     healthcheck:
       test: ["CMD", "python", "-m", "app.healthcheck"]
       interval: 2s

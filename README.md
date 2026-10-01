@@ -36,8 +36,9 @@ the API exposes JSON findings, cleanup status, and audit events.
 
 ## Getting started
 
-Follow [Getting started](docs/getting-started.md) for Python 3.14 and PostgreSQL
-setup. The example configuration selects `inmemory`, which simulates responses.
+Follow [Getting started](docs/getting-started.md) for first-time uv/Python 3.14
+setup, daily startup commands, and PostgreSQL preparation. The example configuration
+selects `inmemory`, which simulates responses.
 Real checks require Docker and API access to its privileged socket.
 
 ## Documentation
