@@ -1,7 +1,5 @@
 """End-to-end verification of the public MVP-0 API workflow."""
 
-from __future__ import annotations
-
 import argparse
 import math
 import time

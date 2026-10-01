@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas import AssessmentCreate, ScopeCreate, TargetCreate
+from app.schemas import AssessmentCreate, ProjectCreate, ScopeCreate, TargetCreate
 
 
 @pytest.mark.parametrize("image", [None, "", "a" * 300, "a" * 301])
@@ -32,32 +32,60 @@ def sized_url(length, *, normalized_growth=False):
     return prefix + "a" * (length - len(prefix))
 
 
-def test_persisted_urls_are_bounded_after_normalization():
-    exact = sized_url(500)
-    assert len(str(TargetCreate(project_id="p", name="target", url=exact).url)) == 500
-    assert (
-        len(
-            str(
-                ScopeCreate(
-                    project_id="p",
-                    target_id="t",
-                    allowed_url=exact,
-                    expires_at="2099-01-01T00:00:00Z",
-                ).allowed_url
-            )
-        )
-        == 500
-    )
-    with pytest.raises(ValidationError, match="normalized URL"):
-        TargetCreate(
-            project_id="p",
-            name="target",
-            url=sized_url(500, normalized_growth=True),
-        )
-    with pytest.raises(ValidationError):
-        ScopeCreate(
+@pytest.mark.parametrize(
+    "schema,field,base",
+    [
+        (TargetCreate, "url", {"project_id": "p", "name": "target"}),
+        (
+            ScopeCreate,
+            "allowed_url",
+            {"project_id": "p", "target_id": "t", "expires_at": "2099-01-01T00:00:00Z"},
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "length,growth,accepted",
+    [
+        pytest.param(500, False, True, id="exact-limit"),
+        pytest.param(500, True, False, id="normalization-growth"),
+        pytest.param(501, False, False, id="over-limit"),
+    ],
+)
+def test_persisted_urls_are_bounded_after_normalization(
+    schema, field, base, length, growth, accepted
+):
+    payload = {**base, field: sized_url(length, normalized_growth=growth)}
+    if accepted:
+        assert len(str(getattr(schema(**payload), field))) == 500
+    else:
+        with pytest.raises(ValidationError) as error:
+            schema(**payload)
+        assert error.value.errors()[0]["loc"] == (field,)
+        if growth:
+            assert "normalized URL" in str(error.value)
+
+
+def test_assessment_rejects_unknown_fields():
+    with pytest.raises(ValidationError) as error:
+        AssessmentCreate(
             project_id="p",
             target_id="t",
-            allowed_url=sized_url(501),
-            expires_at="2099-01-01T00:00:00Z",
+            scope_id="s",
+            plugins=["security-headers"],
+            unexpected=True,
         )
+    assert error.value.errors()[0]["type"] == "extra_forbidden"
+    assert error.value.errors()[0]["loc"] == ("unexpected",)
+
+
+@pytest.mark.parametrize(
+    "schema,base", [(ProjectCreate, {}), (TargetCreate, {"project_id": "p"})]
+)
+@pytest.mark.parametrize("length", [200, 201])
+def test_names_respect_storage_limit(schema, base, length):
+    if length == 200:
+        assert schema(name="n" * length, **base).name == "n" * length
+    else:
+        with pytest.raises(ValidationError) as error:
+            schema(name="n" * length, **base)
+        assert error.value.errors()[0]["loc"] == ("name",)

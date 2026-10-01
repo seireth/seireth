@@ -17,10 +17,9 @@ Scopes must match the project/target and registered origin/path, and remain
 unexpired at creation, submission, execution, and retry. Requests use one
 development actor; there is no login flow.
 
-Refresh the catalog when opening an assessment form; submit its IDs rather than
-hardcoding them. It lists registered, reviewed built-ins with stable `id`, `name`,
-and `description`. Selection must be explicit, nonnull, nonempty, and contain
-unique active IDs. See [Plugin development](plugins.md) to add checks.
+Get selectable plugin IDs from `GET /api/v1/plugins`. The catalog lists reviewed
+built-ins with stable `id`, `name`, and `description`. Submit an explicit, nonnull,
+nonempty selection of unique active IDs. See [Plugin development](plugins.md) to add checks.
 
 Submit this body, replacing placeholder IDs with those returned above:
 
@@ -84,9 +83,8 @@ for findings. Example successful response with one finding (illustrative IDs/tim
 ```
 
 `result.plugins` preserves selection order with per-plugin counts; `finding_count`
-is the total. Zero findings does not establish security. Compatibility:
-`0002_plugin_selection` converts legacy `result.plugin` into `result.plugins`;
-older findings retain null remediation.
+is the total. Zero findings does not establish security. Older findings may have
+null remediation.
 
 Execution errors populate `result.error`. Inspect cleanup independently:
 unverified cleanup produces `failed`, even after cancellation. Both responses
@@ -96,14 +94,15 @@ update cleanup fields after execution becomes terminal.
 
 ## Header checks
 
-`security-headers` checks `X-Content-Type-Options: nosniff`, nonblank enforced CSP,
-and framing protection from `X-Frame-Options: DENY` / `SAMEORIGIN` or enforced CSP.
-For CSP framing, the first `frame-ancestors` directive must contain only `'none'`,
-or a nonempty list of `'self'` and/or `http://` / `https://` host sources. Hosts
-allow letters, digits, dots, hyphens, an optional `*.` prefix, and optional numeric
-port. Bare `*`, scheme-only sources, and report-only policies do not qualify.
-These checks neither fully parse/validate CSP, prove policy safety, nor assess
-every response.
+| Check | Accepted values |
+| --- | --- |
+| MIME type protection | `X-Content-Type-Options: nosniff` |
+| Content security policy | A nonblank enforced `Content-Security-Policy` |
+| Framing protection | `X-Frame-Options: DENY` / `SAMEORIGIN`, or an enforced CSP whose first `frame-ancestors` directive uses `'none'` alone or only supported sources, e.g. `'self' https://trusted.test` |
+
+Bare `*`, scheme-only sources, and report-only framing policies do not qualify.
+See the [implementation](../app/plugins/security_headers.py) for exact matching.
+These checks do not fully validate CSP, prove security, or assess every response.
 
 ## Cancellation and audit
 

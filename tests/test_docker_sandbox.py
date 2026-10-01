@@ -34,22 +34,66 @@ def sandbox(make_sandbox):
     return make_sandbox(new_journal())
 
 
-def test_restricted_owned_commands(sandbox, fake_docker):
+@pytest.mark.parametrize("custom_limits", [False, True])
+def test_restricted_owned_commands(sandbox, fake_docker, custom_limits):
+    if custom_limits:
+        sandbox.memory, sandbox.cpus, sandbox.pids_limit = "128m", 0.25, 32
     fake_docker.headers = {"X-Test": "ok"}
     assert sandbox.execute("http://demo-target:8080") == {"X-Test": "ok"}
     calls = fake_docker.calls
     assert "--internal" in calls[0]
+    expected_labels = {
+        "seireth.assessment": sandbox.assessment_id,
+        "seireth.attempt": sandbox.attempt_id,
+    }
+    for args in (calls[0], *(call for call in calls if call[0] == "create")):
+        assert (
+            dict(
+                args[index + 1].split("=", 1)
+                for index, arg in enumerate(args)
+                if arg == "--label"
+            )
+            == expected_labels
+        )
     for args in (call for call in calls if call[0] == "create"):
         for flag in [
             "--read-only",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
             "--user=65532:65532",
-            "--label",
+            f"--memory={'128m' if custom_limits else '256m'}",
+            f"--cpus={0.25 if custom_limits else 0.5}",
+            f"--pids-limit={32 if custom_limits else 64}",
+            "--tmpfs=/tmp:rw,noexec,nosuid,size=16m",
         ]:
             assert flag in args
         assert "--network=host" not in args
         assert "--rm" not in args
+        assert args[args.index("--network") + 1] == sandbox.resources["network"]
+
+
+def test_wrong_host_is_rejected_before_docker_calls(sandbox, fake_docker):
+    with pytest.raises(ValueError, match="outside the registered target"):
+        sandbox.execute("http://other-target:8080/")
+    assert fake_docker.calls == []
+
+
+@pytest.mark.parametrize(
+    "status,output,error",
+    [
+        pytest.param(1, "", RuntimeError, id="nonzero-exit"),
+        pytest.param(0, "not JSON", json.JSONDecodeError, id="malformed-json"),
+        pytest.param(0, "[]", RuntimeError, id="non-object-headers"),
+    ],
+)
+def test_invalid_runner_response_still_allows_cleanup(
+    sandbox, fake_docker, status, output, error
+):
+    fake_docker.runner_status, fake_docker.runner_output = status, output
+    with pytest.raises(error):
+        sandbox.execute("http://demo-target:8080/")
+    assert sandbox.cleanup().verified
+    assert not fake_docker.live
 
 
 def test_daemon_failure_never_means_cleanup_success(sandbox, fake_docker):
@@ -81,21 +125,38 @@ def test_cleanup_of_absent_resources_is_idempotent(sandbox, fake_docker):
 def test_real_subprocess_is_killed_on_interruption(sandbox, monkeypatch, reason):
     original = subprocess.Popen
     processes = []
+    elapsed = 0
 
     def launch(*args, **kwargs):
+        nonlocal elapsed
         process = original(
             [sys.executable, "-c", "import time; time.sleep(30)"], **kwargs
         )
         processes.append(process)
         if reason == "cancel":
             sandbox.context.cancel.set()
+        else:
+            elapsed = 2
         return process
 
-    sandbox.context = ExecutionContext(Event(), Event(), monotonic() + 0.2)
+    monkeypatch.setattr("app.execution.monotonic", lambda: elapsed)
+    sandbox.context = ExecutionContext(Event(), Event(), 1)
     monkeypatch.setattr("app.sandbox.subprocess.Popen", launch)
-    with pytest.raises(Cancelled if reason == "cancel" else TimeoutError):
-        sandbox._run(["version"], 5)
-    assert processes[0].poll() is not None
+    try:
+        with pytest.raises(
+            Cancelled if reason == "cancel" else TimeoutError,
+            match="assessment cancelled"
+            if reason == "cancel"
+            else "assessment deadline exceeded",
+        ):
+            sandbox._run(["version"], 5)
+        assert len(processes) == 1
+        assert processes[0].poll() is not None
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
 
 
 def test_network_created_before_cli_timeout_is_reconciled(sandbox, fake_docker):

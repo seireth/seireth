@@ -24,21 +24,12 @@ Maintainers will validate the report, assess its impact, and coordinate remediat
 
 ## Security-sensitive areas
 
-Security-sensitive changes include:
-
-- Authorization and target-scope validation
-- Sandbox creation, isolation, networking, and cleanup
-- Credential and secret handling
-- Host or container runtime access
-- Project and tenant isolation
-- Evidence, reports, and audit-log integrity
-- Dependency, image, and plugin execution
-
-Changes in these areas must include failure-path tests and fail closed when a security prerequisite cannot be verified.
+Follow the [security-sensitive change requirements](CONTRIBUTING.md#security-sensitive-changes)
+when changing security boundaries or execution behavior.
 
 ## Supported versions
 
 The project is a working MVP-0 targeting Python 3.14. It is intended for local,
 single-operator development; no production release support policy has been
 established. See the [security model](docs/security-model.md) for current controls
-and limitations. Supported releases will be listed here when releases begin.
+and limitations.

@@ -70,3 +70,68 @@ def test_request_timeout_includes_last_response(clock):
 def test_invalid_timeout_is_rejected(value):
     with pytest.raises(argparse.ArgumentTypeError):
         verify.positive_timeout(value)
+
+
+@pytest.mark.parametrize(
+    "failure,message",
+    [
+        ("failed", "assessment did not produce findings"),
+        ("empty", "assessment did not produce findings"),
+        ("cleanup", "sandbox cleanup was not verified"),
+        ("backend", "expected docker backend"),
+        ("audit", "unexpected audit trail"),
+    ],
+)
+def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
+    results = {
+        "status": "failed" if failure == "failed" else "completed",
+        "findings": [] if failure == "empty" else [{"title": "example"}],
+        "result": {
+            "cleanup_verified": failure != "cleanup",
+            "sandbox_backend": "inmemory",
+        },
+    }
+    actions = [
+        "project.created",
+        "target.registered",
+        "scope.authorized",
+        "assessment.queued",
+        "assessment.running",
+        "assessment.completed",
+    ]
+    if failure == "audit":
+        actions = actions[:-1]
+    routes = {
+        ("GET", "/health"): (200, {"status": "ok"}),
+        ("POST", "/api/v1/projects"): (200, {"id": "project-1"}),
+        ("POST", "/api/v1/targets"): (200, {"id": "target-1"}),
+        ("POST", "/api/v1/authorization-scopes"): (200, {"id": "scope-1"}),
+        ("POST", "/api/v1/assessments"): (202, {"id": "assessment-1"}),
+        ("GET", "/api/v1/assessments/assessment-1/results"): (200, results),
+        ("GET", "/api/v1/projects/project-1/audit-events"): (
+            200,
+            [{"action": action} for action in actions],
+        ),
+    }
+    observed = []
+
+    def respond(request):
+        observed.append((request.method, request.url.path))
+        status, body = routes[observed[-1]]
+        return httpx.Response(status, json=body)
+
+    client = httpx.Client
+    monkeypatch.setattr(
+        verify.httpx,
+        "Client",
+        lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    with pytest.raises(RuntimeError, match=message):
+        verify.verify(
+            "http://test",
+            expected_backend="docker" if failure == "backend" else "inmemory",
+        )
+    assert ("GET", "/api/v1/assessments/assessment-1/results") in observed
+    assert (("GET", "/api/v1/projects/project-1/audit-events") in observed) is (
+        failure == "audit"
+    )

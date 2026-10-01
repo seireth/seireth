@@ -1,7 +1,10 @@
 """Explicit disposable PostgreSQL databases; unit tests need no server."""
 
 import os
+from contextlib import ExitStack, contextmanager
+from datetime import timedelta
 from time import monotonic, sleep
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -30,37 +33,109 @@ def pytest_configure(config):
         config.option.basetemp = str(root / f"pytest-{uuid4().hex}")
 
 
-@pytest.fixture
-def database():
+def pytest_collection_modifyitems(items):
+    for item in items:
+        if "database" in item.fixturenames:
+            item.add_marker(pytest.mark.database)
+
+
+@contextmanager
+def disposable_database():
     admin_url = os.environ.get("SEIRETH_TEST_ADMIN_URL")
     if not admin_url:
         pytest.fail(
             "Set SEIRETH_TEST_ADMIN_URL to a disposable PostgreSQL admin connection"
         )
-    admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
-    name = "seireth_test_" + uuid4().hex
-    with admin.connect() as connection:
-        connection.execute(text(f'CREATE DATABASE "{name}"'))
-    url = make_url(admin_url).set(database=name).render_as_string(hide_password=False)
-    from app import db, worker
-    from app.config import settings
-    from app.migration import migrate
+    with ExitStack() as cleanup:
+        admin = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+        cleanup.callback(admin.dispose)
+        name = "seireth_test_" + uuid4().hex
+        with admin.connect() as connection:
+            connection.execute(text(f'CREATE DATABASE "{name}"'))
 
-    old_engine, old_factory, old_url = db.engine, db.SessionLocal, settings.database_url
-    settings.database_url = url
-    db.engine = create_engine(url, pool_pre_ping=True)
-    db.SessionLocal = sessionmaker(db.engine, expire_on_commit=False)
-    try:
+        def drop():
+            with admin.connect() as connection:
+                connection.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
+
+        cleanup.callback(drop)
+        url = (
+            make_url(admin_url).set(database=name).render_as_string(hide_password=False)
+        )
+        from app import db, worker
+        from app.config import settings
+        from app.migration import migrate
+
+        old_engine, old_factory, old_url = (
+            db.engine,
+            db.SessionLocal,
+            settings.database_url,
+        )
+
+        def restore():
+            db.engine, db.SessionLocal = old_engine, old_factory
+            settings.database_url = old_url
+
+        cleanup.callback(restore)
+        settings.database_url = url
+        db.engine = db.create_runtime_engine(url)
+        cleanup.callback(db.engine.dispose)
+        db.SessionLocal = sessionmaker(db.engine, expire_on_commit=False)
+        cleanup.callback(worker.dispatcher.stop)
         migrate()
         yield db
-    finally:
-        worker.dispatcher.stop()
-        db.engine.dispose()
-        db.engine, db.SessionLocal = old_engine, old_factory
-        settings.database_url = old_url
-        with admin.connect() as connection:
-            connection.execute(text(f'DROP DATABASE "{name}" WITH (FORCE)'))
-        admin.dispose()
+
+
+@pytest.fixture
+def database_context():
+    return disposable_database
+
+
+@pytest.fixture
+def database(database_context):
+    with database_context() as db:
+        yield db
+
+
+@pytest.fixture
+def assessment_graph(database):
+    from app import models
+    from app.config import settings
+
+    def make(*, owner="local-development", plugins=None, status="queued"):
+        with database.SessionLocal() as db:
+            project = models.Project(name="test project", owner_actor=owner)
+            db.add(project)
+            db.flush()
+            target = models.Target(
+                project_id=project.id,
+                name="demo",
+                image=settings.docker_target_image,
+                url="http://demo-target:8080/",
+            )
+            db.add(target)
+            db.flush()
+            scope = models.AuthorizationScope(
+                project_id=project.id,
+                target_id=target.id,
+                allowed_url=target.url,
+                expires_at=models.now() + timedelta(minutes=5),
+            )
+            db.add(scope)
+            db.flush()
+            assessment = models.Assessment(
+                project_id=project.id,
+                target_id=target.id,
+                scope_id=scope.id,
+                plugins=["security-headers"] if plugins is None else plugins,
+                status=status,
+            )
+            db.add(assessment)
+            db.commit()
+            return SimpleNamespace(
+                project=project, target=target, scope=scope, assessment=assessment
+            )
+
+    return make
 
 
 @pytest.fixture
@@ -69,7 +144,17 @@ def fake_docker(monkeypatch):
 
     daemon = FakeDocker()
     daemon.install(monkeypatch)
-    return daemon
+    yield daemon
+    assert not daemon.unsupported_calls, daemon.unsupported_calls
+
+
+@pytest.fixture
+def execution_context():
+    from threading import Event
+
+    from app.execution import ExecutionContext
+
+    return ExecutionContext(Event(), Event(), monotonic() + 5)
 
 
 @pytest.fixture

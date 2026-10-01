@@ -22,14 +22,22 @@ URL-safe credentials without unescaped URL delimiters.
 | `SEIRETH_ASSESSMENT_TIMEOUT_SECONDS` | 60; positive finite execution timeout |
 | `SEIRETH_DOCKER_RUNNER_IMAGE` | `python:3.14-slim`; operator-controlled |
 | `SEIRETH_DOCKER_MEMORY`, `SEIRETH_DOCKER_CPUS`, `SEIRETH_DOCKER_PIDS_LIMIT` | `256m`, `0.5`, `64` |
-| `SEIRETH_DOCKER_TIMEOUT_SECONDS` | 15; positive finite command timeout |
+| `SEIRETH_DOCKER_TIMEOUT_SECONDS` | 15; positive finite base command timeout |
 
 Registration and every execution/retry enforce the image allowlist, including
 simulated registration. Removing an image blocks future execution, not active
 runs. Prefer immutable digests; allowlisting does not establish safety.
 
-The execution deadline is the earlier of timeout and scope expiry. Cleanup uses
-separate bounded Docker command timeouts and can continue after expiry.
+## Timeouts
+
+The execution deadline is the earlier of the assessment timeout and scope expiry.
+Checks are cooperative: Docker operations check interruption, but synchronous
+Python analyzers cannot be forcibly preempted and are checked between calls.
+
+Docker header fetching has a fixed five-second budget. Resource creation and
+runner attachment use `max(configured command timeout, fetch budget + 5 seconds)`;
+target startup and cleanup use the configured command timeout. Cleanup can
+continue after the assessment deadline.
 
 ## Compose overrides
 
@@ -42,9 +50,9 @@ The API publishes the configured host/port; its listener and health probe stay o
 published on `127.0.0.1:5432`, with its named volume at `/var/lib/postgresql`.
 The API and temporary migration job share one application image.
 
-`docker-up --api-ready-timeout-seconds` excludes build/migration time. Migrations
-have separate connection (5s), lock (30s), and statement (300s) limits; normal API
-query limits are unchanged.
+`docker-up --api-ready-timeout-seconds` excludes build/migration time. Runtime
+database connection and statement timeouts are five seconds. Migrations have
+separate connection (5s), lock (30s), and statement (300s) limits.
 
 Tests require an explicit `SEIRETH_TEST_ADMIN_URL` for disposable databases;
 see [Contributing](../CONTRIBUTING.md#tests).
