@@ -65,7 +65,7 @@ jobs:
       - *setup-uv
       - &prepare-ci-env
         name: Generate disposable database credentials
-        run: python .github/scripts/prepare_ci_env.py
+        run: python .github/scripts/prepare_ci_env.py >> "$GITHUB_ENV"
       - run: uv sync --locked --extra test
       - name: Start PostgreSQL
         run: docker compose up --wait --wait-timeout 60 postgres
