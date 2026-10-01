@@ -33,7 +33,7 @@ flowchart LR
 
 Requests are bounded by project, target, origin, path, expiry, and an operator
 image allowlist. Docker provides a private network, restricted target, and runner;
-the API exposes JSON findings, cleanup status, and audit events.
+the API exposes JSON findings, evidence, cleanup status, and audit events.
 
 ## Getting started
 
