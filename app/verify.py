@@ -1,4 +1,4 @@
-"""End-to-end verification of the public MVP-0 API workflow."""
+"""End-to-end verification of the public MVP API workflow."""
 
 import argparse
 import math
@@ -60,14 +60,14 @@ def wait_for_results(
 def verify(
     base_url: str, timeout_seconds: float = 120, expected_backend: str | None = None
 ) -> dict:
-    """Run the complete reachable MVP-0 workflow against a running API."""
+    """Run the complete reachable MVP workflow against a running API."""
 
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout must be finite and greater than zero")
     with httpx.Client(base_url=base_url, timeout=10) as client:
         require(client.get("/health"), 200)
         project = require(
-            client.post("/api/v1/projects", json={"name": "MVP-0 verification"}),
+            client.post("/api/v1/projects", json={"name": "MVP verification"}),
             200,
         )
         target = require(
