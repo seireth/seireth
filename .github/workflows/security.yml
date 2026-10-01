@@ -31,7 +31,7 @@ jobs:
           python-version: "3.14"
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
-          version: "0.12.9"
+          version: "0.12.21"
       - name: Install audit tools and export locked runtime dependencies
         run: |
           uv sync --locked --extra security
