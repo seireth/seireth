@@ -12,18 +12,17 @@ SCRIPT = Path(__file__).resolve().parents[1] / ".github/scripts/prepare_ci_env.p
 
 
 @pytest.mark.parametrize("github_env", [None, "../outside.env"])
-def test_prepare_ci_env_emits_credentials_without_opening_github_env(
-    tmp_path, github_env
+@pytest.mark.parametrize("existing_config", [False, True])
+def test_prepare_ci_env_emits_credentials_without_file_access(
+    tmp_path, github_env, existing_config
 ):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / ".env.example").write_text(
-        "# Preserve configuration\n"
-        "SEIRETH_API_PORT=8000\n"
-        "POSTGRES_PASSWORD=old-password\n"
-        "SEIRETH_DATABASE_URL=old-url\n",
-        encoding="utf-8",
-    )
+    # Invalid UTF-8 proves credential generation does not read either file.
+    original_config = b"\xffexisting configuration\n"
+    if existing_config:
+        for name in (".env.example", ".env"):
+            (workspace / name).write_bytes(original_config)
     outside = tmp_path / "outside.env"
     outside.write_text("existing content\n", encoding="utf-8")
     environment = os.environ.copy()
@@ -46,13 +45,13 @@ def test_prepare_ci_env_emits_credentials_without_opening_github_env(
     base_url = f"postgresql+psycopg://seireth:{password}@127.0.0.1:5432"
     assert exported == {
         "POSTGRES_PASSWORD": password,
+        "SEIRETH_DATABASE_URL": f"{base_url}/seireth",
         "SEIRETH_TEST_ADMIN_URL": f"{base_url}/postgres",
     }
     assert result.stderr == f"::add-mask::{password}\n"
-    assert (workspace / ".env").read_text(encoding="utf-8") == (
-        "# Preserve configuration\n"
-        "SEIRETH_API_PORT=8000\n"
-        f"POSTGRES_PASSWORD={password}\n"
-        f"SEIRETH_DATABASE_URL={base_url}/seireth\n"
-    )
+    if existing_config:
+        for name in (".env.example", ".env"):
+            assert (workspace / name).read_bytes() == original_config
+    else:
+        assert not list(workspace.iterdir())
     assert outside.read_text(encoding="utf-8") == "existing content\n"
