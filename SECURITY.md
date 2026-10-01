@@ -29,7 +29,7 @@ when changing security boundaries or execution behavior.
 
 ## Supported versions
 
-The project is a working MVP-0 targeting Python 3.14. It is intended for local,
+The project is a working MVP targeting Python 3.14. It is intended for local,
 single-operator development; no production release support policy has been
 established. See the [security model](docs/security-model.md) for current controls
 and limitations.
