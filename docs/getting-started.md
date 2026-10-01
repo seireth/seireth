@@ -1,78 +1,128 @@
 # Getting started
 
-## Prerequisites and setup
+Run commands from the repository root. Start Docker Desktop/Engine with Linux
+containers. Choose the setup section for your OS; uv uses Python 3.14 (downloading
+it if needed) and installs dependencies in `.venv`. Stop if a command fails.
 
-Use Python 3.14 and PostgreSQL 18. Docker Desktop/Engine can host PostgreSQL and
-is required for real assessments. Run commands from the repository root.
+## Windows PowerShell
+
+### First-time setup
+
+Install uv once per computer; skip if `uv --version` already reports 0.12.9:
 
 ```powershell
-# Windows PowerShell
-py -3.14 -m venv .venv
+$installer = Invoke-RestMethod 'https://astral.sh/uv/0.12.9/install.ps1'
+Invoke-Expression $installer
+```
+
+Open a new terminal, return to the repository, then run:
+
+```powershell
+uv sync --locked --python 3.14
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 .\.venv\Scripts\Activate.ps1
-Copy-Item .env.example .env
-```
-
-```bash
-# macOS / Linux
-python3.14 -m venv .venv
-source .venv/bin/activate
-cp .env.example .env
-```
-
-## Simulated assessment
-
-The example selects `inmemory`: no host is assessed, but PostgreSQL remains required.
-
-```bash
-python -m pip install -e .
 docker compose up -d --wait postgres
 python -m app migrate
 python -m app serve
 ```
 
-For **native PostgreSQL without Docker**, create a Seireth database and login,
-set `SEIRETH_DATABASE_URL` in `.env` to their `postgresql+psycopg://` connection URL,
-and skip the Compose command. Keep `SEIRETH_SANDBOX_BACKEND=inmemory`.
+### Starting again later
 
-The example API address is http://127.0.0.1:8000; open `/docs` for interactive
-schemas. In a second activated terminal:
+```powershell
+.\.venv\Scripts\Activate.ps1
+docker compose up -d --wait postgres
+python -m app serve
+```
+
+## macOS / Linux (Bash or Zsh)
+
+### First-time setup
+
+Install uv once per computer; skip if `uv --version` already reports 0.12.9:
+
+```bash
+curl -LsSf https://astral.sh/uv/0.12.9/install.sh | sh
+```
+
+Open a new terminal, return to the repository, then run:
+
+```bash
+uv sync --locked --python 3.14
+test -f .env || cp .env.example .env
+source .venv/bin/activate
+docker compose up -d --wait postgres
+python -m app migrate
+python -m app serve
+```
+
+### Starting again later
+
+```bash
+source .venv/bin/activate
+docker compose up -d --wait postgres
+python -m app serve
+```
+
+## Simulated assessment
+
+`serve` stays running in the terminal. With the example `.env`, open
+http://127.0.0.1:8000/docs. It uses simulated responses (`inmemory`) and PostgreSQL.
+The setup copy preserves an existing `.env`; customized settings may differ.
+
+In a **second terminal**, return to the repository and activate `.venv` using
+`.\.venv\Scripts\Activate.ps1` (Windows) or `source .venv/bin/activate` (macOS/Linux).
+Then run:
 
 ```bash
 python -m app verify --expected-backend inmemory
 ```
 
-[Verification](../app/verify.py) checks registration, authorization, execution,
-findings, cleanup, and audit ordering. `--expected-backend` asserts the backend;
-it does not select it. See [Assessments](assessments.md) for individual requests.
+Stop the API with Ctrl+C. `docker compose down` stops the database and retains its
+volume. See [Assessments](assessments.md) for individual requests.
 
 ## Real Docker assessment
 
-Stop the native API with Ctrl+C to free its port and dispatcher lock, then run:
+Stop the native API with Ctrl+C first. In an activated terminal, prepare the demo
+and runner images once (rebuild the demo after changing its source):
 
 ```bash
 docker build -t seireth/demo-target:local examples/demo-target
 docker pull python:3.14-slim
-python -m app docker-up
-python -m app verify --expected-backend docker --timeout-seconds 120
 ```
 
-`docker-up` builds, stops any Compose API, waits for PostgreSQL, runs a temporary
-migration container with `--rm`, then starts the API only on success and waits for
-HTTP 200 from `/health`. Plain `docker compose up` does not migrate.
+Then start and verify the Docker stack:
 
-Readiness defaults to 120 seconds after build/migration. Override with
-`python -m app docker-up --api-ready-timeout-seconds 180`; fractional seconds round up.
-See [Configuration](configuration.md) for overrides and migration timeouts.
+```bash
+python -m app docker-up
+python -m app verify --expected-backend docker
+```
 
-Stop with `docker compose down`; the PostgreSQL volume is retained.
+`docker-up` builds the API, detects the Docker socket group for its non-root user,
+waits for PostgreSQL, applies migrations, and waits for API health. Compose selects
+the Docker backend; `--expected-backend` only checks results. Use `docker-up` for
+startup: plain `docker compose up` skips migrations and socket-group detection.
+Stop with `docker compose down`
+before returning to native startup; this retains the database volume.
+
+## After pulling changes
+
+Stop the API first. If dependencies changed, run `uv sync --locked --python 3.14`.
+If migrations changed, start PostgreSQL and run `python -m app migrate` before
+native startup. `docker-up` handles migrations for Docker startup.
+Contributors should use `--all-extras` for setup and updates; see
+[Contributing](../CONTRIBUTING.md) for tests, audits, and dependency updates.
 
 ## Troubleshooting
 
-- Startup failure returns nonzero and leaves containers for inspection:
-  `docker compose ps -a` and `docker compose logs api`.
-- PostgreSQL unavailable: check `docker compose ps` and `docker compose logs postgres`.
-- Dispatcher ownership refused: stop the existing API; never force-unlock a live dispatcher.
-- Sandbox failure: inspect assessment labels and logs using the
-  [cleanup procedure](security-model.md#cleanup-and-failure).
+- **uv not found:** reopen the terminal or its hosting app. For this PowerShell
+  session, try `$env:Path = "$HOME\.local\bin;$env:Path"`. On macOS/Linux, try
+  `source "$HOME/.local/bin/env"` if that file was created by the installer.
+- **Activation blocked:** replace `python` with `.\.venv\Scripts\python.exe` on
+  Windows or `./.venv/bin/python` on macOS/Linux in the commands above.
+- **Docker/startup failure:** check `docker info`, `docker compose ps -a`, and
+  `docker compose logs postgres api`. Stop any other Seireth API using the same
+  database or port; never force-unlock a live dispatcher.
 
-For tests and schema changes, see [Contributing](../CONTRIBUTING.md).
+For native PostgreSQL, set its `postgresql+psycopg://` URL in `.env` and skip Compose
+database commands. See [Configuration](configuration.md) for settings/timeouts and
+[Security model](security-model.md#cleanup-and-failure) for sandbox cleanup failures.

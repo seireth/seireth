@@ -19,16 +19,16 @@ Changes affecting authorization, sandboxing/network restrictions, cleanup, secre
 authentication, project isolation, evidence, or audit events should include
 failure-path tests and explain how boundaries remain intact. Add tests for behavior
 changes, handle authorization/cleanup/audit failures explicitly, and never weaken
-secure defaults to pass checks. Keep generated files, databases, credentials,
-and build output out of commits.
+secure defaults to pass checks. Keep databases, credentials, and build output out
+of commits. Commit the generated dependency lock alongside its manifest.
 
 ## Development setup
 
-Follow [setup](docs/getting-started.md), then install tools in the activated
-Python 3.14 environment. Use `python -m ...` for the same interpreter across platforms.
+Follow [setup and activation](docs/getting-started.md), then synchronize the development extras.
+Activate once per terminal; all Python commands below use that environment.
 
 ```bash
-python -m pip install -e ".[test,quality,security]"
+uv sync --locked --python 3.14 --all-extras
 python -m ruff check .
 python -m ruff format --check .
 ```
@@ -59,13 +59,14 @@ export SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.
 python -m app test
 ```
 
-`python -m pytest` is equivalent. CI runs unit/API tests and the Ruff checks above.
+`python -m pytest` is equivalent. CI runs unit/API tests and
+the Ruff checks above.
 Windows defaults to a fresh `build/pytest-<unique-id>` per run to avoid shared-temp
 permission errors; `--basetemp` overrides it. Artifacts remain in ignored `build/`.
 Pure tests need no PostgreSQL:
 
 ```bash
-python -m pytest tests/test_scope_urls.py tests/test_verify.py tests/test_docker_sandbox.py
+python -m pytest tests/test_policy.py tests/test_verify.py tests/test_docker_sandbox.py
 ```
 
 For sandbox changes, run the [Docker walkthrough](docs/getting-started.md#real-docker-assessment),
@@ -76,12 +77,12 @@ briefly delays responses for cancellation/crash-recovery tests.
 ```powershell
 # PowerShell, with SEIRETH_TEST_ADMIN_URL already set
 $env:SEIRETH_DOCKER_TESTS='1'
-python -m pytest tests/test_api_process.py
+python -m pytest tests/test_api_lifecycle.py
 ```
 
 ```bash
 # macOS / Linux, with SEIRETH_TEST_ADMIN_URL already set
-SEIRETH_DOCKER_TESTS=1 python -m pytest tests/test_api_process.py
+SEIRETH_DOCKER_TESTS=1 python -m pytest tests/test_api_lifecycle.py
 ```
 
 CI uses a disposable Docker daemon and uploads verification output and diagnostic logs.
@@ -93,8 +94,31 @@ python -m pip_audit --skip-editable
 ```
 
 This audits installed development dependencies. The security workflow separately
-resolves runtime dependencies, excluding test/audit tools. It runs on PRs, pushes
-to `main`, weekly, and on demand; audit errors and known vulnerabilities fail it.
+exports runtime dependencies from `uv.lock`, excluding test/audit tools. It runs
+on PRs, pushes to `main`, weekly, and on demand; audit errors and known
+vulnerabilities fail it.
+
+## Updating dependencies
+
+`uv.lock` is committed and shared by development, CI, and Docker. Installs use
+`--locked` and fail if the manifest and lock disagree. Third-party source builds
+are disabled; missing wheels are errors, not a reason to bypass that policy.
+The trusted Seireth package is still built with the exactly pinned setuptools backend.
+
+After pulling dependency changes, run `uv sync --locked --all-extras`; runtime-only
+sync can remove development tools. Direct Python commands do not synchronize.
+
+After changing dependency declarations, run `uv lock`. For deliberate upgrades,
+run `uv lock --upgrade-package PACKAGE` (or `uv lock --upgrade` for a full refresh),
+then `uv sync --locked --all-extras`, checks, and the dependency audit. Commit the
+manifest and lock together. Dependabot checks Python dependencies, Actions,
+Dockerfiles, and the Compose PostgreSQL image weekly. Python minor/major and
+PostgreSQL major upgrades are planned separately; local Compose images are excluded.
+Dependabot supplies its standard dependency and ecosystem labels automatically.
+
+Keep the exact uv version in the project configuration, both workflows, Dockerfile,
+and setup instructions aligned when upgrading uv. No exported requirements file
+is committed: the security workflow creates its runtime-only export temporarily.
 
 ## Schema changes
 

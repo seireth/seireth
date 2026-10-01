@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import os
 import subprocess
 import sys
 
@@ -15,6 +16,7 @@ def run(command: list[str]) -> int:
 
 
 def _docker_up(timeout_seconds: float) -> int:
+    compose_env = os.environ.copy()
     for stage, command in (
         ("build", ["build", "api"]),
         ("stop API", ["stop", "api"]),
@@ -34,8 +36,32 @@ def _docker_up(timeout_seconds: float) -> int:
         ),
     ):
         try:
-            status = subprocess.call(["docker", "compose", *command])
-        except OSError as error:
+            status = subprocess.call(["docker", "compose", *command], env=compose_env)
+            if stage == "build" and not status:
+                stage = "Docker socket permissions"
+                socket_group = subprocess.check_output(
+                    [
+                        "docker",
+                        "compose",
+                        "run",
+                        "--rm",
+                        "--no-deps",
+                        "-T",
+                        "--volume",
+                        "/var/run/docker.sock:/var/run/docker.sock",
+                        "migrate",
+                        "stat",
+                        "-c",
+                        "%g",
+                        "/var/run/docker.sock",
+                    ],
+                    env=compose_env,
+                    text=True,
+                ).strip()
+                if not socket_group.isascii() or not socket_group.isdecimal():
+                    raise ValueError("Docker socket group must be a numeric GID")
+                compose_env["SEIRETH_DOCKER_SOCKET_GID"] = socket_group
+        except (OSError, subprocess.CalledProcessError, ValueError) as error:
             print(f"docker-up failed during {stage}: {error}", file=sys.stderr)
             return 1
         if status:
