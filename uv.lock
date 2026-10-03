@@ -857,7 +857,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.18,<2" },
-    { name = "fastapi", specifier = ">=0.110" },
+    { name = "fastapi", specifier = ">=0.141.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx2", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "pip-audit", marker = "extra == 'security'", specifier = ">=2.9,<3" },

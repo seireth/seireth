@@ -56,3 +56,10 @@ separate connection (5s), lock (30s), and statement (300s) limits.
 
 Tests require an explicit `SEIRETH_TEST_ADMIN_URL` for disposable databases;
 see [Contributing](../CONTRIBUTING.md#tests).
+
+## GUI development
+
+| Setting | Default / meaning |
+| --- | --- |
+| `SEIRETH_UI_API_URL` | `http://127.0.0.1:8000`; API address for Vite's development proxy |
+| `SEIRETH_UI_URL` | `http://127.0.0.1:8000`; deployment address for Playwright tests |

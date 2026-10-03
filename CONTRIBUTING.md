@@ -47,6 +47,12 @@ python -m ruff format .
 
 ## Tests
 
+Backend tests mirror application modules: API resource tests live in `tests/api/`,
+plugin tests in `tests/plugins/`, and application startup/serving tests in
+`tests/test_main.py`. Process lifecycle tests live in `tests/integration/`.
+Shared fixtures stay in `tests/conftest.py`; HTTP-specific fixtures live in
+`tests/api/conftest.py`.
+
 Tests set their own environment. Each database-backed test creates and drops only
 its uniquely named database. Explicitly configure `SEIRETH_TEST_ADMIN_URL` with
 create-database permissions on a local/disposable PostgreSQL server, never an
@@ -87,20 +93,65 @@ briefly delays responses for cancellation/crash-recovery tests.
 ```powershell
 # PowerShell, with SEIRETH_TEST_ADMIN_URL already set
 $env:SEIRETH_DOCKER_TESTS='1'
-python -m pytest -m docker tests/test_api_process_lifecycle.py
+python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 ```
 
 ```bash
 # macOS / Linux, with SEIRETH_TEST_ADMIN_URL already set
-SEIRETH_DOCKER_TESTS=1 python -m pytest -m docker tests/test_api_process_lifecycle.py
+SEIRETH_DOCKER_TESTS=1 python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 ```
 
 CI uses a disposable Docker daemon and uploads verification output and diagnostic logs.
+
+## Frontend checks
+
+Follow the [Node/npm setup](docs/getting-started.md), then run:
+
+```bash
+npm --prefix app/web ci
+npm --prefix app/web run lint
+npm --prefix app/web run typecheck
+npm --prefix app/web test
+npm --prefix app/web run build
+```
+
+For browser coverage, start the
+[Docker stack](docs/getting-started.md#real-docker-assessment), then:
+
+```bash
+npm --prefix app/web exec -- playwright install chromium
+npm --prefix app/web run test:e2e
+```
+
+Set [`SEIRETH_UI_URL`](docs/configuration.md#gui-development) for a nondefault API address.
+The suite creates synthetic records and verifies six `/cookies` findings, linked
+evidence, redaction, and Docker cleanup. Failure traces and screenshots are in
+`app/web/test-results/`. On Linux, add `--with-deps` to the browser installation
+command to install Chromium's system dependencies, as CI does.
+
+Build frontend assets before packaging. Clear setuptools' staging directory so
+hashed assets from earlier builds cannot enter the wheel:
+
+```powershell
+# Windows, from the repository root
+if (Test-Path build/lib) { Remove-Item -LiteralPath build/lib -Recurse -Force }
+uv build --wheel
+```
+
+```bash
+# macOS / Linux, from the repository root
+rm -rf build/lib
+uv build --wheel
+```
+
+Commit `package-lock.json` with dependency changes; keep generated assets,
+`node_modules/`, and browser artifacts untracked.
 
 ## Dependency audit
 
 ```bash
 python -m pip_audit --skip-editable
+npm --prefix app/web audit
 ```
 
 This audits installed development dependencies. The [security workflow](.github/workflows/security.yml)

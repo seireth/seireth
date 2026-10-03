@@ -54,6 +54,21 @@ def test_scope_rejects_unbounded_urls(candidate, registered):
     assert not bounded_url(candidate, registered)
 
 
+@pytest.mark.parametrize("scheme,default_port", [("http", 80), ("https", 443)])
+@pytest.mark.parametrize("explicit_default", [False, True])
+@pytest.mark.parametrize("zero_port_side", ["candidate", "registered"])
+def test_scope_distinguishes_zero_port_from_default(
+    scheme, default_port, explicit_default, zero_port_side
+):
+    zero = f"{scheme}://example.test:0/app"
+    suffix = f":{default_port}" if explicit_default else ""
+    default = f"{scheme}://example.test{suffix}/app"
+    candidate, registered = (
+        (zero, default) if zero_port_side == "candidate" else (default, zero)
+    )
+    assert not bounded_url(candidate, registered)
+
+
 @pytest.mark.parametrize(
     "unsafe",
     [

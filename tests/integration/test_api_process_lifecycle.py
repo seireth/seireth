@@ -74,7 +74,7 @@ def api_process(database, tmp_path, request, wait_until):
                     sys.executable,
                     "-m",
                     "uvicorn",
-                    "app.api:app",
+                    "app.main:app",
                     "--host",
                     "127.0.0.1",
                     "--port",

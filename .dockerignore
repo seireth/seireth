@@ -1,10 +1,29 @@
-.git
-.venv
+# Version control & editors
+**/.git
+**/.vscode
+
+# Python
+**/.venv
 **/__pycache__
-*.egg-info
-.env*
-*.db
-.pytest_cache
-.ruff_cache
-build
-dist
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+
+# Build output
+**/build
+**/dist
+
+# Frontend
+**/node_modules
+**/*.tsbuildinfo
+
+# Browser test output
+**/playwright-report
+**/test-results
+
+# Local databases
+**/*.db
+
+# Environment files
+**/.env*

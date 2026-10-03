@@ -113,7 +113,7 @@ def main() -> int:
         return run(
             [
                 "uvicorn",
-                "app.api:app",
+                "app.main:app",
                 "--reload",
                 "--host",
                 args.host if args.host is not None else settings.api_host,

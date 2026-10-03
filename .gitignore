@@ -1,32 +1,29 @@
-#############################
-# Repository ignore strategy
-#############################
-
-# Global rules live here.
-# Prefer short, commented sections.
-
-#############################
 # Editors & IDEs
-#############################
-
 .vscode/
 
-############################
-# Python runtime artifacts
-############################
-
-*.db
-*.egg-info/
+# Python
 .venv/
 __pycache__/
+*.py[cod]
+*.egg-info/
 .pytest_cache/
 .ruff_cache/
+
+# Build output
 build/
 dist/
 
-############################
-# Environment files
-############################
+# Frontend
+node_modules/
+*.tsbuildinfo
 
+# Browser test output
+playwright-report/
+test-results/
+
+# Local databases
+*.db
+
+# Environment files
 .env*
 !.env.example

@@ -1,7 +1,7 @@
 """Authorization rules shared by API admission, execution, and recovery."""
 
 from datetime import datetime, timezone
-from urllib.parse import unquote, urlsplit
+from urllib.parse import SplitResult, unquote, urlsplit
 
 ACTOR = "local-development"
 
@@ -16,6 +16,15 @@ def unexpired(value: datetime) -> bool:
     return value > datetime.now(timezone.utc)
 
 
+def http_origin(url: SplitResult) -> tuple[str, str | None, int]:
+    port = url.port
+    return (
+        url.scheme,
+        url.hostname,
+        port if port is not None else (443 if url.scheme == "https" else 80),
+    )
+
+
 def bounded_url(candidate: str, registered: str) -> bool:
     left, right = urlsplit(candidate), urlsplit(registered)
     for url in (left, right):
@@ -28,15 +37,8 @@ def bounded_url(candidate: str, registered: str) -> bool:
         ):
             return False
 
-    def origin(url):
-        return (
-            url.scheme,
-            url.hostname.lower(),
-            url.port or (443 if url.scheme == "https" else 80),
-        )
-
     try:
-        if origin(left) != origin(right):
+        if http_origin(left) != http_origin(right):
             return False
     except ValueError:
         return False

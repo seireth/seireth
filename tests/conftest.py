@@ -140,7 +140,7 @@ def assessment_graph(database):
 
 @pytest.fixture
 def fake_docker(monkeypatch):
-    from fake_docker import FakeDocker
+    from tests.fake_docker import FakeDocker
 
     daemon = FakeDocker()
     daemon.install(monkeypatch)
@@ -201,3 +201,13 @@ def make_plugin():
         )
 
     return make
+
+
+@pytest.fixture
+def client(database):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as test_client:
+        yield test_client
