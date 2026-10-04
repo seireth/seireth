@@ -68,8 +68,8 @@ jobs:
           node-version: "24.16.0"
           cache: npm
           cache-dependency-path: app/web/package-lock.json
-      - run: npm install --global npm@11.13.0
-      - run: npm ci
+      - run: npm install --global --ignore-scripts npm@11.13.0
+      - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
@@ -128,9 +128,9 @@ jobs:
       - *setup-node
       - name: Prepare browser tests
         run: |
-          npm install --global npm@11.13.0
-          npm --prefix app/web ci
-          npm --prefix app/web exec -- playwright install --with-deps chromium
+          npm install --global --ignore-scripts npm@11.13.0
+          npm --prefix app/web ci --ignore-scripts
+          npm --prefix app/web exec --ignore-scripts -- playwright install --with-deps chromium
       - name: Prepare runtime and images
         run: |
           uv sync --locked --extra test --no-editable

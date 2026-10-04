@@ -84,7 +84,7 @@ export default function ScopeForm({
         start an assessment.
       </p>
       <ErrorMessage error={create.error} />
-      <button disabled={create.isPending || invalidExpiry}>
+      <button type="submit" disabled={create.isPending || invalidExpiry}>
         {create.isPending ? "Authorizing…" : "Create authorization scope"}
       </button>
     </form>

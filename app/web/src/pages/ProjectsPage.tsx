@@ -54,7 +54,7 @@ export default function ProjectsPage() {
             />
             <FieldError error={create.error} name="name" />
           </label>
-          <button disabled={create.isPending || !name.trim()}>
+          <button type="submit" disabled={create.isPending || !name.trim()}>
             {create.isPending ? "Creating…" : "Create project"}
           </button>
         </form>

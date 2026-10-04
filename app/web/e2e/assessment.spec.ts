@@ -28,7 +28,10 @@ test("creates, refreshes, and retrieves a real cookie assessment with verified c
     .getByRole("button", { name: "Create authorization scope", exact: true })
     .click();
   await page.getByRole("checkbox", { name: /HTTP security headers/ }).check();
-  await page.getByRole("checkbox", { name: /HTTP cookie security/ }).check();
+  await page.locator("label").filter({ hasText: "HTTP cookie security" }).click();
+  await expect(
+    page.getByRole("checkbox", { name: /HTTP cookie security/ }),
+  ).toBeChecked();
   await page
     .getByRole("button", { name: "Run assessment", exact: true })
     .click();

@@ -244,7 +244,7 @@ export default function NewAssessmentPage() {
                 }
               />
               <span>
-                <strong>{plugin.name}</strong>
+                {plugin.name}
                 <small>{plugin.description}</small>
               </span>
             </label>

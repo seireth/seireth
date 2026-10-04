@@ -85,7 +85,10 @@ export default function TargetForm({
         }}
       />
       <ErrorMessage error={create.error} />
-      <button disabled={create.isPending || !runtime.data || !name.trim()}>
+      <button
+        type="submit"
+        disabled={create.isPending || !runtime.data || !name.trim()}
+      >
         {create.isPending ? "Registering…" : "Register target"}
       </button>
     </form>

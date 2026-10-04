@@ -8,8 +8,8 @@ For the native GUI, install Node **24.16.0** and npm **11.13.0**, then build onc
 before starting the API:
 
 ```bash
-npm install --global npm@11.13.0
-npm --prefix app/web ci
+npm install --global --ignore-scripts npm@11.13.0
+npm --prefix app/web ci --ignore-scripts
 npm --prefix app/web run build
 ```
 
@@ -133,14 +133,15 @@ native startup. `docker-up` handles migrations for Docker startup.
 Contributors should use `--all-extras` for setup and updates; see
 [Contributing](../CONTRIBUTING.md) for tests, audits, and dependency updates.
 After frontend changes, run `npm --prefix app/web run build` for native startup,
-or `docker-up` for Docker. Run `npm --prefix app/web ci` when the lockfile changes.
+or `docker-up` for Docker. Run `npm --prefix app/web ci --ignore-scripts` when
+the lockfile changes.
 
 ## Frontend development
 
 Keep the native API running in one terminal. In another:
 
 ```bash
-npm --prefix app/web ci
+npm --prefix app/web ci --ignore-scripts
 npm --prefix app/web run dev
 ```
 

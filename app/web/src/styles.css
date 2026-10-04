@@ -477,11 +477,13 @@ td small {
   flex-shrink: 0;
   accent-color: var(--accent);
 }
-.plugin-choice strong {
+.plugin-choice > span {
   font-size: 14px;
+  font-weight: 700;
 }
 .plugin-choice small {
   margin-top: 5px;
+  font-weight: 400;
 }
 .submit-bar {
   display: flex;

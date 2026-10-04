@@ -108,7 +108,7 @@ CI uses a disposable Docker daemon and uploads verification output and diagnosti
 Follow the [Node/npm setup](docs/getting-started.md), then run:
 
 ```bash
-npm --prefix app/web ci
+npm --prefix app/web ci --ignore-scripts
 npm --prefix app/web run lint
 npm --prefix app/web run typecheck
 npm --prefix app/web test
@@ -119,7 +119,7 @@ For browser coverage, start the
 [Docker stack](docs/getting-started.md#real-docker-assessment), then:
 
 ```bash
-npm --prefix app/web exec -- playwright install chromium
+npm --prefix app/web exec --ignore-scripts -- playwright install chromium
 npm --prefix app/web run test:e2e
 ```
 
@@ -146,6 +146,10 @@ uv build --wheel
 
 Commit `package-lock.json` with dependency changes; keep generated assets,
 `node_modules/`, and browser artifacts untracked.
+
+Dependency installation disables package lifecycle scripts in local setup, CI,
+and Docker. Run the project's build/test commands and Playwright browser
+installation explicitly; do not re-enable dependency install hooks.
 
 ## Dependency audit
 

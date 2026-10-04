@@ -31,8 +31,8 @@ jobs:
           node-version: "24.16.0"
           cache: npm
           cache-dependency-path: app/web/package-lock.json
-      - run: npm install --global npm@11.13.0
-      - run: npm --prefix app/web ci
+      - run: npm install --global --ignore-scripts npm@11.13.0
+      - run: npm --prefix app/web ci --ignore-scripts
       - run: npm --prefix app/web audit
 
   dependencies:
