@@ -20,6 +20,7 @@ concurrency:
 jobs:
   build:
     name: Tests, coverage and SonarQube
+    if: ${{ false }} # Disposable fixture: never install or execute these dependencies.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
