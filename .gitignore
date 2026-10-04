@@ -13,6 +13,13 @@ __pycache__/
 build/
 dist/
 
+# Coverage & analysis output
+.coverage*
+coverage.xml
+coverage/
+.scannerwork/
+artifacts/
+
 # Frontend
 node_modules/
 *.tsbuildinfo

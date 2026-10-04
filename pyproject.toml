@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0", "httpx2>=2.0.0"]
+test = ["pytest>=8.0", "httpx2>=2.0.0", "pytest-cov>=7,<8", "coverage[toml]>=7.10.6,<8"]
 quality = ["ruff>=0.15,<0.17"]
 security = ["pip-audit>=2.9,<3"]
 
@@ -40,6 +40,12 @@ markers = [
   "database: requires an explicitly configured disposable PostgreSQL server",
   "docker: requires the real Docker daemon and prepared assessment images",
 ]
+
+[tool.coverage.run]
+source = ["app"]
+relative_files = true
+branch = true
+patch = ["subprocess"]
 
 [tool.setuptools]
 packages = ["app", "app.api", "app.plugins"]
