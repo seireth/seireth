@@ -1,5 +1,11 @@
 version: 2
 updates:
+  # Node dependencies in package.json and package-lock.json.
+  - package-ecosystem: npm
+    directory: /app/web
+    schedule:
+      interval: weekly
+
   # Actions referenced by workflows, including commit-pinned actions.
   - package-ecosystem: github-actions
     directory: /
@@ -18,6 +24,9 @@ updates:
     schedule:
       interval: weekly
     ignore:
+      # Node must match the exact frontend, CI, and development pins.
+      - dependency-name: node
+        update-types: [version-update:semver-major, version-update:semver-minor, version-update:semver-patch]
       # Python 3.14 is shared with CI, Ruff, and the sandbox runner.
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]

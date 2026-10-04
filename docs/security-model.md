@@ -8,6 +8,13 @@ Report vulnerabilities through [SECURITY.md](../SECURITY.md).
 
 ## Enforced boundaries
 
+Reads enforce project authorization. Browser writes reject cross-origin and
+opaque `Origin` headers; CLI requests without `Origin` remain supported. Vite
+preserves the browser's `Origin` and `Host` headers for these checks.
+
+The GUI renders stored content as text. Target HTTP requests remain inside the
+sandbox; the browser sends assessment requests only to Seireth.
+
 Admission and execution check project/target/scope relationships, origin/path,
 expiry, plugins, and image policy. Root URL scopes include child paths; traversal,
 credentials, fragments, and ambiguous multiply encoded paths are rejected.

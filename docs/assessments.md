@@ -42,7 +42,17 @@ Submission returns HTTP 202 and a `Location` to poll. Selected IDs are persisted
 submission and `GET /api/v1/assessments/{id}` share this representation:
 
 ```json
-{"id": "assessment-id", "status": "queued", "plugins": ["security-headers"], "result": null, "cleanup_pending": false}
+{
+  "id": "assessment-id",
+  "project_id": "project-id",
+  "target_id": "target-id",
+  "scope_id": "scope-id",
+  "created_at": "2026-10-02T12:00:00Z",
+  "status": "queued",
+  "plugins": ["security-headers"],
+  "result": null,
+  "cleanup_pending": false
+}
 ```
 
 `result` is null until an outcome exists. Background execution can advance the
@@ -95,6 +105,10 @@ include `cleanup_pending`; `result.cleanup_reason` explains uncertainty. Follow 
 [cleanup procedure](security-model.md#cleanup-and-failure); reconciliation can
 update cleanup fields after execution becomes terminal.
 
+The GUI polls every second during execution and every five seconds while terminal
+cleanup remains pending, then stops. Refocus refreshes data; leaving the page
+cancels its reads. Evidence failures show a retry action without hiding findings.
+
 ## Retrieve evidence
 
 `GET /api/v1/assessments/{assessment_id}/evidence` returns `assessment_id`,
@@ -135,6 +149,32 @@ Access uses the same project authorization as results: unknown assessments
 return 404 and denied project access returns 403. Expired scopes still allow reads.
 The array is empty unless the assessment is completed with findings.
 Retrieval runs no assessment and writes no database records or audit events.
+
+## Discover saved records
+
+| Read endpoint | Response |
+| --- | --- |
+| `GET /api/v1/projects` | Current operator's projects |
+| `GET /api/v1/projects/{id}` | Project name and creation time |
+| `GET /api/v1/projects/{id}/targets` | Registered targets |
+| `GET /api/v1/targets/{id}` | Target name, image, URL, and project ID |
+| `GET /api/v1/projects/{id}/authorization-scopes` | Scopes, including expired scopes; optional `target_id` from the same project |
+| `GET /api/v1/authorization-scopes/{id}` | Scope project/target IDs, URL boundary, and expiry |
+| `GET /api/v1/projects/{id}/assessments` | Assessment history |
+| `GET /api/v1/runtime` | `sandbox_backend`, `default_target_image`, `allowed_target_images` |
+
+Project, target, scope, and assessment lists return `items` and `has_more`.
+Use `offset` (default 0) and `limit` (default 50, range 1–100). While `has_more` is
+true, advance `offset` by `limit`. Projects and assessments sort newest first,
+scopes by expiry descending, and targets by ID, with ID tie breakers.
+Audit events return a chronological array.
+
+Unknown resources return 404; denied project access returns 403. Expired
+scopes permit reads but cannot authorize execution. Reads perform no assessment
+work and write no records or audit events.
+
+Browser writes require a same-origin `Origin`; cross-origin and opaque origins
+return 403. CLI requests without `Origin` continue to work.
 
 ## Header checks
 

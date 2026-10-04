@@ -4,6 +4,15 @@ SEIRETH is one Python 3.14 FastAPI application with synchronous SQLAlchemy/Psyco
 and PostgreSQL 18. Its process-local dispatcher has two assessment worker threads,
 plus separate ownership monitoring and cleanup reconciliation threads.
 
+`app/main.py` assembles FastAPI, dispatcher lifespan, health, and built GUI
+serving. `app/api/` groups resource routes and shared HTTP authorization;
+`app/web/` contains the React/TypeScript frontend and its tests.
+Native and Docker servers use `app.main:app`.
+
+Vite builds `app/web/dist/`; only those assets join the backend in the Python
+package and final container. `/` redirects to `/app/`, where HTML fallback supports
+page refreshes and client-side navigation; missing assets return 404.
+
 ## Persistence and ownership
 
 PostgreSQL is authoritative; executor threads and events are transient, not a

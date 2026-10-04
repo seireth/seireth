@@ -7,8 +7,7 @@ Future directions, not release promises. See the [README](../README.md) and
 
 1. Add passive checks and deepen finding explanations and remediation.
 2. Define supported authentication/deployment before enabling multiple users.
-3. Build a local web interface using findings and evidence retrieval, then add
-   reports with stable schemas and redaction rules.
+3. Add reports with stable schemas and redaction rules using findings and evidence.
 
 ## Later directions
 

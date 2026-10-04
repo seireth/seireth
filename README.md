@@ -17,7 +17,7 @@ SEIRETH runs authorized HTTP security checks against disposable containers,
 stores findings and audit events, and verifies sandbox cleanup. Docker assessments
 inspect a new instance of an approved image, not the original remote host.
 
-**MVP:** a local API with passive security-header and cookie plugins and
+**MVP:** a local GUI and API with passive security-header and cookie plugins and
 PostgreSQL 18 persistence. It is not a multi-user production service or general
 internet scanner.
 
@@ -41,6 +41,8 @@ Follow [Getting started](docs/getting-started.md) for first-time uv/Python 3.14
 setup, daily startup commands, and PostgreSQL preparation. The example configuration
 selects `inmemory`, which simulates responses.
 Real checks require Docker and API access to its privileged socket.
+The GUI at `/app/` creates and reuses projects, targets, and authorization scopes,
+runs selected plugins, and displays findings, linked evidence, cleanup, and audit history.
 
 ## Documentation
 

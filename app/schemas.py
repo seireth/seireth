@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,10 +36,71 @@ class AssessmentCreate(BaseModel):
 
 class AssessmentOut(BaseModel):
     id: str
+    project_id: str
+    target_id: str
+    scope_id: str
+    created_at: datetime
     status: AssessmentStatus
     plugins: list[str]
     cleanup_pending: bool = False
     result: dict | None = None
+
+
+class ReadModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectOut(ReadModel):
+    id: str
+    name: str
+    created_at: datetime
+
+
+class TargetOut(ReadModel):
+    id: str
+    project_id: str
+    name: str
+    image: str
+    url: str
+
+
+class ScopeOut(ReadModel):
+    id: str
+    project_id: str
+    target_id: str
+    allowed_url: str
+    expires_at: datetime
+
+
+Item = TypeVar("Item")
+
+
+class PageOut(BaseModel, Generic[Item]):
+    items: list[Item]
+    has_more: bool
+
+
+class FindingOut(ReadModel):
+    id: str
+    plugin: str
+    title: str
+    severity: str
+    description: str
+    remediation: str
+
+
+class AssessmentResultsOut(BaseModel):
+    assessment_id: str
+    status: AssessmentStatus
+    cleanup_pending: bool
+    result: dict | None
+    findings: list[FindingOut]
+
+
+class RuntimeOut(BaseModel):
+    sandbox_backend: Literal["inmemory", "docker"]
+    default_target_image: str
+    allowed_target_images: list[str]
 
 
 class HeaderEvidenceData(BaseModel):

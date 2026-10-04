@@ -1,61 +1,10 @@
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app import models
-from app.api import app
-from app.config import settings
-
-
-@pytest.fixture
-def client(database):
-    with TestClient(app) as test_client:
-        yield test_client
-
-
-@pytest.fixture
-def project(client):
-    response = client.post("/api/v1/projects", json={"name": "demo"})
-    assert response.status_code == 200
-    return response.json()["id"]
-
-
-@pytest.fixture
-def target(client, project, request):
-    response = client.post(
-        "/api/v1/targets",
-        json={
-            "project_id": project,
-            "name": "demo",
-            "url": getattr(request, "param", "http://demo-target:8080"),
-        },
-    )
-    assert response.status_code == 200
-    return response.json()
-
-
-@pytest.fixture
-def scope_payload(project, target):
-    return {
-        "project_id": project,
-        "target_id": target["id"],
-        "allowed_url": target["url"],
-        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
-    }
-
-
-@pytest.fixture
-def assessment_payload(client, scope_payload):
-    response = client.post("/api/v1/authorization-scopes", json=scope_payload)
-    assert response.status_code == 200
-    return {
-        "project_id": scope_payload["project_id"],
-        "target_id": scope_payload["target_id"],
-        "scope_id": response.json()["id"],
-        "plugins": ["security-headers"],
-    }
+from tests.api.helpers import snapshot, submission
 
 
 def test_scope_is_required(client, project, target):
@@ -125,6 +74,7 @@ def test_passive_assessment_returns_json_and_cleanup(
                 item for item in report["findings"] if item["id"] == stored.id
             )
             fields = ("plugin", "title", "severity", "description", "remediation")
+            assert set(returned) == {"id", *fields}
             assert {field: getattr(stored, field) for field in fields} == {
                 field: returned[field] for field in fields
             }
@@ -154,86 +104,10 @@ def test_passive_assessment_returns_json_and_cleanup(
     ]
 
 
-def test_expired_scope_is_rejected(client, scope_payload):
-    scope_payload["expires_at"] = (
-        datetime.now(timezone.utc) - timedelta(hours=1)
-    ).isoformat()
-    response = client.post("/api/v1/authorization-scopes", json=scope_payload)
-    assert response.status_code == 400
-
-
-def test_target_image_must_be_allowlisted(client, project):
-    response = client.post(
-        "/api/v1/targets",
-        json={
-            "project_id": project,
-            "name": "untrusted",
-            "image": "attacker/image:latest",
-            "url": "http://demo-target:8080",
-        },
-    )
-    assert response.status_code == 400
-
-
-def test_target_and_scope_reject_urls_too_long_for_storage(client, project, target):
-    grows_when_normalized = "https://example.test?" + "a" * (
-        500 - len("https://example.test?")
-    )
-    response = client.post(
-        "/api/v1/targets",
-        json={"project_id": project, "name": "oversized", "url": grows_when_normalized},
-    )
-    assert response.status_code == 422
-
-    response = client.post(
-        "/api/v1/authorization-scopes",
-        json={
-            "project_id": project,
-            "target_id": target["id"],
-            "allowed_url": "http://demo-target:8080/" + "a" * 501,
-            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
-        },
-    )
-    assert response.status_code == 422
-
-
-@pytest.mark.parametrize("explicit_image", [False, True])
-def test_target_stores_default_or_explicit_allowed_image(
-    client, project, monkeypatch, explicit_image
-):
-    from app.db import SessionLocal
-    from app.models import Target
-
-    alternative = "seireth/alternative:local"
-    monkeypatch.setattr(
-        settings,
-        "docker_allowed_target_images",
-        [settings.docker_target_image, alternative],
-    )
-    payload = {"project_id": project, "name": "allowed"}
-    if explicit_image:
-        payload["image"] = alternative
-    response = client.post("/api/v1/targets", json=payload)
-    assert response.status_code == 200
-    with SessionLocal() as db:
-        target = db.get(Target, response.json()["id"])
-        assert target.image == (
-            alternative if explicit_image else settings.docker_target_image
-        )
-
-
-def test_default_image_must_also_be_allowlisted(client, project, monkeypatch):
-    monkeypatch.setattr(settings, "docker_allowed_target_images", [])
-    response = client.post(
-        "/api/v1/targets", json={"project_id": project, "name": "default"}
-    )
-    assert response.status_code == 400
-
-
 def test_queued_and_cancelled_before_execution_have_no_result(
     client, assessment_payload, monkeypatch
 ):
-    from app.api import dispatcher
+    from app.worker import dispatcher
 
     submitted = []
     monkeypatch.setattr(dispatcher, "submit", submitted.append)
@@ -253,24 +127,6 @@ def test_queued_and_cancelled_before_execution_have_no_result(
     cancelled = (client.get(location + "/results")).json()
     assert cancelled["status"] == "cancelled"
     assert cancelled["result"] is None
-
-
-def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monkeypatch):
-    from app.api import dispatcher
-
-    catalog = (client.get("/api/v1/plugins")).json()
-    assert [item["id"] for item in catalog] == ["security-headers", "cookie-security"]
-    assert all(set(item) == {"id", "name", "description"} for item in catalog)
-    assert all(item["name"].strip() and item["description"].strip() for item in catalog)
-    monkeypatch.setattr(dispatcher, "submit", lambda assessment_id: None)
-    response = client.post(
-        "/api/v1/assessments",
-        json={**assessment_payload, "plugins": ["security-headers"]},
-    )
-    assert response.status_code == 202
-    assert response.json()["plugins"] == ["security-headers"]
-    stored = (client.get(response.headers["location"])).json()
-    assert stored["plugins"] == ["security-headers"]
 
 
 @pytest.mark.parametrize(
@@ -596,92 +452,6 @@ def test_omitted_plugin_selection_is_rejected(client, assessment_payload):
     assert response.json()["detail"][0]["loc"] == ["body", "plugins"]
 
 
-@pytest.mark.parametrize("target", ["https://example.test/app"], indirect=True)
-@pytest.mark.parametrize(
-    "allowed_url",
-    [
-        pytest.param("https://other.example/app", id="different-origin"),
-        pytest.param("https://example.test/application", id="path-prefix"),
-        pytest.param("https://example.test/app/../secret", id="parent-path"),
-    ],
-)
-def test_scope_cannot_escape_target_origin_or_path(client, scope_payload, allowed_url):
-    response = client.post(
-        "/api/v1/authorization-scopes",
-        json={**scope_payload, "allowed_url": allowed_url},
-    )
-    assert response.status_code == 400
-
-
-@pytest.fixture
-def dispatch_calls(client, monkeypatch):
-    from app.api import dispatcher
-
-    calls = {"submit": [], "cancel": []}
-    for method, recorded in calls.items():
-        monkeypatch.setattr(dispatcher, method, recorded.append)
-    return calls
-
-
-def snapshot(database):
-    with database.engine.connect() as connection:
-        return {
-            table.name: [
-                dict(row)
-                for row in connection.execute(
-                    select(table).order_by(table.c.id)
-                ).mappings()
-            ]
-            for table in database.Base.metadata.sorted_tables
-        }
-
-
-def submission(graph):
-    return {
-        "project_id": graph.project.id,
-        "target_id": graph.target.id,
-        "scope_id": graph.scope.id,
-        "plugins": ["security-headers"],
-    }
-
-
-@pytest.mark.parametrize(
-    "operation",
-    ["target", "scope", "assessment", "read", "results", "evidence", "cancel", "audit"],
-)
-def test_foreign_project_access_is_denied_without_side_effects(
-    client, database, assessment_graph, dispatch_calls, operation
-):
-    graph = assessment_graph(owner="other-actor", status="completed")
-    aid, pid = graph.assessment.id, graph.project.id
-    requests = {
-        "target": ("post", "/api/v1/targets", {"project_id": pid, "name": "foreign"}),
-        "scope": (
-            "post",
-            "/api/v1/authorization-scopes",
-            {
-                "project_id": pid,
-                "target_id": graph.target.id,
-                "allowed_url": graph.target.url,
-                "expires_at": graph.scope.expires_at.isoformat(),
-            },
-        ),
-        "assessment": ("post", "/api/v1/assessments", submission(graph)),
-        "read": ("get", f"/api/v1/assessments/{aid}", None),
-        "results": ("get", f"/api/v1/assessments/{aid}/results", None),
-        "evidence": ("get", f"/api/v1/assessments/{aid}/evidence", None),
-        "cancel": ("post", f"/api/v1/assessments/{aid}/cancel", None),
-        "audit": ("get", f"/api/v1/projects/{pid}/audit-events", None),
-    }
-    before = snapshot(database)
-    method, path, payload = requests[operation]
-    response = client.request(method, path, json=payload)
-    assert response.status_code == 403
-    assert response.json()["detail"] == "project access denied"
-    assert snapshot(database) == before
-    assert dispatch_calls == {"submit": [], "cancel": []}
-
-
 @pytest.mark.parametrize("field", ["project_id", "target_id", "scope_id"])
 def test_assessment_rejects_cross_project_identifiers(
     client, database, assessment_graph, dispatch_calls, field
@@ -695,74 +465,6 @@ def test_assessment_rejects_cross_project_identifiers(
     assert response.json()["detail"] == "valid authorization scope required"
     assert snapshot(database) == before
     assert dispatch_calls == {"submit": [], "cancel": []}
-
-
-@pytest.mark.parametrize("missing", [False, True])
-def test_scope_rejects_missing_or_cross_project_target(
-    client, database, assessment_graph, dispatch_calls, missing
-):
-    first, second = assessment_graph(), assessment_graph()
-    before = snapshot(database)
-    response = client.post(
-        "/api/v1/authorization-scopes",
-        json={
-            "project_id": first.project.id,
-            "target_id": "missing" if missing else second.target.id,
-            "allowed_url": first.target.url,
-            "expires_at": first.scope.expires_at.isoformat(),
-        },
-    )
-    assert response.status_code == 400
-    assert snapshot(database) == before
-    assert dispatch_calls == {"submit": [], "cancel": []}
-
-
-@pytest.mark.parametrize(
-    "method,path",
-    [
-        ("get", "/api/v1/assessments/missing"),
-        ("get", "/api/v1/assessments/missing/results"),
-        ("post", "/api/v1/assessments/missing/cancel"),
-        ("get", "/api/v1/projects/missing/audit-events"),
-        ("post", "/api/v1/targets"),
-        ("post", "/api/v1/authorization-scopes"),
-        ("post", "/api/v1/assessments"),
-    ],
-)
-def test_missing_resources_return_404_without_side_effects(
-    client, database, dispatch_calls, method, path
-):
-    payload = (
-        {
-            "project_id": "missing",
-            "target_id": "missing",
-            "allowed_url": "http://demo-target:8080/",
-            "expires_at": "2099-01-01T00:00:00Z",
-        }
-        if "authorization-scopes" in path
-        else {"project_id": "missing", "name": "missing"}
-    )
-    if path == "/api/v1/assessments":
-        payload = {
-            "project_id": "missing",
-            "target_id": "missing",
-            "scope_id": "missing",
-            "plugins": ["security-headers"],
-        }
-    before = snapshot(database)
-    response = client.request(method, path, json=payload if method == "post" else None)
-    assert response.status_code == 404
-    assert snapshot(database) == before
-    assert dispatch_calls == {"submit": [], "cancel": []}
-
-
-def test_health_returns_503_when_dispatcher_unavailable(client, monkeypatch):
-    from app.api import dispatcher
-
-    monkeypatch.setattr(dispatcher, "_executor", None)
-    response = client.get("/health")
-    assert response.status_code == 503
-    assert response.json()["detail"] == "assessment dispatcher unavailable"
 
 
 def test_repeated_active_cancellation_is_idempotent(
@@ -798,3 +500,42 @@ def test_terminal_assessments_cannot_be_cancelled(
     assert response.json()["detail"] == "assessment is no longer cancellable"
     assert snapshot(database) == before
     assert dispatch_calls == {"submit": [], "cancel": []}
+
+
+def test_assessment_and_scope_ordering_breaks_timestamp_ties(
+    read_client, database, assessment_graph
+):
+    graph = assessment_graph(status="completed")
+    with database.SessionLocal() as db:
+        current = db.get(models.Assessment, graph.assessment.id)
+        scope = db.get(models.AuthorizationScope, graph.scope.id)
+        for identity in ["z", "a"]:
+            db.add(
+                models.Assessment(
+                    id=identity,
+                    project_id=graph.project.id,
+                    target_id=graph.target.id,
+                    scope_id=graph.scope.id,
+                    status="completed",
+                    plugins=["security-headers"],
+                    created_at=current.created_at,
+                )
+            )
+            db.add(
+                models.AuthorizationScope(
+                    id=identity,
+                    project_id=graph.project.id,
+                    target_id=graph.target.id,
+                    allowed_url=scope.allowed_url,
+                    expires_at=scope.expires_at,
+                )
+            )
+        db.commit()
+    for resource, identities in [
+        ("assessments", [graph.assessment.id, "a", "z"]),
+        ("authorization-scopes", [graph.scope.id, "a", "z"]),
+    ]:
+        items = read_client.get(
+            f"/api/v1/projects/{graph.project.id}/{resource}"
+        ).json()["items"]
+        assert [item["id"] for item in items] == sorted(identities)

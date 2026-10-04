@@ -12,7 +12,7 @@ version = "0.1.0"
 description = "Authorized, bounded security validation MVP"
 requires-python = ">=3.14"
 dependencies = [
-  "fastapi>=0.110",
+  "fastapi>=0.141.1",
   "uvicorn[standard]>=0.29",
   "sqlalchemy>=2.0",
   "psycopg[binary]>=3.3,<4",
@@ -42,10 +42,11 @@ markers = [
 ]
 
 [tool.setuptools]
-packages = ["app", "app.plugins"]
+packages = ["app", "app.api", "app.plugins"]
+include-package-data = false
 
 [tool.setuptools.package-data]
-app = ["migrations/*.py", "migrations/versions/*.py", "migrations/*.mako"]
+app = ["migrations/*.py", "migrations/versions/*.py", "migrations/*.mako", "web/dist/*", "web/dist/assets/*"]
 
 [tool.alembic]
 script_location = "%(here)s/app/migrations"
