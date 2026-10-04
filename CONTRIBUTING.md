@@ -70,8 +70,8 @@ export SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.
 python -m app test
 ```
 
-`python -m pytest` is equivalent. CI runs unit/API tests and
-the Ruff checks above.
+`python -m pytest` is equivalent. The build workflow runs non-Docker Python
+tests with coverage; CI runs the Ruff checks above.
 Windows defaults to a fresh `build/pytest-<unique-id>` per run to avoid shared-temp
 permission errors; `--basetemp` overrides it. Artifacts remain in ignored `build/`.
 Pure tests need no PostgreSQL:
@@ -101,7 +101,9 @@ python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 SEIRETH_DOCKER_TESTS=1 python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 ```
 
-CI uses a disposable Docker daemon and uploads verification output and diagnostic logs.
+The integration workflow uses a disposable Docker daemon and uploads verification
+output and diagnostic logs. It selects only Docker-marked Python cases; the
+in-memory API lifecycle case runs once in the build workflow.
 
 ## Frontend checks
 
@@ -115,7 +117,10 @@ npm --prefix app/web test
 npm --prefix app/web run build
 ```
 
-For browser coverage, start the
+`build` bundles assets without checking TypeScript types. Run `typecheck`
+separately before building locally; CI owns this check for pull requests.
+
+For browser verification, start the
 [Docker stack](docs/getting-started.md#real-docker-assessment), then:
 
 ```bash
@@ -130,12 +135,57 @@ searching `PATH`.
 The suite creates synthetic records and verifies six `/cookies` findings, linked
 evidence, redaction, and Docker cleanup. Failure traces and screenshots are in
 `app/web/test-results/`. On Linux, add `--with-deps` to the browser installation
-command to install Chromium's system dependencies, as CI does.
+command to install Chromium's system dependencies, as the integration workflow does.
 
 Sonar classifies backend tests, frontend unit tests, and browser tests as test
 code. The browser suite intentionally assesses the HTTP demo on Docker's private
 network to exercise cookie-security violations; it does not use private targets
 or transmit credentials.
+
+### Coverage
+
+With `SEIRETH_TEST_ADMIN_URL` configured, generate the same coverage reports as
+the build workflow from the repository root:
+
+```bash
+python -m pytest -m "not docker" --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-report=xml:coverage.xml
+npm --prefix app/web test -- --coverage
+```
+
+Python coverage measures `app`, including Python subprocesses, with branch
+coverage and relative source paths. Frontend coverage includes unimported source
+files and excludes tests, test setup, and declarations. SonarQube imports
+`coverage.xml` and `app/web/coverage/lcov.info`; Docker and browser runs do not
+contribute to these reports. Generated coverage and analysis output stay untracked.
+
+### Workflow ownership and required checks
+
+All four workflows run independently on main pushes, pull requests, and manual
+dispatch. Dependency audits also run weekly. Each test suite runs once per event;
+the application image and bundled frontend are built in integration only.
+
+| Workflow | Required job checks | Responsibility |
+| --- | --- | --- |
+| [CI](.github/workflows/ci.yml) | Repository checks; Python quality; Frontend quality | Required files, environment-file hygiene, Ruff, ESLint, TypeScript |
+| [Build](.github/workflows/build.yml) | Tests, coverage and SonarQube | Non-Docker Python tests with disposable PostgreSQL, frontend unit tests, coverage, analysis |
+| [Integration](.github/workflows/integration.yml) | Docker assessment lifecycle | Image build, migrations/readiness, real assessments/recovery, browser and packaging verification |
+| [Dependency security](.github/workflows/security.yml) | Audit frontend dependencies; Audit Python runtime dependencies | Locked dependency audits |
+
+Update repository rulesets/branch protection after these checks first appear.
+Replace `Frontend quality and build` with `Frontend quality`, and `Python 3.14
+tests` with `Tests, coverage and SonarQube`. The Docker job name stays `Docker
+assessment lifecycle`, but now comes from the Integration workflow; update any
+workflow-specific rule accordingly. Require all checks above before merging,
+especially `Frontend quality`: successful bundling does not imply valid types.
+
+SonarQube configuration lives in the build action arguments. Keep automatic
+analysis disabled and configure the repository Actions secret `SONAR_TOKEN`.
+After both test suites and report checks pass, the scanner waits up to 300 seconds
+for the existing quality gate; scan errors, processing timeouts, or a failed gate
+fail the build job. Fork pull requests and Dependabot runs execute tests but skip
+SonarQube; other runs fail clearly if the token is missing. Diagnostics and
+database cleanup run on failure, including analysis failures. Coverage generation
+and scanning share a job and require no report transfer between workflows.
 
 Build frontend assets before packaging. Clear setuptools' staging directory so
 hashed assets from earlier builds cannot enter the wheel:
@@ -187,7 +237,7 @@ manifest and lock together. [Dependabot configuration](.github/dependabot.yml)
 defines update schedules and exclusions; Python minor/major and PostgreSQL major
 upgrades are planned separately.
 
-Keep the exact uv version in the project configuration, both workflows, Dockerfile,
+Keep the exact uv version in the project configuration, all workflows, Dockerfile,
 and setup instructions aligned when upgrading uv.
 
 ## Schema changes

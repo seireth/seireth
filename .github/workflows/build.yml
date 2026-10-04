@@ -1,0 +1,108 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Tests, coverage and SonarQube
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROJECT_NAME: seireth-tests
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.21"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.16.0"
+          cache: npm
+          cache-dependency-path: app/web/package-lock.json
+      - name: Install test dependencies
+        run: |
+          uv sync --locked --extra test
+          npm install --global --ignore-scripts npm@11.13.0
+          npm --prefix app/web ci --ignore-scripts
+      - name: Generate disposable database credentials
+        run: |
+          cp .env.example .env
+          python .github/scripts/prepare_ci_env.py >> "$GITHUB_ENV"
+      - name: Start PostgreSQL
+        run: docker compose up --wait --wait-timeout 60 postgres
+      - name: Python tests and coverage
+        run: |
+          mkdir -p artifacts
+          uv run --no-sync python -m pytest -m "not docker" --basetemp artifacts/pytest \
+            --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-report=xml:coverage.xml
+      - name: Frontend tests and coverage
+        run: npm --prefix app/web test -- --coverage
+      - name: Verify coverage reports
+        run: |
+          for report in coverage.xml app/web/coverage/lcov.info; do
+            test -s "$report" || { echo "::error file=$report::Coverage report is missing or empty"; exit 1; }
+          done
+      - name: Cache SonarQube packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+      - name: Check SonarQube credentials
+        if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          test -n "$SONAR_TOKEN" || { echo "::error::SONAR_TOKEN is required for repository analysis"; exit 1; }
+      - name: SonarQube Scan
+        if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=seireth
+            -Dsonar.projectKey=seireth_seireth
+            -Dsonar.python.version=3.14
+            -Dsonar.sources=.
+            -Dsonar.exclusions=tests/**,app/web/e2e/**,app/web/src/**/*.test.ts,app/web/src/**/*.test.tsx,app/web/src/test/**,**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
+            -Dsonar.tests=tests,app/web/e2e,app/web/src
+            -Dsonar.test.inclusions=tests/**,app/web/e2e/**,app/web/src/**/*.test.ts,app/web/src/**/*.test.tsx,app/web/src/test/**
+            -Dsonar.python.coverage.reportPaths=coverage.xml
+            -Dsonar.javascript.lcov.reportPaths=app/web/coverage/lcov.info
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
+      - name: PostgreSQL diagnostics
+        if: failure()
+        run: docker compose logs --no-color postgres
+      - name: Tear down test database
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+      - name: Upload API process logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-test-logs
+          path: artifacts/pytest/**/api.log
+          if-no-files-found: ignore
+          retention-days: 7
