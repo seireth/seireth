@@ -28,32 +28,39 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.21"
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24.16.0"
           cache: npm
           cache-dependency-path: app/web/package-lock.json
       - name: Install test dependencies
         run: |
-          uv sync --locked --extra test
+          uv sync --locked --extra test --no-build
           npm install --global --ignore-scripts npm@11.13.0
           npm --prefix app/web ci --ignore-scripts
       - name: Generate disposable database credentials
         run: |
           cp .env.example .env
-          python .github/scripts/prepare_ci_env.py >> "$GITHUB_ENV"
+          password=$(python -c 'import secrets; print(secrets.token_hex(32))')
+          echo "::add-mask::$password"
+          base_url="postgresql+psycopg://seireth:$password@127.0.0.1:5432"
+          {
+            echo "POSTGRES_PASSWORD=$password"
+            echo "SEIRETH_DATABASE_URL=$base_url/seireth"
+            echo "SEIRETH_TEST_ADMIN_URL=$base_url/postgres"
+          } >> "$GITHUB_ENV"
       - name: Start PostgreSQL
         run: docker compose up --wait --wait-timeout 60 postgres
       - name: Python tests and coverage
         run: |
           mkdir -p artifacts
-          uv run --no-sync python -m pytest -m "not docker" --basetemp artifacts/pytest \
+          uv run --no-sync --no-build python -m pytest -m "not docker" --basetemp artifacts/pytest \
             --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-report=xml:coverage.xml
       - name: Frontend tests and coverage
         run: npm --prefix app/web test -- --coverage
@@ -100,7 +107,7 @@ jobs:
         run: docker compose down --volumes --remove-orphans
       - name: Upload API process logs
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: python-test-logs
           path: artifacts/pytest/**/api.log

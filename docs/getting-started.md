@@ -10,8 +10,13 @@ before starting the API:
 ```bash
 npm install --global --ignore-scripts npm@11.13.0
 npm --prefix app/web ci --ignore-scripts
+npm --prefix app/web run typecheck
 npm --prefix app/web run build
 ```
+
+`typecheck` validates TypeScript; `build` only bundles assets. Run both for local
+verification. The CI workflow owns type checking, while Docker integration owns
+the application build.
 
 `docker-up` builds the GUI automatically. Native API startup works without assets,
 but `/app/` returns 503. Build the assets and restart the native API to enable it.
@@ -132,9 +137,9 @@ If migrations changed, start PostgreSQL and run `python -m app migrate` before
 native startup. `docker-up` handles migrations for Docker startup.
 Contributors should use `--all-extras` for setup and updates; see
 [Contributing](../CONTRIBUTING.md) for tests, audits, and dependency updates.
-After frontend changes, run `npm --prefix app/web run build` for native startup,
-or `docker-up` for Docker. Run `npm --prefix app/web ci --ignore-scripts` when
-the lockfile changes.
+After frontend changes, run `npm --prefix app/web run typecheck`, then
+`npm --prefix app/web run build` for native startup or `docker-up` for Docker.
+Run `npm --prefix app/web ci --ignore-scripts` when the lockfile changes.
 
 ## Frontend development
 

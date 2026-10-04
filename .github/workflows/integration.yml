@@ -27,8 +27,8 @@ jobs:
       # Exercise the published-port setting instead of relying on the example port.
       SEIRETH_API_PORT: "18080"
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
@@ -37,8 +37,15 @@ jobs:
       - name: Generate disposable database credentials
         run: |
           cp .env.example .env
-          python .github/scripts/prepare_ci_env.py >> "$GITHUB_ENV"
-      - uses: actions/setup-node@v6
+          password=$(python -c 'import secrets; print(secrets.token_hex(32))')
+          echo "::add-mask::$password"
+          base_url="postgresql+psycopg://seireth:$password@127.0.0.1:5432"
+          {
+            echo "POSTGRES_PASSWORD=$password"
+            echo "SEIRETH_DATABASE_URL=$base_url/seireth"
+            echo "SEIRETH_TEST_ADMIN_URL=$base_url/postgres"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24.16.0"
           cache: npm
@@ -50,17 +57,17 @@ jobs:
           npm --prefix app/web exec --ignore-scripts -- playwright install --with-deps chromium
       - name: Prepare runtime and images
         run: |
-          uv sync --locked --extra test --no-editable
+          uv sync --locked --extra test --no-editable --no-build
           mkdir -p artifacts
           docker build -t seireth/demo-target:local examples/demo-target
           docker pull python:3.14-slim
-          uv run --no-sync python -m app docker-up --api-ready-timeout-seconds 120
+          uv run --no-sync --no-build python -m app docker-up --api-ready-timeout-seconds 120
           migration_containers=$(docker compose ps -a -q migrate)
           test -z "$migration_containers"
       - name: Verify real assessment and resource removal
         run: |
           set -euo pipefail
-          uv run --no-sync python -m app verify --timeout-seconds 120 --expected-backend docker | tee artifacts/verification.json
+          uv run --no-sync --no-build python -m app verify --timeout-seconds 120 --expected-backend docker | tee artifacts/verification.json
           docker ps -a --format '{{.Names}}' > artifacts/container-names.txt
           docker network ls --format '{{.Name}}' > artifacts/network-names.txt
           containers=$(grep -E '^seireth-(target-|assessment-runner-)' artifacts/container-names.txt || true)
@@ -70,7 +77,7 @@ jobs:
       - name: Verify real cancellation and crash recovery
         env:
           SEIRETH_DOCKER_TESTS: "1"
-        run: uv run --no-sync python -m pytest -m docker tests/integration/test_api_process_lifecycle.py --basetemp artifacts/api-process
+        run: uv run --no-sync --no-build python -m pytest -m docker tests/integration/test_api_process_lifecycle.py --basetemp artifacts/api-process
       - name: Verify GUI cookie assessment and packaged assets
         env:
           SEIRETH_UI_URL: http://127.0.0.1:18080
@@ -98,13 +105,13 @@ jobs:
           docker network ls -q --filter name=seireth-assessment- | xargs -r docker network rm || status=1
           docker compose down --volumes --remove-orphans || status=1
           exit "$status"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: docker-verification
           path: artifacts/
           retention-days: 7
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: browser-failures

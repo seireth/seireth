@@ -8,7 +8,6 @@
 
 <p align="center">
   <a href="https://github.com/seireth/seireth/actions/workflows/ci.yml"><img src="https://github.com/seireth/seireth/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/seireth/seireth/actions/workflows/security.yml"><img src="https://github.com/seireth/seireth/actions/workflows/security.yml/badge.svg" alt="Dependency security"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white" alt="Python 3.14"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue" alt="Apache License 2.0"></a>
 </p>
