@@ -20,6 +20,7 @@ concurrency:
 jobs:
   docker-integration:
     name: Docker assessment lifecycle
+    if: ${{ false }} # Disposable fixture: never install or execute these dependencies.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

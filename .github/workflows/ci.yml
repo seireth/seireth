@@ -37,6 +37,7 @@ jobs:
 
   quality:
     name: Python quality
+    if: ${{ false }} # Disposable fixture: never install or execute these dependencies.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -53,6 +54,7 @@ jobs:
 
   frontend:
     name: Frontend quality
+    if: ${{ false }} # Disposable fixture: never install or execute these dependencies.
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
