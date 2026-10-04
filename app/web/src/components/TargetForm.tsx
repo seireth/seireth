@@ -15,7 +15,7 @@ export default function TargetForm({
   const runtime = useResource<Runtime>("/runtime");
   const client = useQueryClient();
   const [name, setName] = useState("");
-  const [url, setUrl] = useState("http://demo-target:8080/");
+  const [url, setUrl] = useState("");
   const [image, setImage] = useState("");
   const create = useMutation({
     mutationFn: () =>
@@ -56,6 +56,7 @@ export default function TargetForm({
         <input
           required
           type="url"
+          placeholder="https://your-authorized-target.example/"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
@@ -87,7 +88,7 @@ export default function TargetForm({
       <ErrorMessage error={create.error} />
       <button
         type="submit"
-        disabled={create.isPending || !runtime.data || !name.trim()}
+        disabled={create.isPending || !runtime.data || !name.trim() || !url.trim()}
       >
         {create.isPending ? "Registering…" : "Register target"}
       </button>

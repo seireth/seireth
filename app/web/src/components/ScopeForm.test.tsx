@@ -36,7 +36,7 @@ it("retains inputs on API failure and sends a single authorization request", asy
           project_id: "p",
           name: "Demo",
           image: "demo",
-          url: "http://demo-target:8080/",
+          url: "https://demo.test/",
         }}
       />
     </QueryClientProvider>,
@@ -44,11 +44,11 @@ it("retains inputs on API failure and sends a single authorization request", asy
   const user = userEvent.setup();
   const url = screen.getByLabelText("Authorized URL");
   await user.clear(url);
-  await user.type(url, "http://other.test/");
+  await user.type(url, "https://other.test/");
   await user.click(
     screen.getByRole("button", { name: "Create authorization scope" }),
   );
   expect(await screen.findByRole("alert")).toHaveTextContent("bounded");
-  expect(url).toHaveValue("http://other.test/");
+  expect(url).toHaveValue("https://other.test/");
   expect(fetch).toHaveBeenCalledTimes(1);
 });

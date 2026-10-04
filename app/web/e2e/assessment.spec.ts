@@ -1,5 +1,15 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
+import { isAbsolute } from "node:path";
+
+const dockerExecutable =
+  process.env.SEIRETH_DOCKER_EXECUTABLE ??
+  (process.platform === "win32"
+    ? "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe"
+    : "/usr/bin/docker");
+if (!isAbsolute(dockerExecutable)) {
+  throw new Error("SEIRETH_DOCKER_EXECUTABLE must be an absolute executable path");
+}
 
 test("creates, refreshes, and retrieves a real cookie assessment with verified cleanup", async ({
   page,
@@ -86,13 +96,15 @@ test("creates, refreshes, and retrieves a real cookie assessment with verified c
     expect(output).not.toContain(value);
   const selector = `label=seireth.assessment=${id}`;
   expect(
-    execFileSync("docker", ["ps", "-aq", "--filter", selector], {
+    execFileSync(dockerExecutable, ["ps", "-aq", "--filter", selector], {
       encoding: "utf8",
+      timeout: 20_000,
     }).trim(),
   ).toBe("");
   expect(
-    execFileSync("docker", ["network", "ls", "-q", "--filter", selector], {
+    execFileSync(dockerExecutable, ["network", "ls", "-q", "--filter", selector], {
       encoding: "utf8",
+      timeout: 20_000,
     }).trim(),
   ).toBe("");
 });

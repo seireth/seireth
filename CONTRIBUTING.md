@@ -124,10 +124,18 @@ npm --prefix app/web run test:e2e
 ```
 
 Set [`SEIRETH_UI_URL`](docs/configuration.md#gui-development) for a nondefault API address.
+Set `SEIRETH_DOCKER_EXECUTABLE` to an absolute path for a nonstandard Docker CLI
+installation. Browser cleanup checks invoke that executable directly, without
+searching `PATH`.
 The suite creates synthetic records and verifies six `/cookies` findings, linked
 evidence, redaction, and Docker cleanup. Failure traces and screenshots are in
 `app/web/test-results/`. On Linux, add `--with-deps` to the browser installation
 command to install Chromium's system dependencies, as CI does.
+
+Sonar classifies backend tests, frontend unit tests, and browser tests as test
+code. The browser suite intentionally assesses the HTTP demo on Docker's private
+network to exercise cookie-security violations; it does not use private targets
+or transmit credentials.
 
 Build frontend assets before packaging. Clear setuptools' staging directory so
 hashed assets from earlier builds cannot enter the wheel:
