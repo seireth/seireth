@@ -7,7 +7,7 @@ COPY app/web ./
 COPY docs/assets /src/docs/assets
 RUN npm run build
 
-FROM ghcr.io/astral-sh/uv:0.12.21 AS uv
+FROM ghcr.io/astral-sh/uv:0.12.23 AS uv
 
 FROM python:3.14-slim AS python-build
 COPY --from=uv /uv /usr/local/bin/uv
