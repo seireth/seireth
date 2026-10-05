@@ -2,7 +2,7 @@ FROM node:24.16.0-slim AS dashboard
 WORKDIR /src/app/dashboard
 RUN npm install --global --ignore-scripts npm@11.13.0
 COPY app/dashboard/package.json app/dashboard/package-lock.json app/dashboard/.npmrc ./
-RUN npm ci --no-fund --no-audit
+RUN npm ci --ignore-scripts --no-fund --no-audit
 COPY app/dashboard ./
 COPY docs/assets /src/docs/assets
 RUN npm run build
