@@ -8,7 +8,7 @@ COPY docs/assets /src/docs/assets
 RUN npm run build
 
 FROM python:3.14-slim AS python-build
-COPY --from=ghcr.io/astral-sh/uv:0.12.21 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
 ENV UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
 COPY pyproject.toml uv.lock .

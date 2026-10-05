@@ -23,10 +23,10 @@ but `/dashboard/` returns 503. Build the assets and restart the native API to en
 
 ## Windows PowerShell
 
-Install uv once per computer; skip if `uv --version` already reports 0.12.21:
+Install uv once per computer; skip if `uv --version` already reports 0.12.23:
 
 ```powershell
-$installer = Invoke-RestMethod 'https://astral.sh/uv/0.12.21/install.ps1'
+$installer = Invoke-RestMethod 'https://astral.sh/uv/0.12.23/install.ps1'
 Invoke-Expression $installer
 ```
 
@@ -40,10 +40,10 @@ if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 
 ## macOS / Linux (Bash or Zsh)
 
-Install uv once per computer; skip if `uv --version` already reports 0.12.21:
+Install uv once per computer; skip if `uv --version` already reports 0.12.23:
 
 ```bash
-curl -LsSf https://astral.sh/uv/0.12.21/install.sh | sh
+curl -LsSf https://astral.sh/uv/0.12.23/install.sh | sh
 ```
 
 Open a new terminal, return to the repository, then run:
