@@ -57,14 +57,14 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: app/web
+        working-directory: app/dashboard
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24.16.0"
           cache: npm
-          cache-dependency-path: app/web/package-lock.json
+          cache-dependency-path: app/dashboard/package-lock.json
       - run: npm install --global --ignore-scripts npm@11.13.0
       - run: npm ci --ignore-scripts
       - run: npm run lint

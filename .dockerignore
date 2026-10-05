@@ -1,36 +1,19 @@
-# Version control & editors
-**/.git
-**/.vscode
+# Include only Docker build inputs
+*
+!pyproject.toml
+!uv.lock
+!app
+!docs
+docs/*
+!docs/assets
 
-# Python
-**/.venv
+# Exclude local output inside the included directories
 **/__pycache__
 **/*.py[cod]
-**/*.egg-info
-**/.pytest_cache
-**/.ruff_cache
-
-# Build output
-**/build
-**/dist
-
-# Coverage & analysis output
-**/.coverage*
-**/coverage.xml
-**/coverage
-**/.scannerwork
-**/artifacts
-
-# Frontend
 **/node_modules
+**/dist
 **/*.tsbuildinfo
-
-# Browser test output
+**/coverage
 **/playwright-report
 **/test-results
-
-# Local databases
-**/*.db
-
-# Environment files
 **/.env*

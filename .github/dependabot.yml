@@ -2,7 +2,7 @@ version: 2
 
 updates:
   - package-ecosystem: npm
-    directory: /app/web
+    directory: /app/dashboard
     schedule: { interval: daily }
 
   - package-ecosystem: github-actions

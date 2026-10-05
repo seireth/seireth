@@ -578,12 +578,12 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.18,<2" },
-    { name = "coverage", extras = ["toml"], marker = "extra == 'test'", specifier = ">=7.10.6,<8" },
+    { name = "coverage", marker = "extra == 'test'", specifier = ">=7.10.6,<8" },
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx2", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3,<4" },
-    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic", specifier = ">=2.11" },
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=7,<8" },

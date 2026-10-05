@@ -38,12 +38,12 @@ jobs:
         with:
           node-version: "24.16.0"
           cache: npm
-          cache-dependency-path: app/web/package-lock.json
+          cache-dependency-path: app/dashboard/package-lock.json
       - name: Install test dependencies
         run: |
           uv sync --locked --extra test --no-build
           npm install --global --ignore-scripts npm@11.13.0
-          npm --prefix app/web ci --ignore-scripts
+          npm --prefix app/dashboard ci --ignore-scripts
       - name: Generate disposable database credentials
         run: |
           cp .env.example .env
@@ -63,10 +63,10 @@ jobs:
           uv run --no-sync --no-build python -m pytest -m "not docker" --basetemp artifacts/pytest \
             --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-report=xml:coverage.xml
       - name: Frontend tests and coverage
-        run: npm --prefix app/web test -- --coverage
+        run: npm --prefix app/dashboard test -- --coverage
       - name: Verify coverage reports
         run: |
-          for report in coverage.xml app/web/coverage/lcov.info; do
+          for report in coverage.xml app/dashboard/coverage/lcov.info; do
             test -s "$report" || { echo "::error file=$report::Coverage report is missing or empty"; exit 1; }
           done
       - name: Cache SonarQube packages
@@ -92,11 +92,11 @@ jobs:
             -Dsonar.projectKey=seireth_seireth
             -Dsonar.python.version=3.14
             -Dsonar.sources=.
-            -Dsonar.exclusions=tests/**,app/web/e2e/**,app/web/src/**/*.test.ts,app/web/src/**/*.test.tsx,app/web/src/test/**,**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
-            -Dsonar.tests=tests,app/web/e2e,app/web/src
-            -Dsonar.test.inclusions=tests/**,app/web/e2e/**,app/web/src/**/*.test.ts,app/web/src/**/*.test.tsx,app/web/src/test/**
+            -Dsonar.exclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**,**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
+            -Dsonar.tests=tests,app/dashboard/e2e,app/dashboard/src
+            -Dsonar.test.inclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**
             -Dsonar.python.coverage.reportPaths=coverage.xml
-            -Dsonar.javascript.lcov.reportPaths=app/web/coverage/lcov.info
+            -Dsonar.javascript.lcov.reportPaths=app/dashboard/coverage/lcov.info
             -Dsonar.qualitygate.wait=true
             -Dsonar.qualitygate.timeout=300
       - name: PostgreSQL diagnostics

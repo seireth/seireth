@@ -49,12 +49,12 @@ jobs:
         with:
           node-version: "24.16.0"
           cache: npm
-          cache-dependency-path: app/web/package-lock.json
+          cache-dependency-path: app/dashboard/package-lock.json
       - name: Prepare browser tests
         run: |
           npm install --global --ignore-scripts npm@11.13.0
-          npm --prefix app/web ci --ignore-scripts
-          npm --prefix app/web exec --ignore-scripts -- playwright install --with-deps chromium
+          npm --prefix app/dashboard ci --ignore-scripts
+          npm --prefix app/dashboard exec --ignore-scripts -- playwright install --with-deps chromium
       - name: Prepare runtime and images
         run: |
           uv sync --locked --extra test --no-editable --no-build
@@ -82,8 +82,8 @@ jobs:
         env:
           SEIRETH_UI_URL: http://127.0.0.1:18080
         run: |
-          npm --prefix app/web run test:e2e
-          docker compose exec -T api python -c 'from pathlib import Path; import app.main; root = Path(app.main.__file__).parent; assert (root / "web/dist/index.html").is_file(); assert list((root / "web/dist/assets").glob("*.js")); assert not (root / "web/src").exists(); assert not (root / "web/node_modules").exists()'
+          npm --prefix app/dashboard run test:e2e
+          docker compose exec -T api python -c 'from pathlib import Path; import app.main; root = Path(app.main.__file__).parent; assert (root / "dashboard/dist/index.html").is_file(); assert list((root / "dashboard/dist/assets").glob("*.js")); assert not (root / "dashboard/src").exists(); assert not (root / "dashboard/node_modules").exists()'
       - name: Collect diagnostics
         if: always()
         run: |
@@ -115,6 +115,6 @@ jobs:
         if: failure()
         with:
           name: browser-failures
-          path: app/web/test-results/
+          path: app/dashboard/test-results/
           if-no-files-found: ignore
           retention-days: 7
