@@ -1,6 +1,6 @@
 import pytest
 
-from app.config import settings
+from app.core.config import settings
 
 
 def test_target_image_must_be_allowlisted(client, project):
@@ -20,8 +20,8 @@ def test_target_image_must_be_allowlisted(client, project):
 def test_target_stores_default_or_explicit_allowed_image(
     client, project, monkeypatch, explicit_image
 ):
-    from app.db import SessionLocal
-    from app.models import Target
+    from app.persistence.db import SessionLocal
+    from app.persistence.models import Target
 
     alternative = "seireth/alternative:local"
     monkeypatch.setattr(

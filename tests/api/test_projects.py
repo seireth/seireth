@@ -2,7 +2,7 @@ from datetime import timedelta
 
 import pytest
 
-from app import models
+from app.persistence import models
 from tests.api.helpers import snapshot
 
 

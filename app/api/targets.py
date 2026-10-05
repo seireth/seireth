@@ -2,21 +2,17 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import models
-from ..config import settings
-from ..db import get_db
-from ..lifecycle import audit
-from ..schemas import (
-    PageOut,
-    TargetCreate,
-    TargetOut,
-)
+from ..assessments.lifecycle import audit
+from ..core.config import settings
+from ..persistence import models
+from ..persistence.db import get_db
 from .dependencies import authorize_project, page, pagination
+from .schemas import PageOut, TargetCreate, TargetOut
 
 router = APIRouter()
 
 
-@router.get("/api/v1/projects/{project_id}/targets", response_model=PageOut[TargetOut])
+@router.get("/projects/{project_id}/targets", response_model=PageOut[TargetOut])
 def list_targets(
     project_id: str, db: Session = Depends(get_db), bounds=Depends(pagination)
 ):
@@ -30,7 +26,11 @@ def list_targets(
     )
 
 
-@router.get("/api/v1/targets/{target_id}", response_model=TargetOut)
+@router.get(
+    "/targets/{target_id}",
+    response_model=TargetOut,
+    responses={404: {"description": "Target not found"}},
+)
 def get_target(target_id: str, db: Session = Depends(get_db)):
     item = db.get(models.Target, target_id)
     if item is None:
@@ -39,7 +39,12 @@ def get_target(target_id: str, db: Session = Depends(get_db)):
     return item
 
 
-@router.post("/api/v1/targets")
+@router.post(
+    "/targets",
+    responses={
+        400: {"description": "Target image is not in the trusted image allowlist"}
+    },
+)
 def create_target(payload: TargetCreate, db: Session = Depends(get_db)):
     """Register a target that belongs to an existing project."""
 

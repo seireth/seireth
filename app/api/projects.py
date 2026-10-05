@@ -2,21 +2,17 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import models
-from ..db import get_db
-from ..lifecycle import audit
-from ..policy import ACTOR as MVP_ACTOR
-from ..schemas import (
-    PageOut,
-    ProjectCreate,
-    ProjectOut,
-)
+from ..assessments.lifecycle import audit
+from ..assessments.policy import ACTOR as MVP_ACTOR
+from ..persistence import models
+from ..persistence.db import get_db
 from .dependencies import authorize_project, page, pagination
+from .schemas import PageOut, ProjectCreate, ProjectOut
 
 router = APIRouter()
 
 
-@router.get("/api/v1/projects", response_model=PageOut[ProjectOut])
+@router.get("/projects", response_model=PageOut[ProjectOut])
 def list_projects(db: Session = Depends(get_db), bounds=Depends(pagination)):
     return page(
         db,
@@ -27,12 +23,12 @@ def list_projects(db: Session = Depends(get_db), bounds=Depends(pagination)):
     )
 
 
-@router.get("/api/v1/projects/{project_id}", response_model=ProjectOut)
+@router.get("/projects/{project_id}", response_model=ProjectOut)
 def get_project(project_id: str, db: Session = Depends(get_db)):
     return authorize_project(db, project_id)
 
 
-@router.post("/api/v1/projects")
+@router.post("/projects")
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     """Create a project and record its creation in the audit log."""
 
@@ -44,17 +40,16 @@ def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     return {"id": item.id, "name": item.name}
 
 
-@router.get("/api/v1/projects/{project_id}/audit-events")
+@router.get("/projects/{project_id}/audit-events")
 def get_audit_events(project_id: str, db: Session = Depends(get_db)):
     """Return the audit trail for a project in chronological order."""
 
     authorize_project(db, project_id)
-    events = (
-        db.query(models.AuditEvent)
-        .filter(models.AuditEvent.project_id == project_id)
+    events = db.scalars(
+        select(models.AuditEvent)
+        .where(models.AuditEvent.project_id == project_id)
         .order_by(models.AuditEvent.created_at, models.AuditEvent.id)
-        .all()
-    )
+    ).all()
     return [
         {
             "id": event.id,
