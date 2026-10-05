@@ -47,9 +47,11 @@ python -m ruff format .
 
 ## Tests
 
-Backend tests mirror application modules: API resource tests live in `tests/api/`,
-plugin tests in `tests/plugins/`, and application startup/serving tests in
-`tests/test_main.py`. Process lifecycle tests live in `tests/integration/`.
+Backend tests mirror application modules: `tests/api/`, `tests/assessments/`,
+`tests/cli/`, `tests/core/`, `tests/persistence/`, and `tests/plugins/`.
+Migration tests live in `tests/persistence/migrations/`; application
+startup/serving tests stay in `tests/test_main.py`. Process lifecycle tests live
+in `tests/integration/`. Frontend tests stay alongside the dashboard source.
 Shared fixtures stay in `tests/conftest.py`; HTTP-specific fixtures live in
 `tests/api/conftest.py`.
 
@@ -61,16 +63,16 @@ operator/production database. Adjust these example credentials to your setup.
 ```powershell
 # PowerShell
 $env:SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
-python -m app test
+python -m pytest
 ```
 
 ```bash
 # macOS / Linux
 export SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
-python -m app test
+python -m pytest
 ```
 
-`python -m pytest` is equivalent. The build workflow runs non-Docker Python
+The build workflow runs non-Docker Python
 tests with coverage; CI runs the Ruff checks above.
 Windows defaults to a fresh `build/pytest-<unique-id>` per run to avoid shared-temp
 permission errors; `--basetemp` overrides it. Artifacts remain in ignored `build/`.
@@ -110,11 +112,11 @@ in-memory API lifecycle case runs once in the build workflow.
 Follow the [Node/npm setup](docs/getting-started.md), then run:
 
 ```bash
-npm --prefix app/web ci --ignore-scripts
-npm --prefix app/web run lint
-npm --prefix app/web run typecheck
-npm --prefix app/web test
-npm --prefix app/web run build
+npm --prefix app/dashboard ci --ignore-scripts
+npm --prefix app/dashboard run lint
+npm --prefix app/dashboard run typecheck
+npm --prefix app/dashboard test
+npm --prefix app/dashboard run build
 ```
 
 `build` bundles assets without checking TypeScript types. Run `typecheck`
@@ -124,8 +126,8 @@ For browser verification, start the
 [Docker stack](docs/getting-started.md#real-docker-assessment), then:
 
 ```bash
-npm --prefix app/web exec --ignore-scripts -- playwright install chromium
-npm --prefix app/web run test:e2e
+npm --prefix app/dashboard exec --ignore-scripts -- playwright install chromium
+npm --prefix app/dashboard run test:e2e
 ```
 
 Set [`SEIRETH_UI_URL`](docs/configuration.md#gui-development) for a nondefault API address.
@@ -134,7 +136,7 @@ installation. Browser cleanup checks invoke that executable directly, without
 searching `PATH`.
 The suite creates synthetic records and verifies six `/cookies` findings, linked
 evidence, redaction, and Docker cleanup. Failure traces and screenshots are in
-`app/web/test-results/`. On Linux, add `--with-deps` to the browser installation
+`app/dashboard/test-results/`. On Linux, add `--with-deps` to the browser installation
 command to install Chromium's system dependencies, as the integration workflow does.
 
 Sonar classifies backend tests, frontend unit tests, and browser tests as test
@@ -149,13 +151,13 @@ the build workflow from the repository root:
 
 ```bash
 python -m pytest -m "not docker" --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-report=xml:coverage.xml
-npm --prefix app/web test -- --coverage
+npm --prefix app/dashboard test -- --coverage
 ```
 
 Python coverage measures `app`, including Python subprocesses, with branch
 coverage and relative source paths. Frontend coverage includes unimported source
 files and excludes tests, test setup, and declarations. SonarQube imports
-`coverage.xml` and `app/web/coverage/lcov.info`; Docker and browser runs do not
+`coverage.xml` and `app/dashboard/coverage/lcov.info`; Docker and browser runs do not
 contribute to these reports. Generated coverage and analysis output stay untracked.
 
 ### Workflow ownership and required checks
@@ -170,11 +172,11 @@ credentials inline, then export them through `GITHUB_ENV`; no credential helper
 script is required. Python syncs explicitly use `--no-build`; the quality job also
 uses `--no-install-project` because it only needs dependencies and tools.
 
-| Workflow | Required job checks | Responsibility |
-| --- | --- | --- |
-| [CI](.github/workflows/ci.yml) | Repository checks; Python quality; Frontend quality; Dependency review | Required files, environment-file hygiene, Ruff, ESLint, TypeScript, vulnerable dependency changes |
-| [Build](.github/workflows/build.yml) | Tests, coverage and SonarQube | Non-Docker Python tests with disposable PostgreSQL, frontend unit tests, coverage, analysis |
-| [Integration](.github/workflows/integration.yml) | Docker assessment lifecycle | Image build, migrations/readiness, real assessments/recovery, browser and packaging verification |
+| Workflow                                         | Required job checks                                                    | Responsibility                                                                                    |
+| ------------------------------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [CI](.github/workflows/ci.yml)                   | Repository checks; Python quality; Frontend quality; Dependency review | Required files, environment-file hygiene, Ruff, ESLint, TypeScript, vulnerable dependency changes |
+| [Build](.github/workflows/build.yml)             | Tests, coverage and SonarQube                                          | Non-Docker Python tests with disposable PostgreSQL, frontend unit tests, coverage, analysis       |
+| [Integration](.github/workflows/integration.yml) | Docker assessment lifecycle                                            | Image build, migrations/readiness, real assessments/recovery, browser and packaging verification  |
 
 Require all six checks above before merging, with GitHub Actions as their source.
 Successful bundling does not imply valid types; keep `Frontend quality` required.
@@ -270,7 +272,7 @@ and setup instructions aligned when upgrading uv.
 ## Schema changes
 
 For subsequent incremental schema changes, add a revision after the current
-Alembic head in `app/migrations/versions`:
+Alembic head in `app/persistence/migrations/versions`:
 
 ```bash
 python -m alembic revision --autogenerate -m "describe schema change"

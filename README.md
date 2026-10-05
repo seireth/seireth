@@ -7,18 +7,21 @@
 <p align="center">Authorized security checks. Disposable environments. Verified cleanup.</p>
 
 <p align="center">
-  <a href="https://github.com/seireth/seireth/actions/workflows/ci.yml"><img src="https://github.com/seireth/seireth/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white" alt="Python 3.14"></a>
+  <a href="https://github.com/seireth/seireth/actions/workflows/ci.yml"><img src="https://github.com/seireth/seireth/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI checks"></a>
+  <a href="https://github.com/seireth/seireth/actions/workflows/build.yml"><img src="https://github.com/seireth/seireth/actions/workflows/build.yml/badge.svg?branch=main" alt="Tests, coverage and SonarQube"></a>
+  <a href="https://github.com/seireth/seireth/actions/workflows/integration.yml"><img src="https://github.com/seireth/seireth/actions/workflows/integration.yml/badge.svg?branch=main" alt="Docker and browser integration"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=seireth_seireth"><img src="https://sonarcloud.io/api/project_badges/measure?project=seireth_seireth&amp;metric=alert_status" alt="SonarQube quality gate"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.14-3776AB?logo=python&amp;logoColor=white" alt="Python 3.14"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-blue" alt="Apache License 2.0"></a>
 </p>
 
-SEIRETH runs authorized HTTP security checks against disposable containers,
-stores findings and audit events, and verifies sandbox cleanup. Docker assessments
-inspect a new instance of an approved image, not the original remote host.
-
-**MVP:** a local GUI and API with passive security-header and cookie plugins and
-PostgreSQL 18 persistence. It is not a multi-user production service or general
-internet scanner.
+SEIRETH is a local, single-operator GUI and API for passive HTTP header and cookie
+security checks. Docker assessments inspect disposable instances of approved
+images. Findings, evidence, and audit events are stored in PostgreSQL 18, and
+SEIRETH verifies cleanup after execution.
 
 ## How it works
 
@@ -30,18 +33,27 @@ flowchart LR
     D --> E[Record outcome]
 ```
 
-Requests are bounded by project, target, origin, path, expiry, and an operator
-image allowlist. Docker provides a private network, restricted target, and runner;
-the API exposes JSON findings, evidence, cleanup status, and audit events.
+Scopes bound requests by project, target, origin, path, and expiry. An operator
+image allowlist restricts image selection; Docker provides a private network,
+restricted target, and runner.
+
+## Checks
+
+Workflow badges show the status of `main`; the SonarQube badge shows its latest
+quality gate result.
+
+| Workflow | Checks |
+| --- | --- |
+| [CI](https://github.com/seireth/seireth/actions/workflows/ci.yml) | Repository checks, Python quality, Frontend quality, Dependency review (pull requests only) |
+| [Build](https://github.com/seireth/seireth/actions/workflows/build.yml) | Tests, coverage and SonarQube |
+| [Integration](https://github.com/seireth/seireth/actions/workflows/integration.yml) | Docker assessment lifecycle, including browser and packaged-asset checks |
 
 ## Getting started
 
-Follow [Getting started](docs/getting-started.md) for first-time uv/Python 3.14
-setup, daily startup commands, and PostgreSQL preparation. The example configuration
-selects `inmemory`, which simulates responses.
-Real checks require Docker and API access to its privileged socket.
-The GUI at `/app/` creates and reuses projects, targets, and authorization scopes,
-runs selected plugins, and displays findings, linked evidence, cleanup, and audit history.
+Follow [Getting started](docs/getting-started.md) for setup and startup commands.
+The example configuration selects `inmemory`, which simulates responses. Real
+checks require Docker and API access to its privileged socket. Open `/dashboard/`
+on the API address to use the GUI.
 
 ## Documentation
 

@@ -1,36 +1,27 @@
-# Editors & IDEs
-.vscode/
-
 # Python
 .venv/
 __pycache__/
-*.py[cod]
+*.pyc
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
 
-# Build output
+# Generated output & dependencies
 build/
 dist/
-
-# Coverage & analysis output
+node_modules/
+*.tsbuildinfo
 .coverage*
 coverage.xml
 coverage/
 .scannerwork/
 artifacts/
-
-# Frontend
-node_modules/
-*.tsbuildinfo
-
-# Browser test output
 playwright-report/
 test-results/
-
-# Local databases
-*.db
 
 # Environment files
 .env*
 !.env.example
+
+# Editors & IDEs
+.vscode
