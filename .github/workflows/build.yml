@@ -81,6 +81,7 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           test -n "$SONAR_TOKEN" || { echo "::error::SONAR_TOKEN is required for repository analysis"; exit 1; }
+      # Enforce the quality gate through the required SonarCloud Code Analysis check.
       - name: SonarQube Scan
         if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
         uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
@@ -97,8 +98,6 @@ jobs:
             -Dsonar.test.inclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**
             -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.javascript.lcov.reportPaths=app/dashboard/coverage/lcov.info
-            -Dsonar.qualitygate.wait=true
-            -Dsonar.qualitygate.timeout=300
       - name: PostgreSQL diagnostics
         if: failure()
         run: docker compose logs --no-color postgres
