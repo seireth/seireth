@@ -39,14 +39,11 @@ restricted target, and runner.
 
 ## Checks
 
-Workflow badges show the status of `main`; the SonarQube badge shows its latest
-quality gate result.
-
-| Workflow | Checks |
-| --- | --- |
-| [CI](https://github.com/seireth/seireth/actions/workflows/ci.yml) | Repository checks, Python quality, Frontend quality, Dependency review (pull requests only) |
-| [Build](https://github.com/seireth/seireth/actions/workflows/build.yml) | Tests, coverage and SonarQube |
-| [Integration](https://github.com/seireth/seireth/actions/workflows/integration.yml) | Docker assessment lifecycle, including browser and packaged-asset checks |
+| Workflow                                                                            | Checks                                                                                      |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| [CI](https://github.com/seireth/seireth/actions/workflows/ci.yml)                   | Repository checks, Python quality, Frontend quality, Dependency review (pull requests only) |
+| [Build](https://github.com/seireth/seireth/actions/workflows/build.yml)             | Tests, coverage and SonarQube                                                               |
+| [Integration](https://github.com/seireth/seireth/actions/workflows/integration.yml) | Docker assessment lifecycle, including browser and packaged-asset checks                    |
 
 ## Getting started
 
@@ -57,16 +54,16 @@ on the API address to use the GUI.
 
 ## Documentation
 
-| Guide | Purpose |
-| --- | --- |
-| [Getting started](docs/getting-started.md) | Run, verify, stop, and troubleshoot |
-| [Configuration](docs/configuration.md) | Required settings, defaults, and Compose overrides |
-| [Assessments](docs/assessments.md) | Submit requests and interpret results |
-| [Architecture](docs/architecture.md) | Understand execution, persistence, and recovery |
-| [Plugin development](docs/plugins.md) | Add approved checks |
-| [Security model](docs/security-model.md) | Understand boundaries and investigate cleanup |
-| [Roadmap](docs/roadmap.md) | Future priorities and directions |
-| [Contributing](CONTRIBUTING.md) | Develop, test, and change schemas |
+| Guide                                      | Purpose                                            |
+| ------------------------------------------ | -------------------------------------------------- |
+| [Getting started](docs/getting-started.md) | Run, verify, stop, and troubleshoot                |
+| [Configuration](docs/configuration.md)     | Required settings, defaults, and Compose overrides |
+| [Assessments](docs/assessments.md)         | Submit requests and interpret results              |
+| [Architecture](docs/architecture.md)       | Understand execution, persistence, and recovery    |
+| [Plugin development](docs/plugins.md)      | Add approved checks                                |
+| [Security model](docs/security-model.md)   | Understand boundaries and investigate cleanup      |
+| [Roadmap](docs/roadmap.md)                 | Future priorities and directions                   |
+| [Contributing](CONTRIBUTING.md)            | Develop, test, and change schemas                  |
 
 Use only authorized targets. Report vulnerabilities through [SECURITY.md](SECURITY.md).
 Licensed under [Apache 2.0](LICENSE).
