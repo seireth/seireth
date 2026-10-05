@@ -28,7 +28,7 @@ PLUGIN = Plugin(
 )
 ```
 
-Import it in `app/plugins/__init__.py` and add it to the registry's ordered
+Import it in `app/plugins/registry.py` and add it to the registry's ordered
 `plugins` tuple. Registration enables explicit selection, never automatic
 execution. Startup rejects duplicate IDs and invalid manifests.
 
@@ -37,30 +37,39 @@ execution. Startup rejects duplicate IDs and invalid manifests.
 Observation `headers` is a `dict[str, list[str]]`: names are lowercased,
 differently cased names merge, and values retain response order. Do not join
 repeated `Set-Cookie` fields or split them on commas, which also occur in cookie
-expiry dates. The security-header plugin inspects the last value of each checked
-header. Each sandbox validates and returns an `HttpObservation` containing the
+expiry dates. Each sandbox validates and returns an `HttpObservation` containing the
 original authorized URL. Docker's internal `target` alias is only used for the
 runner request. The orchestrator reuses this validated observation.
 
+See the [header checks](assessments.md#header-checks) and
+[cookie checks](assessments.md#cookie-checks) for built-in behavior. Their
+[implementations](../app/plugins/) and [tests](../tests/plugins/) cover exact parsing
+and boundary cases.
+
 Each analyzer receives an independent copy of the shared HTTP observation and
-returns `PluginResponse`. Findings require bounded title/severity, nonblank
-description/remediation, and JSON-compatible evidence. Whitespace-only finding
-text is rejected; accepted text retains its formatting. Invalid output fails the
+returns `PluginResponse`. Titles and severities have length limits; descriptions
+and remediation must contain non-whitespace text, and evidence must be
+JSON-compatible. Accepted text retains its formatting. Invalid output fails the
 affected assessment without partial persistence.
 
-The cookie plugin retains only names, rule IDs, and normalized requirement values
-or booleans in findings/evidence. Never put cookie values, complete cookie fields,
-or arbitrary attribute values in output or diagnostics. Observation validation
-errors omit input values; sandbox validation suppresses raw exception chains.
+Never put cookie values, complete cookie fields, or arbitrary attribute values in
+output or diagnostics. Observation validation errors omit input values; sandbox
+validation suppresses raw exception chains.
 
-For a new evidence format, extend `EvidenceOut` in `app/schemas.py` and add
-retrieval tests. The [evidence endpoint](assessments.md#retrieve-evidence) rejects
-fields outside those models.
+For a new evidence format, update these together:
+
+- The payload models accepted by `EvidenceOut` in `app/api/schemas.py` and API
+  retrieval tests in `tests/api/test_assessments.py`.
+- `EvidenceData` in `app/dashboard/src/api/types.ts` and rendering in
+  `app/dashboard/src/components/EvidenceDetails.tsx`, with component tests.
+
+The [evidence endpoint](assessments.md#retrieve-evidence) rejects fields outside its
+accepted models; registration alone does not extend that contract.
 
 Analyzers run synchronously. Cancellation and deadline checks occur between
 calls; a blocking analyzer delays interruption and cleanup. Keep analysis bounded.
 
 Cover positive, negative, boundary, and relevant malformed/incomplete observations.
 Use a local `PluginRegistry` to test catalog visibility and selection; preserve
-shared registry/contract conformance. Run `python -m app test` and the
-[Ruff checks](../CONTRIBUTING.md#development-setup).
+shared registry/contract conformance. Follow [Contributing](../CONTRIBUTING.md#tests)
+for dependencies, disposable database setup, and test commands.

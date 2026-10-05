@@ -59,8 +59,10 @@ ownership, records observed IDs before removal, and uses successful enumeration
 to verify absence. Creation intent is durable before Docker runs. An absent
 resource whose creation is uncertain and ID unknown remains pending indefinitely;
 an identified, removed resource can be verified. Elapsed time is not evidence.
-Errors, permission failures, timeouts, and ownership mismatches never certify
-cleanup; mismatched resources remain untouched.
+Inspection/enumeration failures, timeouts, and ownership or identity mismatches
+leave cleanup unverified; mismatched resources remain untouched. A removal
+command's exit status alone is inconclusive: verified absence and the journal's
+creation state determine success.
 
 Post-execution cancellation requires verified cleanup. Otherwise the assessment
 fails with `cleanup_verified: false` and `cleanup_pending: true`.

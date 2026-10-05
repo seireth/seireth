@@ -1,9 +1,10 @@
 # Configuration
 
-Copy `.env.example` to `.env`; environment variables override it. Application
-settings use `SEIRETH_`. Never commit local credentials. The example password is
-for loopback development: change it and the connection URL together, using
-URL-safe credentials without unescaped URL delimiters.
+Copy `.env.example` to `.env`. Native application settings use `SEIRETH_`, with
+shell environment variables taking precedence over `.env`. Compose handles
+overrides separately, as described below. Never commit local credentials. The
+example password is for loopback development: change it and the connection URL
+together, using URL-safe credentials without unescaped URL delimiters.
 
 ## Required settings
 
@@ -21,7 +22,7 @@ URL-safe credentials without unescaped URL delimiters.
 | --- | --- |
 | `SEIRETH_ASSESSMENT_TIMEOUT_SECONDS` | 60; positive finite execution timeout |
 | `SEIRETH_DOCKER_RUNNER_IMAGE` | `python:3.14-slim`; operator-controlled |
-| `SEIRETH_DOCKER_MEMORY`, `SEIRETH_DOCKER_CPUS`, `SEIRETH_DOCKER_PIDS_LIMIT` | `256m`, `0.5`, `64` |
+| `SEIRETH_DOCKER_MEMORY`, `SEIRETH_DOCKER_CPUS`, `SEIRETH_DOCKER_PIDS_LIMIT` | `256m`, `0.5`, `64`; CPUs must be positive and finite, PIDs a positive integer |
 | `SEIRETH_DOCKER_TIMEOUT_SECONDS` | 15; positive finite base command timeout |
 
 Registration and every execution/retry enforce the image allowlist, including
@@ -36,14 +37,20 @@ Python analyzers cannot be forcibly preempted and are checked between calls.
 
 Docker header fetching has a fixed five-second budget. Resource creation and
 runner attachment use `max(configured command timeout, fetch budget + 5 seconds)`;
-target startup and cleanup use the configured command timeout. Cleanup can
-continue after the assessment deadline.
+target startup and cleanup use the configured timeout per command. Cleanup can
+continue after the assessment deadline; this timeout is not a total cleanup limit.
 
 ## Compose overrides
 
 Compose requires `POSTGRES_PASSWORD`, also reflected in the native connection URL.
 It overrides the API database URL with its bundled `postgres:5432` connection and
 selects `docker`. The runner uses its configured image or the application default.
+
+Compose loads API settings from `.env` through `env_file`. Shell variables override
+values used in Compose interpolation, such as the published API host/port and
+database password. They are not automatically forwarded into the API container:
+put optional settings such as `SEIRETH_DOCKER_CPUS` in `.env`, or explicitly add
+them to the service's `environment` in `docker-compose.yml`.
 
 The API publishes the configured host/port; its listener and health probe stay on
 8000. Verification maps `0.0.0.0` / `::` to loopback destinations. PostgreSQL is
