@@ -28,9 +28,8 @@ participation when appropriate.
 Report unacceptable behavior privately to
 [contact@hstensgaard.com](mailto:contact@hstensgaard.com).
 
-Maintainers will review reports fairly and confidentially, take any action they
-consider appropriate, and protect the privacy of the reporter whenever
-possible.
+Maintainers will review reports fairly and protect the reporter's privacy,
+sharing information only as needed to investigate and respond.
 
 This Code of Conduct applies to all project spaces, including issues, pull
 requests, discussions, reviews, and other project-managed channels.
