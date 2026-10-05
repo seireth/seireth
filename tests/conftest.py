@@ -1,19 +1,35 @@
 """Explicit disposable PostgreSQL databases; unit tests need no server."""
 
+import json
 import os
 from contextlib import ExitStack, contextmanager
 from datetime import timedelta
+from functools import partial
+from importlib import import_module
+from pathlib import Path
 from time import monotonic, sleep
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from alembic import command
+from alembic.config import Config
+from pydantic_settings import DotEnvSettingsSource
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
-# Do not load operator settings into tests. This URL is never connected to unless
-# a database fixture replaces it with a freshly created database.
+# Keep explicit test switches, but discard operator environment settings.
+for key in tuple(os.environ):
+    if (
+        key.startswith("SEIRETH_")
+        and not key.startswith("SEIRETH_TEST_")
+        and key != "SEIRETH_DOCKER_TESTS"
+    ):
+        del os.environ[key]
+
+# This URL is never connected to unless a database fixture replaces it.
 os.environ.update(
     SEIRETH_API_HOST="127.0.0.1",
     SEIRETH_API_PORT="8000",
@@ -21,6 +37,19 @@ os.environ.update(
     SEIRETH_DOCKER_TARGET_IMAGE="seireth/demo-target:local",
     SEIRETH_DOCKER_ALLOWED_TARGET_IMAGES='["seireth/demo-target:local"]',
     SEIRETH_DATABASE_URL="postgresql+psycopg://unused:unused@127.0.0.1/unused",
+)
+
+# Use Pydantic's defaults without loading the operator's .env. Export the full
+# baseline so API subprocesses also override optional settings in that file.
+with patch.object(DotEnvSettingsSource, "__call__", return_value={}):
+    test_settings = import_module("app.core.config").settings
+os.environ.update(
+    {
+        f"SEIRETH_{key.upper()}": json.dumps(value)
+        if isinstance(value, (list, dict))
+        else str(value)
+        for key, value in test_settings.model_dump(mode="json").items()
+    }
 )
 
 
@@ -40,7 +69,7 @@ def pytest_collection_modifyitems(items):
 
 
 @contextmanager
-def disposable_database():
+def disposable_database(alembic_config):
     admin_url = os.environ.get("SEIRETH_TEST_ADMIN_URL")
     if not admin_url:
         pytest.fail(
@@ -61,9 +90,9 @@ def disposable_database():
         url = (
             make_url(admin_url).set(database=name).render_as_string(hide_password=False)
         )
-        from app import db, worker
-        from app.config import settings
-        from app.migration import migrate
+        from app.assessments import worker
+        from app.core.config import settings
+        from app.persistence import db
 
         old_engine, old_factory, old_url = (
             db.engine,
@@ -81,13 +110,18 @@ def disposable_database():
         cleanup.callback(db.engine.dispose)
         db.SessionLocal = sessionmaker(db.engine, expire_on_commit=False)
         cleanup.callback(worker.dispatcher.stop)
-        migrate()
+        command.upgrade(alembic_config, "head")
         yield db
 
 
 @pytest.fixture
-def database_context():
-    return disposable_database
+def alembic_config():
+    return Config(toml_file=Path(__file__).resolve().parents[1] / "pyproject.toml")
+
+
+@pytest.fixture
+def database_context(alembic_config):
+    return partial(disposable_database, alembic_config)
 
 
 @pytest.fixture
@@ -98,8 +132,8 @@ def database(database_context):
 
 @pytest.fixture
 def assessment_graph(database):
-    from app import models
-    from app.config import settings
+    from app.core.config import settings
+    from app.persistence import models
 
     def make(*, owner="local-development", plugins=None, status="queued"):
         with database.SessionLocal() as db:
@@ -136,25 +170,6 @@ def assessment_graph(database):
             )
 
     return make
-
-
-@pytest.fixture
-def fake_docker(monkeypatch):
-    from tests.fake_docker import FakeDocker
-
-    daemon = FakeDocker()
-    daemon.install(monkeypatch)
-    yield daemon
-    assert not daemon.unsupported_calls, daemon.unsupported_calls
-
-
-@pytest.fixture
-def execution_context():
-    from threading import Event
-
-    from app.execution import ExecutionContext
-
-    return ExecutionContext(Event(), Event(), monotonic() + 5)
 
 
 @pytest.fixture
@@ -201,13 +216,3 @@ def make_plugin():
         )
 
     return make
-
-
-@pytest.fixture
-def client(database):
-    from fastapi.testclient import TestClient
-
-    from app.main import app
-
-    with TestClient(app) as test_client:
-        yield test_client

@@ -20,14 +20,19 @@ def finding_headers(headers):
     return {finding.evidence["header"] for finding in response(headers).findings}
 
 
-@pytest.mark.parametrize("value", ["nosniff", "NoSniff", " nosniff "])
+@pytest.mark.parametrize(
+    "value", ["nosniff", "NoSniff", " nosniff ", "nosniff, other", "nosniff,"]
+)
 def test_nosniff_value_is_accepted(value):
     assert "x-content-type-options" not in finding_headers(
         {"X-Content-Type-Options": value}
     )
 
 
-@pytest.mark.parametrize("value", [None, "", "invalid", "nosniff, other"])
+@pytest.mark.parametrize(
+    "value",
+    [None, "", "invalid", "other, nosniff", ",nosniff", '"nosniff"', "\u00a0nosniff"],
+)
 def test_missing_or_ineffective_nosniff_is_reported(value):
     headers = {} if value is None else {"X-Content-Type-Options": value}
     assert "x-content-type-options" in finding_headers(headers)
@@ -113,13 +118,107 @@ def test_protected_response_with_mixed_case_header_names_has_no_findings():
 
 
 @pytest.mark.parametrize(
-    "values,reported", [(["invalid", "nosniff"], False), (["nosniff", "invalid"], True)]
+    "values,reported",
+    [
+        (["invalid", "nosniff"], True),
+        (["nosniff", "invalid"], False),
+        (["", "nosniff"], True),
+        (["nosniff", ""], False),
+        (['"other, nosniff"'], True),
+        (['"other, nosniff'], True),
+    ],
 )
-def test_repeated_security_headers_use_last_value(values, reported):
+def test_nosniff_uses_first_parsed_value(values, reported):
     response = analyze(
         HttpObservation(url=URL, headers={"X-Content-Type-Options": values})
     )
     assert (
         "x-content-type-options"
         in {item.evidence["header"] for item in response.findings}
+    ) is reported
+
+
+@pytest.mark.parametrize(
+    "policies",
+    [
+        ["frame-ancestors 'none'", "default-src 'self'"],
+        ["default-src 'self'", "frame-ancestors 'none'"],
+        ["frame-ancestors 'none'", ""],
+        ["frame-ancestors 'none', default-src 'self'"],
+        ["frame-ancestors *, frame-ancestors 'none'"],
+        ["frame-ancestors 'none'; frame-ancestors *"],
+        ["frame-ancestors"],
+    ],
+)
+def test_restrictive_enforced_policy_provides_framing_protection(policies):
+    result = analyze(
+        HttpObservation(url=URL, headers={"Content-Security-Policy": policies})
+    )
+    assert "x-frame-options" not in {
+        item.evidence["header"] for item in result.findings
+    }
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        "frame-ancestors *",
+        "frame-ancestors *; frame-ancestors 'none'",
+        "frame-ancestors invalid-source",
+    ],
+)
+def test_enforced_frame_ancestors_overrides_deny_even_without_recognized_protection(
+    policy,
+):
+    result = analyze(
+        HttpObservation(
+            url=URL,
+            headers={
+                "Content-Security-Policy": [policy],
+                "X-Frame-Options": ["DENY"],
+            },
+        )
+    )
+    assert "x-frame-options" in {item.evidence["header"] for item in result.findings}
+
+
+def test_report_only_frame_ancestors_does_not_override_deny():
+    result = analyze(
+        HttpObservation(
+            url=URL,
+            headers={
+                "Content-Security-Policy-Report-Only": ["frame-ancestors *"],
+                "X-Frame-Options": ["DENY"],
+            },
+        )
+    )
+    assert {item.evidence["header"] for item in result.findings} == {
+        "x-content-type-options",
+        "content-security-policy",
+    }
+
+
+@pytest.mark.parametrize(
+    "values,reported",
+    [
+        (["SAMEORIGIN", "SAMEORIGIN"], False),
+        (["SAMEORIGIN, DENY"], False),
+        (["SAMEORIGIN,"], False),
+        (["INVALID", "DENY"], False),
+        (["DENY", "INVALID"], False),
+        (["ALLOWALL, INVALID"], False),
+        (["ALLOWALL,"], False),
+        (["INVALID, INVALID"], True),
+        (['"INVALID, DENY"'], True),
+        (['"INVALID, DENY'], True),
+        (['"DENY"'], True),
+        ([r'"INVALID\", DENY", SAMEORIGIN'], False),
+    ],
+)
+def test_repeated_frame_options_and_quoted_values_follow_browser_rules(
+    values, reported
+):
+    result = analyze(HttpObservation(url=URL, headers={"X-Frame-Options": values}))
+    assert (
+        "x-frame-options" in {item.evidence["header"] for item in result.findings}
     ) is reported

@@ -1,5 +1,5 @@
 def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monkeypatch):
-    from app.worker import dispatcher
+    from app.assessments.worker import dispatcher
 
     catalog = (client.get("/api/v1/plugins")).json()
     assert [item["id"] for item in catalog] == ["security-headers", "cookie-security"]

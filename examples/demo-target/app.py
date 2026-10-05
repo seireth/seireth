@@ -7,7 +7,6 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/slow":
             sleep(1.5)  # Owned fixture for cancellation and process-crash tests.
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
         if self.path == "/cookies":
             for cookie in (
                 "theme=synthetic-theme; SameSite=Lax",
@@ -17,10 +16,12 @@ class Handler(BaseHTTPRequestHandler):
             ):
                 self.send_header("Set-Cookie", cookie)
         self.end_headers()
-        self.wfile.write(b"Seireth intentionally vulnerable demo target")
 
     def log_message(self, *_):
+        # Intentionally suppress request logs for this demo test fixture.
         pass
 
 
+# HTTP is intentional for insecure-cookie tests.
+# The sandbox uses an internal Docker network with no published target port.
 HTTPServer(("0.0.0.0", 8080), Handler).serve_forever()

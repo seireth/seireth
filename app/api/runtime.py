@@ -1,12 +1,12 @@
 from fastapi import APIRouter
 
-from ..config import settings
-from ..schemas import RuntimeOut
+from ..core.config import settings
+from .schemas import RuntimeOut
 
 router = APIRouter()
 
 
-@router.get("/api/v1/runtime", response_model=RuntimeOut)
+@router.get("/runtime", response_model=RuntimeOut)
 def runtime():
     return {
         "sandbox_backend": settings.sandbox_backend,

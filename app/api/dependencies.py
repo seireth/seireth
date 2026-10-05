@@ -5,8 +5,8 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from .. import models
-from ..policy import ACTOR, http_origin
+from ..assessments.policy import ACTOR, http_origin
+from ..persistence import models
 
 
 def authorize_project(db: Session, project_id: str) -> models.Project:

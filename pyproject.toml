@@ -3,7 +3,7 @@ requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.uv]
-required-version = "==0.12.21"
+required-version = "==0.12.23"
 no-build = true
 
 [project]
@@ -17,18 +17,14 @@ dependencies = [
   "sqlalchemy>=2.0",
   "psycopg[binary]>=3.3,<4",
   "alembic>=1.18,<2",
-  "pydantic>=2.0",
+  "pydantic>=2.11",
   "pydantic-settings>=2.0",
   "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0", "httpx2>=2.0.0"]
+test = ["pytest>=8.0", "httpx2>=2.0.0", "pytest-cov>=7,<8", "coverage>=7.10.6,<8"]
 quality = ["ruff>=0.15,<0.17"]
-security = ["pip-audit>=2.9,<3"]
-
-[tool.ruff]
-target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]
@@ -41,13 +37,20 @@ markers = [
   "docker: requires the real Docker daemon and prepared assessment images",
 ]
 
+[tool.coverage.run]
+source = ["app"]
+relative_files = true
+branch = true
+patch = ["subprocess"]
+
 [tool.setuptools]
-packages = ["app", "app.api", "app.plugins"]
+packages = ["app", "app.api", "app.assessments", "app.cli", "app.core", "app.persistence", "app.plugins"]
 include-package-data = false
 
 [tool.setuptools.package-data]
-app = ["migrations/*.py", "migrations/versions/*.py", "migrations/*.mako", "web/dist/*", "web/dist/assets/*"]
+app = ["dashboard/dist/*", "dashboard/dist/assets/*"]
+"app.persistence" = ["migrations/*.py", "migrations/versions/*.py", "migrations/*.mako"]
 
 [tool.alembic]
-script_location = "%(here)s/app/migrations"
+script_location = "app.persistence:migrations"
 prepend_sys_path = ["."]

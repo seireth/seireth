@@ -12,9 +12,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app import models
-from app.config import settings
-from app.verify import verify
+from app.cli.verify import verify
+from app.core.config import settings
+from app.persistence import models
 
 docker_only = pytest.mark.skipif(
     os.environ.get("SEIRETH_DOCKER_TESTS") != "1",

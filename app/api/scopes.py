@@ -2,23 +2,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import models
-from ..db import get_db
-from ..lifecycle import audit
-from ..policy import bounded_url, unexpired
-from ..schemas import (
-    PageOut,
-    ScopeCreate,
-    ScopeOut,
-)
+from ..assessments.lifecycle import audit
+from ..assessments.policy import bounded_url, unexpired
+from ..persistence import models
+from ..persistence.db import get_db
 from .dependencies import authorize_project, page, pagination
+from .schemas import PageOut, ScopeCreate, ScopeOut
 
 router = APIRouter()
 
 
 @router.get(
-    "/api/v1/projects/{project_id}/authorization-scopes",
+    "/projects/{project_id}/authorization-scopes",
     response_model=PageOut[ScopeOut],
+    responses={404: {"description": "Project or target not found in project"}},
 )
 def list_scopes(
     project_id: str,
@@ -44,7 +41,11 @@ def list_scopes(
     )
 
 
-@router.get("/api/v1/authorization-scopes/{scope_id}", response_model=ScopeOut)
+@router.get(
+    "/authorization-scopes/{scope_id}",
+    response_model=ScopeOut,
+    responses={404: {"description": "Authorization scope not found"}},
+)
 def get_scope(scope_id: str, db: Session = Depends(get_db)):
     item = db.get(models.AuthorizationScope, scope_id)
     if item is None:
@@ -53,7 +54,14 @@ def get_scope(scope_id: str, db: Session = Depends(get_db)):
     return item
 
 
-@router.post("/api/v1/authorization-scopes")
+@router.post(
+    "/authorization-scopes",
+    responses={
+        400: {
+            "description": "Authorization scope is invalid, expired, or outside the target URL boundary"
+        }
+    },
+)
 def create_scope(payload: ScopeCreate, db: Session = Depends(get_db)):
     """Create an unexpired authorization scope bounded to its target."""
 

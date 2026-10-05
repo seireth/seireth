@@ -6,32 +6,40 @@ services:
     environment:
       POSTGRES_USER: seireth
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: seireth
     ports: ["127.0.0.1:5432:5432"]
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U seireth -d seireth"]
+      test: ["CMD", "pg_isready", "-U", "seireth", "-d", "seireth"]
       interval: 2s
       timeout: 5s
       retries: 30
+
   migrate:
     profiles: [tools]
     image: ${COMPOSE_PROJECT_NAME:-seireth}-app:local
     env_file: [.env]
     environment:
       SEIRETH_DATABASE_URL: postgresql+psycopg://seireth:${POSTGRES_PASSWORD}@postgres:5432/seireth
-    command: ["python", "-m", "app", "migrate"]
+    command: ["python", "-m", "alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy
+
   api:
     image: ${COMPOSE_PROJECT_NAME:-seireth}-app:local
     build: .
     # docker-up detects the mounted socket's group before starting the API.
     group_add: ["${SEIRETH_DOCKER_SOCKET_GID:-65532}"]
     healthcheck:
-      test: ["CMD", "python", "-m", "app.healthcheck"]
+      test:
+        - CMD
+        - python
+        - -c
+        - |
+          import urllib.request
+          with urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=2) as response:
+              raise SystemExit(response.status != 200)
       interval: 2s
       timeout: 3s
       retries: 60
@@ -49,5 +57,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
 volumes:
   postgres-data:

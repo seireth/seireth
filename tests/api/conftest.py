@@ -10,6 +10,14 @@ from app.api.router import router
 
 
 @pytest.fixture
+def client(database):
+    from app.main import app
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
 def read_client(database):
     application = FastAPI()
     application.include_router(router)
@@ -62,7 +70,7 @@ def assessment_payload(client, scope_payload):
 
 @pytest.fixture
 def dispatch_calls(client, monkeypatch):
-    from app.worker import dispatcher
+    from app.assessments.worker import dispatcher
 
     calls = {"submit": [], "cancel": []}
     for method, recorded in calls.items():

@@ -1,44 +1,34 @@
 version: 2
-updates:
-  # Node dependencies in package.json and package-lock.json.
-  - package-ecosystem: npm
-    directory: /app/web
-    schedule:
-      interval: weekly
 
-  # Actions referenced by workflows, including commit-pinned actions.
+updates:
+  - package-ecosystem: npm
+    directory: /app/dashboard
+    schedule: { interval: daily }
+
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: weekly
+    schedule: { interval: daily }
 
-  # Runtime and development dependencies in pyproject.toml and uv.lock.
   - package-ecosystem: uv
     directory: /
-    schedule:
-      interval: weekly
+    schedule: { interval: daily }
 
-  # Application and demo Dockerfiles, including the uv build stage.
   - package-ecosystem: docker
     directories: [/, /examples/demo-target]
-    schedule:
-      interval: weekly
+    schedule: { interval: daily }
     ignore:
-      # Node must match the exact frontend, CI, and development pins.
+      # Update Node together with frontend, CI, and development pins.
       - dependency-name: node
-        update-types: [version-update:semver-major, version-update:semver-minor, version-update:semver-patch]
-      # Python 3.14 is shared with CI, Ruff, and the sandbox runner.
+      # Update uv together with pyproject.toml, CI, and development pins.
+      - dependency-name: ghcr.io/astral-sh/uv
+      # Keep Python aligned with CI, Ruff, and the sandbox runner.
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]
 
-  # Monitor the database, excluding images built locally by Compose.
   - package-ecosystem: docker-compose
     directory: /
-    schedule:
-      interval: weekly
+    schedule: { interval: daily }
     allow:
+      # Only maintain PostgreSQL within its current major version.
       - dependency-name: postgres
-    ignore:
-      # Major database upgrades require a separate data migration plan.
-      - dependency-name: postgres
-        update-types: [version-update:semver-major]
+        update-types: [version-update:semver-minor, version-update:semver-patch]

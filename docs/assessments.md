@@ -1,7 +1,7 @@
 # Assessments
 
-Use `/docs` on your API for schemas and interactive requests, or run the
-[verification workflow](getting-started.md#simulated-assessment).
+Use the API's generated `/docs` explorer for schemas and interactive requests, or
+run the [verification workflow](getting-started.md#simulated-assessment).
 
 ## Authorize and select
 
@@ -17,13 +17,10 @@ Scopes must match the project/target and registered origin/path, and remain
 unexpired at creation, submission, execution, and retry. Requests use one
 development actor; there is no login flow.
 
-Get selectable plugin IDs from `GET /api/v1/plugins`. The catalog lists reviewed
-built-ins with stable `id`, `name`, and `description`. Submit an explicit, nonnull,
-nonempty selection of unique active IDs. See [Plugin development](plugins.md) to add checks.
-
-The built-ins are `security-headers` and `cookie-security`. Select either or both,
-for example `"plugins": ["security-headers", "cookie-security"]`. Registering a
-plugin never automatically selects it; existing requests remain explicit.
+Get selectable IDs from `GET /api/v1/plugins`. The built-ins are `security-headers`
+and `cookie-security`; select either or both. Selection must be explicit, nonempty,
+and contain unique active IDs. Registering a plugin never automatically selects it.
+See [Plugin development](plugins.md) to add checks.
 
 Submit this body, replacing placeholder IDs with those returned above:
 
@@ -38,25 +35,9 @@ Submit this body, replacing placeholder IDs with those returned above:
 
 ## Poll status and results
 
-Submission returns HTTP 202 and a `Location` to poll. Selected IDs are persisted;
-submission and `GET /api/v1/assessments/{id}` share this representation:
-
-```json
-{
-  "id": "assessment-id",
-  "project_id": "project-id",
-  "target_id": "target-id",
-  "scope_id": "scope-id",
-  "created_at": "2026-10-02T12:00:00Z",
-  "status": "queued",
-  "plugins": ["security-headers"],
-  "result": null,
-  "cleanup_pending": false
-}
-```
-
-`result` is null until an outcome exists. Background execution can advance the
-initial status before the response arrives; handle every state.
+Submission returns HTTP 202, the saved assessment, and a `Location` to poll.
+Selected plugin IDs are persisted. `result` is null until an outcome exists;
+execution can advance the initial status before the response arrives.
 
 | Status | Meaning |
 | --- | --- |
@@ -69,39 +50,15 @@ initial status before the response arrives; handle every state.
 | `cancelled` | Cancellation recorded; execution may never have started |
 
 Poll until `completed`, `failed`, or `cancelled`. Append `/results` to `Location`
-for findings. Example successful response with one finding (illustrative IDs/time):
-
-```json
-{
-  "assessment_id": "assessment-id",
-  "status": "completed",
-  "cleanup_pending": false,
-  "result": {
-    "plugins": [{"id": "security-headers", "finding_count": 1}],
-    "finding_count": 1,
-    "sandbox_backend": "docker",
-    "cleanup_verified": true,
-    "cleanup_reason": null,
-    "completed_at": "2026-09-25T12:00:00+00:00",
-    "attempt": 1
-  },
-  "findings": [{
-    "id": "finding-id",
-    "plugin": "security-headers",
-    "title": "Missing Content-Security-Policy",
-    "severity": "medium",
-    "description": "The response has no nonblank enforced Content-Security-Policy header.",
-    "remediation": "Define and test an enforced Content-Security-Policy appropriate for this application."
-  }]
-}
-```
-
-`result.plugins` preserves selection order with per-plugin counts; `finding_count`
-is the total. Zero findings does not establish security.
+for findings. For completed assessments, `result` includes `sandbox_backend`,
+`attempt`, and `completed_at`. `result.plugins` preserves selection order with
+per-plugin counts; `result.finding_count` is the total. Zero findings does not
+establish security.
 
 Execution errors populate `result.error`. Inspect cleanup independently:
 unverified cleanup produces `failed`, even after cancellation. Both responses
-include `cleanup_pending`; `result.cleanup_reason` explains uncertainty. Follow the
+include `cleanup_pending`; `result.cleanup_verified` records verification and
+`result.cleanup_reason` explains uncertainty. Follow the
 [cleanup procedure](security-model.md#cleanup-and-failure); reconciliation can
 update cleanup fields after execution becomes terminal.
 
@@ -111,44 +68,16 @@ cancels its reads. Evidence failures show a retry action without hiding findings
 
 ## Retrieve evidence
 
-`GET /api/v1/assessments/{assessment_id}/evidence` returns `assessment_id`,
-`status`, `cleanup_pending`, and an `evidence` array ordered by evidence ID.
-Match each entry's `finding_id` to the finding's `id` in the results response.
-
-```json
-{
-  "assessment_id": "assessment-id",
-  "status": "completed",
-  "cleanup_pending": false,
-  "evidence": [{
-    "id": "evidence-id",
-    "finding_id": "finding-id",
-    "kind": "http-response",
-    "data": {
-      "url": "http://demo-target:8080/",
-      "header": "content-security-policy"
-    }
-  }]
-}
-```
-
-| Evidence payload | Public fields |
-| --- | --- |
-| Security header | `url`, `header` (`x-content-type-options`, `content-security-policy`, or `x-frame-options`) |
-| SameSite cookie | `url`, `header="set-cookie"`, `cookie_name`, `rule="samesite-none-without-secure"`, `samesite="none"`, `secure` |
-| Secure prefix cookie | `url`, `header="set-cookie"`, `cookie_name`, `rule="secure-prefix"`, `secure`, `https` |
-| Host prefix cookie | `url`, `header="set-cookie"`, `cookie_name`, `rule="host-prefix"`, `secure`, `https`, `domain_present`, `root_path` |
-
-All listed fields are required; URLs must use HTTP(S), cookie names preserve their
-spelling, and booleans must be JSON `true` or `false`. Cookie values and complete
-header fields are never returned; unlisted fields are rejected.
-Invalid stored evidence causes HTTP 500 with `stored evidence is invalid`;
-the entire response fails. See [diagnostic redaction](security-model.md).
-
-Access uses the same project authorization as results: unknown assessments
-return 404 and denied project access returns 403. Expired scopes still allow reads.
+`GET /api/v1/assessments/{assessment_id}/evidence` returns an `evidence` array ordered
+by evidence ID. Match each entry's `finding_id` to a finding's `id` in `/results`.
 The array is empty unless the assessment is completed with findings.
-Retrieval runs no assessment and writes no database records or audit events.
+
+Evidence identifies the response URL and header. Cookie evidence also identifies
+the cookie name, rule, and normalized requirement values or flags. Cookie values
+and complete fields are excluded. See `/docs` for the accepted payload models;
+unlisted fields are rejected. Invalid stored evidence fails the entire response
+with HTTP 500 and `stored evidence is invalid`. See
+[diagnostic redaction](security-model.md).
 
 ## Discover saved records
 
@@ -185,6 +114,11 @@ return 403. CLI requests without `Origin` continue to work.
 | Framing protection | `X-Frame-Options: DENY` / `SAMEORIGIN`, or an enforced CSP whose first `frame-ancestors` directive uses `'none'` alone or only supported sources, e.g. `'self' https://trusted.test` |
 
 Bare `*`, scheme-only sources, and report-only framing policies do not qualify.
+The MIME check uses the first parsed header-list value. Any enforced
+`frame-ancestors` directive overrides `X-Frame-Options`; one restrictive enforced
+policy is enough, and an empty ancestor list also counts as blocking framing.
+When no such directive exists, the plugin uses `X-Frame-Options`, including
+repeated/comma-separated values and conflicts that block framing.
 See the [implementation](../app/plugins/security_headers.py) for exact matching.
 These checks do not fully validate CSP, prove security, or assess every response.
 

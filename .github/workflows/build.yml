@@ -1,0 +1,115 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Tests, coverage and SonarQube
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROJECT_NAME: seireth-tests
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.16.0"
+          cache: npm
+          cache-dependency-path: app/dashboard/package-lock.json
+      - name: Install test dependencies
+        run: |
+          uv sync --locked --extra test --no-build
+          npm install --global --ignore-scripts npm@11.13.0
+          npm --prefix app/dashboard ci --ignore-scripts
+      - name: Generate disposable database credentials
+        run: |
+          cp .env.example .env
+          password=$(python -c 'import secrets; print(secrets.token_hex(32))')
+          echo "::add-mask::$password"
+          base_url="postgresql+psycopg://seireth:$password@127.0.0.1:5432"
+          {
+            echo "POSTGRES_PASSWORD=$password"
+            echo "SEIRETH_DATABASE_URL=$base_url/seireth"
+            echo "SEIRETH_TEST_ADMIN_URL=$base_url/postgres"
+          } >> "$GITHUB_ENV"
+      - name: Start PostgreSQL
+        run: docker compose up --wait --wait-timeout 60 postgres
+      - name: Python tests and coverage
+        run: |
+          mkdir -p artifacts
+          uv run --no-sync --no-build python -m pytest -m "not docker" --basetemp artifacts/pytest \
+            --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-report=xml:coverage.xml
+      - name: Frontend tests and coverage
+        run: npm --prefix app/dashboard test -- --coverage
+      - name: Verify coverage reports
+        run: |
+          for report in coverage.xml app/dashboard/coverage/lcov.info; do
+            test -s "$report" || { echo "::error file=$report::Coverage report is missing or empty"; exit 1; }
+          done
+      - name: Cache SonarQube packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+      - name: Check SonarQube credentials
+        if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          test -n "$SONAR_TOKEN" || { echo "::error::SONAR_TOKEN is required for repository analysis"; exit 1; }
+      - name: SonarQube Scan
+        if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=seireth
+            -Dsonar.projectKey=seireth_seireth
+            -Dsonar.python.version=3.14
+            -Dsonar.sources=.
+            -Dsonar.exclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**,**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
+            -Dsonar.tests=tests,app/dashboard/e2e,app/dashboard/src
+            -Dsonar.test.inclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**
+            -Dsonar.python.coverage.reportPaths=coverage.xml
+            -Dsonar.javascript.lcov.reportPaths=app/dashboard/coverage/lcov.info
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
+      - name: PostgreSQL diagnostics
+        if: failure()
+        run: docker compose logs --no-color postgres
+      - name: Tear down test database
+        if: always()
+        run: docker compose down --volumes --remove-orphans
+      - name: Upload API process logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-test-logs
+          path: artifacts/pytest/**/api.log
+          if-no-files-found: ignore
+          retention-days: 7

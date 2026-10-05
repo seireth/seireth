@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
-from app import models
+from app.persistence import models
 from tests.api.helpers import snapshot, submission
 
 
@@ -107,7 +107,7 @@ def test_passive_assessment_returns_json_and_cleanup(
 def test_queued_and_cancelled_before_execution_have_no_result(
     client, assessment_payload, monkeypatch
 ):
-    from app.worker import dispatcher
+    from app.assessments.worker import dispatcher
 
     submitted = []
     monkeypatch.setattr(dispatcher, "submit", submitted.append)
@@ -141,8 +141,8 @@ def test_queued_and_cancelled_before_execution_have_no_result(
 def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
     client, assessment_payload, monkeypatch, database, wait_until, caplog, plugins
 ):
+    from app.assessments.sandbox import InMemorySandbox
     from app.plugins.base import HttpObservation
-    from app.sandbox import InMemorySandbox
 
     secret = "cookie-secret-not-for-storage"
     calls = []
@@ -375,8 +375,8 @@ def test_invalid_stored_evidence_fails_without_partial_response_or_secret_diagno
 def test_repeated_cookies_and_multiple_rules_keep_their_exact_finding_links(
     client, assessment_payload, monkeypatch, wait_until, database
 ):
+    from app.assessments.sandbox import InMemorySandbox
     from app.plugins.base import HttpObservation
-    from app.sandbox import InMemorySandbox
 
     secret = "synthetic-repeated-cookie-secret"
     monkeypatch.setattr(

@@ -5,13 +5,15 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .. import models
-from ..config import settings
-from ..db import get_db
-from ..lifecycle import audit, transition
-from ..plugins import registry as plugin_registry
-from ..policy import PolicyError, validate
-from ..schemas import (
+from ..assessments.lifecycle import audit, transition
+from ..assessments.policy import PolicyError, validate
+from ..assessments.worker import dispatcher
+from ..core.config import settings
+from ..persistence import models
+from ..persistence.db import get_db
+from ..plugins.registry import registry as plugin_registry
+from .dependencies import authorize_project, page, pagination
+from .schemas import (
     AssessmentCreate,
     AssessmentEvidenceOut,
     AssessmentOut,
@@ -19,16 +21,13 @@ from ..schemas import (
     EvidenceOut,
     PageOut,
 )
-from ..worker import dispatcher
-from .dependencies import authorize_project, page, pagination
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_ASSESSMENT_NOT_FOUND_RESPONSE = {"description": "Assessment not found"}
 
 
-@router.get(
-    "/api/v1/projects/{project_id}/assessments", response_model=PageOut[AssessmentOut]
-)
+@router.get("/projects/{project_id}/assessments", response_model=PageOut[AssessmentOut])
 def list_assessments(
     project_id: str, db: Session = Depends(get_db), bounds=Depends(pagination)
 ):
@@ -42,7 +41,15 @@ def list_assessments(
     )
 
 
-@router.post("/api/v1/assessments", response_model=AssessmentOut, status_code=202)
+@router.post(
+    "/assessments",
+    response_model=AssessmentOut,
+    status_code=202,
+    responses={
+        400: {"description": "Plugin selection is invalid"},
+        403: {"description": "Project access or assessment authorization is denied"},
+    },
+)
 def create_assessment(
     payload: AssessmentCreate, response: Response, db: Session = Depends(get_db)
 ):
@@ -79,7 +86,11 @@ def create_assessment(
     return item
 
 
-@router.get("/api/v1/assessments/{assessment_id}", response_model=AssessmentOut)
+@router.get(
+    "/assessments/{assessment_id}",
+    response_model=AssessmentOut,
+    responses={404: _ASSESSMENT_NOT_FOUND_RESPONSE},
+)
 def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
     """Return the persisted state of one assessment."""
 
@@ -91,7 +102,9 @@ def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/api/v1/assessments/{assessment_id}/results", response_model=AssessmentResultsOut
+    "/assessments/{assessment_id}/results",
+    response_model=AssessmentResultsOut,
+    responses={404: _ASSESSMENT_NOT_FOUND_RESPONSE},
 )
 def get_results(assessment_id: str, db: Session = Depends(get_db)):
     """Return the assessment status, JSON result, and normalized findings."""
@@ -107,8 +120,12 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/api/v1/assessments/{assessment_id}/evidence",
+    "/assessments/{assessment_id}/evidence",
     response_model=AssessmentEvidenceOut,
+    responses={
+        404: _ASSESSMENT_NOT_FOUND_RESPONSE,
+        500: {"description": "Stored evidence is invalid"},
+    },
 )
 def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
     """Return validated evidence for an authorized, completed assessment."""
@@ -123,14 +140,7 @@ def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
         )
         for row in rows:
             try:
-                evidence.append(
-                    EvidenceOut(
-                        id=row.id,
-                        finding_id=row.finding_id,
-                        kind=row.kind,
-                        data=row.data,
-                    )
-                )
+                evidence.append(EvidenceOut.model_validate(row, from_attributes=True))
             except ValidationError:
                 logger.error(
                     "Invalid stored evidence for assessment %s, evidence %s",
@@ -146,7 +156,13 @@ def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/api/v1/assessments/{assessment_id}/cancel")
+@router.post(
+    "/assessments/{assessment_id}/cancel",
+    responses={
+        404: _ASSESSMENT_NOT_FOUND_RESPONSE,
+        409: {"description": "Assessment is no longer cancellable"},
+    },
+)
 def cancel_assessment(
     assessment_id: str, response: Response, db: Session = Depends(get_db)
 ):

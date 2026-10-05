@@ -6,11 +6,17 @@ plus separate ownership monitoring and cleanup reconciliation threads.
 
 `app/main.py` assembles FastAPI, dispatcher lifespan, health, and built GUI
 serving. `app/api/` groups resource routes and shared HTTP authorization;
-`app/web/` contains the React/TypeScript frontend and its tests.
+`app/dashboard/` contains the React/TypeScript frontend and its tests.
 Native and Docker servers use `app.main:app`.
 
-Vite builds `app/web/dist/`; only those assets join the backend in the Python
-package and final container. `/` redirects to `/app/`, where HTML fallback supports
+`app/core/` contains configuration and shared constraints. `app/persistence/`
+contains database sessions, models, and Alembic migrations. `app/assessments/`
+contains policy, execution, workers, and sandbox lifecycle management.
+`app/cli/` implements development commands and workflow verification;
+`app/__main__.py` delegates to it, preserving `python -m app` commands.
+
+Vite builds `app/dashboard/dist/`; only those assets join the backend in the Python
+package and final container. `/` redirects to `/dashboard/`, where HTML fallback supports
 page refreshes and client-side navigation; missing assets return 404.
 
 ## Persistence and ownership
@@ -43,8 +49,9 @@ migration revisions. Follow [startup](getting-started.md) and
 Evidence has a required `finding_id`; assessment and project ownership derive
 from that finding.
 
-`app/policy.py` owns authorization rules; `app/lifecycle.py` owns transitions and
-finalization. [Plugin manifests](plugins.md) produce the API catalog.
+`app/assessments/policy.py` owns authorization rules;
+`app/assessments/lifecycle.py` owns transitions and finalization.
+[Plugin manifests](plugins.md) produce the API catalog.
 
 ## Recovery
 
@@ -60,7 +67,9 @@ pending cleanup without re-executing its plugins.
 
 A separate thread revisits failed cleanup and orphaned attempts after startup,
 waiting 30 seconds between passes without blocking readiness or unrelated work.
-Normal shutdown interrupts work and performs bounded cleanup.
+Normal shutdown signals interruption and waits for workers and reconciliation.
+Docker cleanup commands have individual timeouts; a blocking synchronous plugin
+can delay interruption and total shutdown.
 
 Journal writes use short row-locked transactions; Docker commands run outside
 them. See the [cleanup guarantees](security-model.md#cleanup-and-failure) for

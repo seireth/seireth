@@ -1,5 +1,7 @@
 """Conservative cookie checks and value-free findings."""
 
+import logging
+
 import pytest
 
 from app.plugins.base import HttpObservation
@@ -56,34 +58,95 @@ def test_samesite_none_requires_secure(same_site):
 
 
 @pytest.mark.parametrize(
-    "cookie,url,rule",
+    "cookie,url,rule,flags",
     [
-        (f"__Secure-session={SECRET}", URL, "secure-prefix"),
-        (f"__Secure-session={SECRET}; Secure", "http://example.test/", "secure-prefix"),
-        (f"__Host-session={SECRET}; Path=/", URL, "host-prefix"),
+        (
+            f"__Secure-session={SECRET}",
+            URL,
+            "secure-prefix",
+            {"secure": False, "https": True},
+        ),
+        (
+            f"__Secure-session={SECRET}; Secure",
+            "http://example.test/",
+            "secure-prefix",
+            {"secure": True, "https": False},
+        ),
+        (
+            f"__Host-session={SECRET}; Path=/",
+            URL,
+            "host-prefix",
+            {
+                "secure": False,
+                "https": True,
+                "domain_present": False,
+                "root_path": True,
+            },
+        ),
         (
             f"__Host-session={SECRET}; Secure; Path=/",
             "http://example.test/",
             "host-prefix",
+            {
+                "secure": True,
+                "https": False,
+                "domain_present": False,
+                "root_path": True,
+            },
         ),
         (
             f"__Host-session={SECRET}; Secure; Path=/; Domain=example.test",
             URL,
             "host-prefix",
+            {"secure": True, "https": True, "domain_present": True, "root_path": True},
         ),
-        (f"__Host-session={SECRET}; Secure", URL, "host-prefix"),
-        (f"__Host-session={SECRET}; Secure; Path=/app", URL, "host-prefix"),
+        (
+            f"__Host-session={SECRET}; Secure",
+            URL,
+            "host-prefix",
+            {
+                "secure": True,
+                "https": True,
+                "domain_present": False,
+                "root_path": False,
+            },
+        ),
+        (
+            f"__Host-session={SECRET}; Secure; Path=/app",
+            URL,
+            "host-prefix",
+            {
+                "secure": True,
+                "https": True,
+                "domain_present": False,
+                "root_path": False,
+            },
+        ),
         (
             f"__Host-session={SECRET}; Domain=example.test; Path=/app",
             "http://example.test/",
             "host-prefix",
+            {
+                "secure": False,
+                "https": False,
+                "domain_present": True,
+                "root_path": False,
+            },
         ),
     ],
 )
-def test_each_prefix_reports_one_finding_for_all_failed_requirements(cookie, url, rule):
+def test_each_prefix_reports_one_finding_for_all_failed_requirements(
+    cookie, url, rule, flags
+):
     result = findings(cookie, url=url)
     assert len(result) == 1
-    assert result[0].evidence["rule"] == rule
+    assert result[0].evidence == {
+        "url": url,
+        "header": "set-cookie",
+        "cookie_name": cookie.partition("=")[0],
+        "rule": rule,
+        **flags,
+    }
     assert result[0].severity == "low"
     assert result[0].remediation
 
@@ -207,24 +270,23 @@ def test_independent_rules_and_repeated_cookie_names_are_preserved():
 
 
 @pytest.mark.parametrize(
-    "attributes,expected",
+    "name,attributes,expected",
     [
-        ("SameSite=None; SameSite=Lax", []),
-        ("SameSite=Lax; SameSite=None", ["samesite-none-without-secure"]),
-        ("Secure; Path=/app; PATH=/", []),
-        ("Secure; Path=/; Path=/app", ["host-prefix"]),
-        ("Secure; Path=/; Domain=example.test; DOMAIN=", []),
-        ("Secure; Path=/; Domain=; Domain=example.test", ["host-prefix"]),
+        ("theme", "SameSite=None; SameSite=Lax", []),
+        ("theme", "SameSite=Lax; SameSite=None", ["samesite-none-without-secure"]),
+        ("__Host-session", "Secure; Path=/app; PATH=/", []),
+        ("__Host-session", "Secure; Path=/; Path=/app", ["host-prefix"]),
+        ("__Host-session", "Secure; Path=/; Domain=example.test; DOMAIN=", []),
+        (
+            "__Host-session",
+            "Secure; Path=/; Domain=; Domain=example.test",
+            ["host-prefix"],
+        ),
     ],
 )
-def test_last_valued_attribute_wins(attributes, expected):
+def test_last_valued_attribute_wins(name, attributes, expected):
     assert [
-        item.evidence["rule"]
-        for item in findings(
-            f"__Host-session={SECRET}; {attributes}"
-            if "Path" in attributes
-            else f"theme={SECRET}; {attributes}"
-        )
+        item.evidence["rule"] for item in findings(f"{name}={SECRET}; {attributes}")
     ] == expected
 
 
@@ -260,6 +322,7 @@ def test_malformed_fields_are_skipped_without_losing_other_cookies(cookie):
 
 
 def test_no_cookie_values_or_raw_attribute_values_in_findings(caplog):
+    caplog.set_level(logging.DEBUG)
     observation = HttpObservation(
         url=URL,
         headers={

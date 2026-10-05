@@ -47,9 +47,11 @@ python -m ruff format .
 
 ## Tests
 
-Backend tests mirror application modules: API resource tests live in `tests/api/`,
-plugin tests in `tests/plugins/`, and application startup/serving tests in
-`tests/test_main.py`. Process lifecycle tests live in `tests/integration/`.
+Backend tests mirror application modules: `tests/api/`, `tests/assessments/`,
+`tests/cli/`, `tests/core/`, `tests/persistence/`, and `tests/plugins/`.
+Migration tests live in `tests/persistence/migrations/`; application
+startup/serving tests stay in `tests/test_main.py`. Process lifecycle tests live
+in `tests/integration/`. Frontend tests stay alongside the dashboard source.
 Shared fixtures stay in `tests/conftest.py`; HTTP-specific fixtures live in
 `tests/api/conftest.py`.
 
@@ -61,17 +63,17 @@ operator/production database. Adjust these example credentials to your setup.
 ```powershell
 # PowerShell
 $env:SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
-python -m app test
+python -m pytest
 ```
 
 ```bash
 # macOS / Linux
 export SEIRETH_TEST_ADMIN_URL='postgresql+psycopg://seireth:seireth-local@127.0.0.1:5432/postgres'
-python -m app test
+python -m pytest
 ```
 
-`python -m pytest` is equivalent. CI runs unit/API tests and
-the Ruff checks above.
+The build workflow runs non-Docker Python
+tests with coverage; CI runs the Ruff checks above.
 Windows defaults to a fresh `build/pytest-<unique-id>` per run to avoid shared-temp
 permission errors; `--basetemp` overrides it. Artifacts remain in ignored `build/`.
 Pure tests need no PostgreSQL:
@@ -101,26 +103,31 @@ python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 SEIRETH_DOCKER_TESTS=1 python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 ```
 
-CI uses a disposable Docker daemon and uploads verification output and diagnostic logs.
+The integration workflow uses a disposable Docker daemon and uploads verification
+output and diagnostic logs. It selects only Docker-marked Python cases; the
+in-memory API lifecycle case runs once in the build workflow.
 
 ## Frontend checks
 
 Follow the [Node/npm setup](docs/getting-started.md), then run:
 
 ```bash
-npm --prefix app/web ci --ignore-scripts
-npm --prefix app/web run lint
-npm --prefix app/web run typecheck
-npm --prefix app/web test
-npm --prefix app/web run build
+npm --prefix app/dashboard ci --ignore-scripts
+npm --prefix app/dashboard run lint
+npm --prefix app/dashboard run typecheck
+npm --prefix app/dashboard test
+npm --prefix app/dashboard run build
 ```
 
-For browser coverage, start the
+`build` bundles assets without checking TypeScript types. Run `typecheck`
+separately before building locally; CI owns this check for pull requests.
+
+For browser verification, start the
 [Docker stack](docs/getting-started.md#real-docker-assessment), then:
 
 ```bash
-npm --prefix app/web exec --ignore-scripts -- playwright install chromium
-npm --prefix app/web run test:e2e
+npm --prefix app/dashboard exec --ignore-scripts -- playwright install chromium
+npm --prefix app/dashboard run test:e2e
 ```
 
 Set [`SEIRETH_UI_URL`](docs/configuration.md#gui-development) for a nondefault API address.
@@ -129,13 +136,61 @@ installation. Browser cleanup checks invoke that executable directly, without
 searching `PATH`.
 The suite creates synthetic records and verifies six `/cookies` findings, linked
 evidence, redaction, and Docker cleanup. Failure traces and screenshots are in
-`app/web/test-results/`. On Linux, add `--with-deps` to the browser installation
-command to install Chromium's system dependencies, as CI does.
+`app/dashboard/test-results/`. On Linux, add `--with-deps` to the browser installation
+command to install Chromium's system dependencies, as the integration workflow does.
 
 Sonar classifies backend tests, frontend unit tests, and browser tests as test
 code. The browser suite intentionally assesses the HTTP demo on Docker's private
 network to exercise cookie-security violations; it does not use private targets
 or transmit credentials.
+
+### Coverage
+
+With `SEIRETH_TEST_ADMIN_URL` configured, generate the same coverage reports as
+the build workflow from the repository root:
+
+```bash
+python -m pytest -m "not docker" --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-report=xml:coverage.xml
+npm --prefix app/dashboard test -- --coverage
+```
+
+Python coverage measures `app`, including Python subprocesses, with branch
+coverage and relative source paths. Frontend coverage includes unimported source
+files and excludes tests, test setup, and declarations. SonarQube imports
+`coverage.xml` and `app/dashboard/coverage/lcov.info`; Docker and browser runs do not
+contribute to these reports. Generated coverage and analysis output stay untracked.
+
+### Workflow ownership and required checks
+
+All three workflows run independently on main pushes, pull requests, and manual
+dispatch. Dependency Review runs only on pull requests. Each test suite runs once
+per event; the application image and bundled frontend are built in integration only.
+
+Runtime setup and SonarQube configuration stay inline. External actions use commit
+pins with release comments. The two database jobs generate and mask fresh
+credentials inline, then export them through `GITHUB_ENV`; no credential helper
+script is required. Python syncs explicitly use `--no-build`; the quality job also
+uses `--no-install-project` because it only needs dependencies and tools.
+
+| Workflow                                         | Required job checks                                                    | Responsibility                                                                                    |
+| ------------------------------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [CI](.github/workflows/ci.yml)                   | Repository checks; Python quality; Frontend quality; Dependency review | Required files, environment-file hygiene, Ruff, ESLint, TypeScript, vulnerable dependency changes |
+| [Build](.github/workflows/build.yml)             | Tests, coverage and SonarQube                                          | Non-Docker Python tests with disposable PostgreSQL, frontend unit tests, coverage, analysis       |
+| [Integration](.github/workflows/integration.yml) | Docker assessment lifecycle                                            | Image build, migrations/readiness, real assessments/recovery, browser and packaging verification  |
+
+Require all six checks above before merging, with GitHub Actions as their source.
+Successful bundling does not imply valid types; keep `Frontend quality` required.
+See [Dependency security](#dependency-security) for the repository settings and
+rollout checks. Workflow YAML alone does not enforce merge requirements.
+
+SonarQube configuration lives in the build action arguments. Keep automatic
+analysis disabled and configure the repository Actions secret `SONAR_TOKEN`.
+After both test suites and report checks pass, the scanner waits up to 300 seconds
+for the existing quality gate; scan errors, processing timeouts, or a failed gate
+fail the build job. Fork pull requests and Dependabot runs execute tests but skip
+SonarQube; other runs fail clearly if the token is missing. Diagnostics and
+database cleanup run on failure, including analysis failures. Coverage generation
+and scanning share a job and require no report transfer between workflows.
 
 Build frontend assets before packaging. Clear setuptools' staging directory so
 hashed assets from earlier builds cannot enter the wheel:
@@ -159,16 +214,40 @@ Dependency installation disables package lifecycle scripts in local setup, CI,
 and Docker. Run the project's build/test commands and Playwright browser
 installation explicitly; do not re-enable dependency install hooks.
 
-## Dependency audit
+## Dependency security
 
-```bash
-python -m pip_audit --skip-editable
-npm --prefix app/web audit
-```
+The CI job `Dependency review` rejects pull requests that introduce dependencies
+with known vulnerabilities of low severity or higher. It includes runtime,
+development, and unknown scopes, compares the PR's base and head dependencies,
+and does not install packages. License checks and PR comments are disabled;
+results appear in the job logs and summary.
 
-This audits installed development dependencies. The [security workflow](.github/workflows/security.yml)
-audits locked runtime dependencies, excluding test/audit tools, and fails on audit
-errors or known vulnerabilities.
+Dependabot alerts monitor vulnerabilities in dependencies already on the default
+branch, including newly published advisories. Such alerts do not automatically
+block unrelated pull requests. Dependabot security updates propose fixes when
+available; the schedules in `.github/dependabot.yml` control version-update PRs
+separately. Review alerts and update PRs regularly.
+
+Configure and verify these settings on GitHub:
+
+1. Under **Settings > Security and quality > Advanced Security**, enable the
+   dependency graph, Dependabot alerts, and Dependabot security updates. Confirm
+   Python and npm dependencies, including transitive packages, appear under
+   **Insights > Dependency graph**.
+2. Run Dependency Review on PRs changing each lockfile. Check that the comparison
+   contains the expected Python and npm changes; an empty result is not evidence
+   of coverage. Verify a known vulnerable change fails before retiring the audits.
+3. Under **Settings > Rules > Rulesets > Protect main**, replace the two former
+   audit requirements with `Dependency review` once that check has run successfully.
+   Keep the other five checks listed above and select GitHub Actions as the source.
+4. Keep pull requests required, set required approving reviews to zero for solo
+   maintenance, and remove the administrator bypass so all six checks apply to
+   everyone. Preserve the remaining rules and the separate `Cant commit to main`
+   ruleset. Confirm a failed check blocks merging before considering rollout complete.
+
+GitHub's [Dependency Review action](https://github.com/actions/dependency-review-action)
+and [dependency graph documentation](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph-data)
+describe the comparison and dependency coverage.
 
 ## Updating dependencies
 
@@ -182,18 +261,18 @@ sync can remove development tools. Direct Python commands do not synchronize.
 
 After changing dependency declarations, run `uv lock`. For deliberate upgrades,
 run `uv lock --upgrade-package PACKAGE` (or `uv lock --upgrade` for a full refresh),
-then `uv sync --locked --all-extras`, checks, and the dependency audit. Commit the
-manifest and lock together. [Dependabot configuration](.github/dependabot.yml)
+then `uv sync --locked --all-extras` and the local checks. Commit the manifest and
+lock together; Dependency Review runs on the pull request. [Dependabot configuration](.github/dependabot.yml)
 defines update schedules and exclusions; Python minor/major and PostgreSQL major
 upgrades are planned separately.
 
-Keep the exact uv version in the project configuration, both workflows, Dockerfile,
+Keep the exact uv version in the project configuration, all workflows, Dockerfile,
 and setup instructions aligned when upgrading uv.
 
 ## Schema changes
 
 For subsequent incremental schema changes, add a revision after the current
-Alembic head in `app/migrations/versions`:
+Alembic head in `app/persistence/migrations/versions`:
 
 ```bash
 python -m alembic revision --autogenerate -m "describe schema change"
