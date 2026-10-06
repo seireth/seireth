@@ -14,18 +14,18 @@ from .sandbox import DockerSandbox, InMemorySandbox
 logger = logging.getLogger(__name__)
 
 
-def sandbox_for(attempt, target=None, scope=None, context=None, persist_journal=None):
+def sandbox_for(attempt, target=None, context=None, persist_journal=None):
     if attempt.backend == "inmemory":
         return InMemorySandbox(context=context)
     if attempt.backend != "docker":
         raise ValueError("unsupported sandbox backend")
     return DockerSandbox(
-        target.image if target else settings.docker_target_image,
+        target.image if target else None,
         runner_image=settings.docker_runner_image,
         assessment_id=attempt.assessment_id,
         attempt_id=attempt.id,
         resources=attempt.resources or None,
-        target_host=urlsplit(scope.allowed_url).hostname if scope else None,
+        target_host=urlsplit(target.url).hostname if target else None,
         memory=settings.docker_memory,
         cpus=settings.docker_cpus,
         pids_limit=settings.docker_pids_limit,

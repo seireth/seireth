@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
+from ..core.constraints import TARGET_IMAGE_MAX_LENGTH
 from ..plugins.base import HttpObservation
 from .execution import ExecutionContext
 
@@ -79,7 +80,9 @@ class InMemorySandbox:
         return CleanupOutcome(True)
 
 
-_IMAGE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,254}$")
+_IMAGE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0," + str(TARGET_IMAGE_MAX_LENGTH - 1) + r"}$"
+)
 _FETCH = """\
 import json, sys, time, urllib.request, urllib.error
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -119,7 +122,7 @@ def _validated_observation(url: str, headers: object) -> HttpObservation:
 class DockerSandbox:
     def __init__(
         self,
-        image: str,
+        image: str | None = None,
         *,
         runner_image: str,
         memory="256m",
@@ -134,7 +137,9 @@ class DockerSandbox:
         operation_journal,
         persist_journal=None,
     ):
-        if not _IMAGE.fullmatch(image) or not _IMAGE.fullmatch(runner_image):
+        if (image is not None and not _IMAGE.fullmatch(image)) or not _IMAGE.fullmatch(
+            runner_image
+        ):
             raise ValueError("invalid Docker image name")
         self.image, self.runner_image = image, runner_image
         self.memory, self.cpus, self.pids_limit = memory, cpus, pids_limit
@@ -237,6 +242,8 @@ class DockerSandbox:
         )
 
     def execute(self, url: str, timeout_seconds: float = 5) -> HttpObservation:
+        if self.image is None:
+            raise ValueError("target image required for execution")
         target_url = self._target_url(url)
         labels = [
             arg
@@ -247,6 +254,7 @@ class DockerSandbox:
             ["network", "create", "--internal", *labels, self.resources["network"]],
             [
                 "create",
+                "--pull=never",
                 "--name",
                 self.resources["target"],
                 "--network",
@@ -259,6 +267,7 @@ class DockerSandbox:
             ],
             [
                 "create",
+                "--pull=never",
                 "--name",
                 self.resources["runner"],
                 "--network",

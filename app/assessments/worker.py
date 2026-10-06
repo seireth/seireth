@@ -3,7 +3,6 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from datetime import datetime, timezone
 from threading import Event, Lock, Thread
 from time import monotonic
 from uuid import uuid4
@@ -16,6 +15,7 @@ from ..persistence import db as database
 from ..persistence import models
 from ..plugins.registry import registry as plugin_registry
 from .execution import Cancelled, ExecutionContext, Interrupted
+from .images import DockerUnavailable, ImageUnavailable, require_local_image
 from .lifecycle import audit, finish, transition
 from .orchestrator import Outcome, execute, sandbox_for
 from .policy import PolicyError, validate
@@ -149,18 +149,13 @@ class AssessmentDispatcher:
     def _policy(self, db, assessment):
         project = db.get(models.Project, assessment.project_id)
         target = db.get(models.Target, assessment.target_id)
-        scope = db.get(models.AuthorizationScope, assessment.scope_id)
-        validate(
-            project,
-            target,
-            scope,
-            settings.docker_allowed_target_images,
-        )
+        validate(project, target, assessment.url)
+        require_local_image(target.image)
         try:
             plugins = plugin_registry.select(assessment.plugins)
         except ValueError as exc:
             raise PolicyError(str(exc)) from exc
-        return target, scope, plugins
+        return target, plugins
 
     def _assert_owner(self, db):
         if self._lost.is_set():
@@ -228,12 +223,12 @@ class AssessmentDispatcher:
                 if not item or item.status != "queued":
                     return
                 try:
-                    target, scope, plugins = self._policy(db, item)
+                    target, plugins = self._policy(db, item)
                     previous = latest_attempt(db, item.id)
                     number = previous.number + 1 if previous else 1
                     if number > MAX_ASSESSMENT_ATTEMPTS:
                         raise PolicyError("crash recovery retry limit reached")
-                except PolicyError as exc:
+                except (PolicyError, ImageUnavailable, DockerUnavailable) as exc:
                     item.result = {
                         "error": str(exc),
                         "cleanup_verified": True,
@@ -252,21 +247,15 @@ class AssessmentDispatcher:
                     resources={},
                     operation_journal=new_journal(),
                 )
-                expires = scope.expires_at
-                seconds = min(
-                    settings.assessment_timeout_seconds,
-                    (expires - datetime.now(timezone.utc)).total_seconds(),
-                )
                 context = ExecutionContext(
                     cancel_event,
                     self._shutdown,
-                    monotonic() + max(0, seconds),
+                    monotonic() + settings.assessment_timeout_seconds,
                     lambda: not self._lost.is_set(),
                 )
                 sandbox = sandbox_for(
                     attempt,
                     target,
-                    scope,
                     context,
                     self._journal_writer(
                         item.id, attempt.id, attempt.operation_journal["owner"]
@@ -277,7 +266,7 @@ class AssessmentDispatcher:
                 item.cleanup_pending = True
                 transition(db, item, "running", {"attempt": number})
                 db.commit()
-                attempt_id, url = attempt.id, scope.allowed_url
+                attempt_id, url = attempt.id, item.url
             outcome = execute(sandbox, url, context, plugins)
             if self._lost.is_set():
                 return  # A new owner must reconcile; never overwrite its decisions.
@@ -441,7 +430,7 @@ class AssessmentDispatcher:
             self._policy(db, item)
             if attempt.number >= MAX_ASSESSMENT_ATTEMPTS:
                 raise PolicyError("crash recovery retry limit reached")
-        except PolicyError as exc:
+        except (PolicyError, ImageUnavailable, DockerUnavailable) as exc:
             finish(db, item, attempt, Outcome("failed", str(exc), True))
         else:
             attempt.error = "execution interrupted"
