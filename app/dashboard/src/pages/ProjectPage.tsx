@@ -122,13 +122,7 @@ export default function ProjectPage() {
               </table>
             </div>
           )}
-          <More
-            hasMore={assessments.hasNextPage}
-            loading={assessments.isFetchingNextPage}
-            load={() => {
-              void assessments.fetchNextPage();
-            }}
-          />
+          <More query={assessments} />
         </section>
       )}
       {tab === "targets" && (
@@ -156,13 +150,7 @@ export default function ProjectPage() {
                 <code>{t.image}</code>
               </article>
             ))}
-            <More
-              hasMore={targets.hasNextPage}
-              loading={targets.isFetchingNextPage}
-              load={() => {
-                void targets.fetchNextPage();
-              }}
-            />
+            <More query={targets} />
           </section>
         </>
       )}

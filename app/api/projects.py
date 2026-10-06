@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..assessments.lifecycle import audit
-from ..assessments.policy import ACTOR as MVP_ACTOR
+from ..core.identity import ACTOR
 from ..persistence import models
 from ..persistence.db import get_db
 from .dependencies import authorize_project, page, pagination
@@ -17,7 +17,7 @@ def list_projects(db: Session = Depends(get_db), bounds=Depends(pagination)):
     return page(
         db,
         select(models.Project)
-        .where(models.Project.owner_actor == MVP_ACTOR)
+        .where(models.Project.owner_actor == ACTOR)
         .order_by(models.Project.created_at.desc(), models.Project.id),
         bounds,
     )
@@ -32,7 +32,7 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
 def create_project(payload: ProjectCreate, db: Session = Depends(get_db)):
     """Create a project and record its creation in the audit log."""
 
-    item = models.Project(name=payload.name, owner_actor=MVP_ACTOR)
+    item = models.Project(name=payload.name, owner_actor=ACTOR)
     db.add(item)
     db.flush()
     audit(db, item.id, "project.created", item.id)

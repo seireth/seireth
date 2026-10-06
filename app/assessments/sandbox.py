@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 
-from ..core.constraints import TARGET_IMAGE_MAX_LENGTH
+from ..core.constraints import TARGET_IMAGE_MAX_LENGTH, TARGET_IMAGE_PATTERN
 from ..plugins.base import HttpObservation
 from .execution import ExecutionContext
 
@@ -80,9 +80,7 @@ class InMemorySandbox:
         return CleanupOutcome(True)
 
 
-_IMAGE = re.compile(
-    r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0," + str(TARGET_IMAGE_MAX_LENGTH - 1) + r"}$"
-)
+_IMAGE = re.compile(TARGET_IMAGE_PATTERN)
 _FETCH = """\
 import json, sys, time, urllib.request, urllib.error
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -137,8 +135,12 @@ class DockerSandbox:
         operation_journal,
         persist_journal=None,
     ):
-        if (image is not None and not _IMAGE.fullmatch(image)) or not _IMAGE.fullmatch(
-            runner_image
+        if (
+            image is not None
+            and (len(image) > TARGET_IMAGE_MAX_LENGTH or not _IMAGE.fullmatch(image))
+        ) or (
+            len(runner_image) > TARGET_IMAGE_MAX_LENGTH
+            or not _IMAGE.fullmatch(runner_image)
         ):
             raise ValueError("invalid Docker image name")
         self.image, self.runner_image = image, runner_image

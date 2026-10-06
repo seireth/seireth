@@ -77,3 +77,40 @@ it("clears the target draft when switching between cached projects", async () =>
   expect(screen.getByLabelText("Registered URL")).toHaveValue("");
   expect(screen.getByRole("button", { name: "Register target" })).toBeDisabled();
 });
+
+it("loads the next target page, disables duplicate requests, and hides exhausted pagination", async () => {
+  let resolvePage: ((response: Response) => void) | undefined;
+  const target = (id: string) => ({
+    id,
+    project_id: "p",
+    name: `Target ${id}`,
+    image: "demo",
+    url: "http://demo-app:8080/",
+  });
+  const fetcher = vi.fn(async (url: string) => {
+    if (!url.includes("/targets?")) return metadata(url);
+    if (url.endsWith("offset=0"))
+      return json({ items: [target("first")], has_more: true });
+    return new Promise<Response>((resolve) => {
+      resolvePage = resolve;
+    });
+  });
+  show(fetcher);
+  await userEvent.click(screen.getByRole("button", { name: "Targets" }));
+  expect(
+    await screen.findByRole("heading", { name: "Target first" }),
+  ).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Load more" }));
+  expect(screen.getByRole("button", { name: "Loading…" })).toBeDisabled();
+  await userEvent.click(screen.getByRole("button", { name: "Loading…" }));
+  expect(
+    fetcher.mock.calls.filter(([url]) => url.includes("offset=50")),
+  ).toHaveLength(1);
+  resolvePage!(json({ items: [target("second")], has_more: false }));
+  expect(
+    await screen.findByRole("heading", { name: "Target second" }),
+  ).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Target first" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Loading…" })).toBeNull();
+});

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { UseInfiniteQueryResult } from "@tanstack/react-query";
 import { ApiError } from "../api/client";
 import type { Status } from "../api/types";
 
@@ -44,17 +45,23 @@ export function date(value: string) {
   return new Date(value).toLocaleString();
 }
 export function More({
-  hasMore,
-  loading,
-  load,
+  query,
 }: {
-  hasMore?: boolean;
-  loading: boolean;
-  load: () => void;
+  query: Pick<
+    UseInfiniteQueryResult,
+    "hasNextPage" | "isFetchingNextPage" | "fetchNextPage"
+  >;
 }) {
-  return hasMore ? (
-    <button type="button" className="subtle" disabled={loading} onClick={load}>
-      {loading ? "Loading…" : "Load more"}
+  return query.hasNextPage ? (
+    <button
+      type="button"
+      className="subtle"
+      disabled={query.isFetchingNextPage}
+      onClick={() => {
+        void query.fetchNextPage();
+      }}
+    >
+      {query.isFetchingNextPage ? "Loading…" : "Load more"}
     </button>
   ) : null;
 }
