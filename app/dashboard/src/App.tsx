@@ -63,7 +63,7 @@ export default function App() {
                 : "Unavailable"}
           </strong>
           <p>
-            Owned targets. Scoped checks.
+            Local targets. Selected checks.
             <br />
             Verified cleanup.
           </p>

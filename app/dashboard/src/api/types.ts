@@ -22,13 +22,6 @@ export interface Target {
   image: string;
   url: string;
 }
-export interface Scope {
-  id: string;
-  project_id: string;
-  target_id: string;
-  allowed_url: string;
-  expires_at: string;
-}
 export interface Plugin {
   id: string;
   name: string;
@@ -36,8 +29,9 @@ export interface Plugin {
 }
 export interface Runtime {
   sandbox_backend: "inmemory" | "docker";
-  default_target_image: string;
-  allowed_target_images: string[];
+}
+export interface TargetImages {
+  items: { image: string; id: string }[];
 }
 export interface Result {
   sandbox_backend?: string;
@@ -53,7 +47,7 @@ export interface Assessment {
   id: string;
   project_id: string;
   target_id: string;
-  scope_id: string;
+  url: string;
   created_at: string;
   status: Status;
   plugins: string[];

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { post } from "../api/client";
@@ -8,66 +8,34 @@ import type {
   Plugin,
   Project,
   Runtime,
-  Scope,
   Target,
 } from "../api/types";
-import { date, ErrorMessage, FieldError, More } from "../components/common";
+import { ErrorMessage, FieldError, More } from "../components/common";
 import TargetForm from "../components/TargetForm";
-import ScopeForm from "../components/ScopeForm";
 
 export default function NewAssessmentPage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
   const client = useQueryClient();
   const [targetId, setTargetId] = useState("");
-  const [scopeId, setScopeId] = useState("");
+  const [url, setUrl] = useState<string | null>(null);
   const [selectedPlugins, setPlugins] = useState<string[]>([]);
   const [newTarget, setNewTarget] = useState(false);
-  const [newScope, setNewScope] = useState(false);
   const project = useResource<Project>(`/projects/${projectId}`);
   const runtime = useResource<Runtime>("/runtime");
   const plugins = useResource<Plugin[]>("/plugins");
   const targets = useList<Target>(`/projects/${projectId}/targets`);
-  const scopes = useList<Scope>(
-    `/projects/${projectId}/authorization-scopes?target_id=${encodeURIComponent(targetId)}`,
-    !!targetId,
-  );
   const target = useResource<Target>(`/targets/${targetId}`, !!targetId);
+  const assessmentUrl = url ?? target.data?.url ?? "";
   const targetItems = targets.data?.pages.flatMap((p) => p.items) ?? [];
   if (target.data && !targetItems.some((item) => item.id === target.data.id))
     targetItems.push(target.data);
-  const scopeItems = scopes.data?.pages.flatMap((p) => p.items) ?? [];
-  const selectedScope = useResource<Scope>(
-    `/authorization-scopes/${scopeId}`,
-    !!scopeId,
-  );
-  if (
-    selectedScope.data &&
-    !scopeItems.some((item) => item.id === selectedScope.data.id)
-  )
-    scopeItems.push(selectedScope.data);
-  const [clock, setClock] = useState(Date.now);
-  const expiresAt = selectedScope.data?.expires_at;
-  useEffect(() => {
-    if (!expiresAt) return;
-    const remaining = new Date(expiresAt).getTime() - Date.now();
-    if (remaining <= 0) return;
-    const timer = window.setTimeout(
-      () => setClock(Date.now()),
-      Math.min(remaining + 1, 86_400_000),
-    );
-    return () => window.clearTimeout(timer);
-  }, [expiresAt, clock]);
-  const validScope =
-    selectedScope.data?.target_id === targetId &&
-    selectedScope.data.project_id === projectId &&
-    new Date(selectedScope.data.expires_at).getTime() > Date.now();
   const create = useMutation({
     mutationFn: () =>
       post<Assessment>("/assessments", {
         project_id: projectId,
         target_id: targetId,
-        scope_id: scopeId,
+        url: assessmentUrl,
         plugins: selectedPlugins,
       }),
     onSuccess: (a) => {
@@ -86,7 +54,7 @@ export default function NewAssessmentPage() {
           </Link>
           <h1>New assessment</h1>
           <p>
-            Choose an owned target, authorize its URL, and select your checks.
+            Choose a target, response URL, and checks.
           </p>
         </div>
         <span className="badge neutral">
@@ -113,8 +81,7 @@ export default function NewAssessmentPage() {
             value={targetId}
             onChange={(e) => {
               setTargetId(e.target.value);
-              setScopeId("");
-              setNewScope(false);
+              setUrl(null);
             }}
           >
             <option value="">Select a target</option>
@@ -152,7 +119,7 @@ export default function NewAssessmentPage() {
             projectId={projectId}
             onCreated={(id) => {
               setTargetId(id);
-              setScopeId("");
+              setUrl(null);
               setNewTarget(false);
             }}
           />
@@ -165,59 +132,15 @@ export default function NewAssessmentPage() {
       </section>
       <section className="panel step">
         <span className="step-number">02</span>
-        <h2>Authorization scope</h2>
+        <h2>Response</h2>
         <label>
-          Authorized scope
-          <select
-            disabled={!targetId}
-            value={scopeId}
-            onChange={(e) => setScopeId(e.target.value)}
-          >
-            <option value="">Select a scope</option>
-            {scopeItems.map((s) => {
-              const expired = new Date(s.expires_at).getTime() <= Date.now();
-              return (
-                <option key={s.id} value={s.id} disabled={expired}>
-                  {s.allowed_url} · {expired ? "Expired" : "Expires"}{" "}
-                  {date(s.expires_at)}
-                </option>
-              );
-            })}
-          </select>
+          Assessment URL
+          <input required type="url" disabled={!target.data}
+            value={assessmentUrl}
+            onChange={(e) => setUrl(e.target.value)} />
+          <FieldError error={create.error} name="url" />
         </label>
-        <ErrorMessage
-          error={scopes.error}
-          retry={() => {
-            void scopes.refetch();
-          }}
-        />
-        <FieldError error={create.error} name="scope_id" />
-        <ErrorMessage error={selectedScope.error} />
-        <More
-          hasMore={scopes.hasNextPage}
-          loading={scopes.isFetchingNextPage}
-          load={() => {
-            void scopes.fetchNextPage();
-          }}
-        />
-        <button
-          type="button"
-          className="subtle"
-          disabled={!target.data}
-          onClick={() => setNewScope(!newScope)}
-        >
-          {newScope ? "Close authorization" : "Create a new scope"}
-        </button>
-        {newScope && target.data && (
-          <ScopeForm
-            key={targetId}
-            target={target.data}
-            onCreated={(id) => {
-              setScopeId(id);
-              setNewScope(false);
-            }}
-          />
-        )}
+        <p className="hint">Choose one response within the registered target's origin and path.</p>
       </section>
       <section className="panel step">
         <span className="step-number">03</span>
@@ -254,14 +177,15 @@ export default function NewAssessmentPage() {
       </section>
       <section className="submit-bar">
         <p>
-          The API rechecks authorization before executing. Checks analyze one
+          The API rechecks the target boundary before executing. Checks analyze one
           response.
         </p>
         <ErrorMessage error={create.error} />
         <button
           disabled={
             create.isPending ||
-            !validScope ||
+            !target.data ||
+            !assessmentUrl.trim() ||
             !selectedPlugins.length ||
             !runtime.data ||
             !project.data

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router";
 import { useList, useResource } from "../api/queries";
-import type { Assessment, Audit, Project, Scope, Target } from "../api/types";
+import type { Assessment, Audit, Project, Target } from "../api/types";
 import {
   date,
   Empty,
@@ -10,18 +10,12 @@ import {
   StatusBadge,
 } from "../components/common";
 import TargetForm from "../components/TargetForm";
-import ScopeForm from "../components/ScopeForm";
 
 export default function ProjectPage() {
   const { projectId = "" } = useParams();
   const [tab, setTab] = useState("assessments");
-  const [scopeTarget, setScopeTarget] = useState("");
   const project = useResource<Project>(`/projects/${projectId}`);
   const targets = useList<Target>(`/projects/${projectId}/targets`);
-  const scopes = useList<Scope>(
-    `/projects/${projectId}/authorization-scopes`,
-    tab === "scopes",
-  );
   const assessments = useList<Assessment>(
     `/projects/${projectId}/assessments`,
     tab === "assessments",
@@ -31,9 +25,7 @@ export default function ProjectPage() {
     tab === "audit",
   );
   const targetItems = targets.data?.pages.flatMap((p) => p.items) ?? [];
-  const selected = targetItems.find((t) => t.id === scopeTarget);
   const runs = assessments.data?.pages.flatMap((p) => p.items) ?? [];
-  const scopeItems = scopes.data?.pages.flatMap((p) => p.items) ?? [];
   if (project.isPending) return <p role="status">Loading project…</p>;
   if (!project.data)
     return (
@@ -59,7 +51,7 @@ export default function ProjectPage() {
         </Link>
       </header>
       <nav className="tabs" aria-label="Project sections">
-        {["assessments", "targets", "scopes", "audit"].map((t) => (
+        {["assessments", "targets", "audit"].map((t) => (
           <button
             className={tab === t ? "active" : "subtle"}
             type="button"
@@ -84,8 +76,7 @@ export default function ProjectPage() {
             <p role="status">Loading history…</p>
           ) : !runs.length && !assessments.error ? (
             <Empty>
-              No assessments yet. Register a target and authorize a scope to
-              begin.
+              No assessments yet. Register a target and choose your checks to begin.
             </Empty>
           ) : (
             <div className="table-scroll">
@@ -94,6 +85,7 @@ export default function ProjectPage() {
                   <tr>
                     <th>Assessment</th>
                     <th>Target</th>
+                    <th>Assessment URL</th>
                     <th>Status</th>
                     <th>Cleanup</th>
                     <th>Created</th>
@@ -112,6 +104,7 @@ export default function ProjectPage() {
                         {targetItems.find((t) => t.id === a.target_id)?.name ||
                           a.target_id.slice(0, 8)}
                       </td>
+                      <td>{a.url}</td>
                       <td>
                         <StatusBadge status={a.status} />
                       </td>
@@ -168,66 +161,6 @@ export default function ProjectPage() {
               loading={targets.isFetchingNextPage}
               load={() => {
                 void targets.fetchNextPage();
-              }}
-            />
-          </section>
-        </>
-      )}
-      {tab === "scopes" && (
-        <>
-          <section className="panel">
-            <h2>Create authorization</h2>
-            <label>
-              Target
-              <select
-                value={scopeTarget}
-                onChange={(e) => setScopeTarget(e.target.value)}
-              >
-                <option value="">Select a target</option>
-                {targetItems.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <More
-              hasMore={targets.hasNextPage}
-              loading={targets.isFetchingNextPage}
-              load={() => {
-                void targets.fetchNextPage();
-              }}
-            />
-            {selected && <ScopeForm key={selected.id} target={selected} />}
-          </section>
-          <section className="panel">
-            <h2>Authorization scopes</h2>
-            <ErrorMessage
-              error={scopes.error}
-              retry={() => {
-                void scopes.refetch();
-              }}
-            />
-            {scopes.isPending && <p role="status">Loading scopes…</p>}
-            {scopes.isSuccess && !scopeItems.length && (
-              <Empty>No authorization scopes.</Empty>
-            )}
-            {scopeItems.map((s) => (
-              <article className="record" key={s.id}>
-                <h3>{s.allowed_url}</h3>
-                <p>
-                  {new Date(s.expires_at).getTime() > Date.now()
-                    ? "Valid until"
-                    : "Expired"}{" "}
-                  {date(s.expires_at)}
-                </p>
-              </article>
-            ))}
-            <More
-              hasMore={scopes.hasNextPage}
-              loading={scopes.isFetchingNextPage}
-              load={() => {
-                void scopes.fetchNextPage();
               }}
             />
           </section>

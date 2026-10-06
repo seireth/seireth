@@ -27,15 +27,12 @@ test("creates, refreshes, and retrieves a real cookie assessment with verified c
   await page.getByRole("link", { name: "New assessment" }).click();
   await page.getByRole("button", { name: "Register a new target" }).click();
   await page.getByLabel("Target name").fill("Owned cookie demo");
+  await page.getByLabel("Docker image").fill("seireth/demo-app:local");
   await page
     .getByLabel("Registered URL")
-    .fill("http://demo-target:8080/cookies");
+    .fill("http://demo-app:8080/cookies");
   await page
     .getByRole("button", { name: "Register target", exact: true })
-    .click();
-  await page.getByRole("button", { name: "Create a new scope" }).click();
-  await page
-    .getByRole("button", { name: "Create authorization scope", exact: true })
     .click();
   await page.getByRole("checkbox", { name: /HTTP security headers/ }).check();
   await page.locator("label").filter({ hasText: "HTTP cookie security" }).click();
@@ -132,7 +129,7 @@ test("direct navigation renders saved text safely and keeps API and missing asse
   await page.reload();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   expect(await page.evaluate(() => "syntheticInjected" in window)).toBe(false);
-  for (const section of ["Targets", "Scopes", "Audit trail", "Assessments"]) {
+  for (const section of ["Targets", "Audit trail", "Assessments"]) {
     await page.getByRole("button", { name: section, exact: true }).click();
   }
   await expect(

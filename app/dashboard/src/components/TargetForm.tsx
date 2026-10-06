@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { post } from "../api/client";
 import { useResource } from "../api/queries";
-import type { Runtime } from "../api/types";
+import type { TargetImages } from "../api/types";
 import { ErrorMessage, FieldError } from "./common";
 
 export default function TargetForm({
@@ -12,7 +12,7 @@ export default function TargetForm({
   projectId: string;
   onCreated?: (id: string) => void;
 }) {
-  const runtime = useResource<Runtime>("/runtime");
+  const images = useResource<TargetImages>("/target-images");
   const client = useQueryClient();
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -23,7 +23,7 @@ export default function TargetForm({
         project_id: projectId,
         name: name.trim(),
         url,
-        image: image || runtime.data?.default_target_image,
+        image: image.trim(),
       }),
     onSuccess: ({ id }) => {
       void client.invalidateQueries({
@@ -56,39 +56,47 @@ export default function TargetForm({
         <input
           required
           type="url"
-          placeholder="https://your-authorized-target.example/"
+          placeholder="http://your-app:8080/"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
         <FieldError error={create.error} name="url" />
       </label>
       <label>
-        Allowed image
-        <select
+        Docker image
+        <input
           required
-          value={image || runtime.data?.default_target_image || ""}
+          maxLength={300}
+          list="target-images"
+          placeholder="repository:tag"
+          value={image}
           onChange={(e) => setImage(e.target.value)}
-        >
-          {runtime.data?.allowed_target_images.map((i) => (
-            <option key={i}>{i}</option>
+        />
+        <datalist id="target-images">
+          {images.data?.items.map((i) => (
+            <option key={i.image} value={i.image} />
           ))}
-        </select>
+        </datalist>
         <FieldError error={create.error} name="image" />
       </label>
       <p className="hint">
         Docker checks inspect a disposable instance of this image. The
-        registered URL defines its authorization boundary.
+        registered URL defines which response URLs you can assess.
       </p>
+      <button type="button" className="subtle" disabled={images.isFetching}
+        onClick={() => { void images.refetch(); }}>
+        Refresh images
+      </button>
       <ErrorMessage
-        error={runtime.error}
+        error={images.error}
         retry={() => {
-          void runtime.refetch();
+          void images.refetch();
         }}
       />
       <ErrorMessage error={create.error} />
       <button
         type="submit"
-        disabled={create.isPending || !runtime.data || !name.trim() || !url.trim()}
+        disabled={create.isPending || !image.trim() || !name.trim() || !url.trim()}
       >
         {create.isPending ? "Registering…" : "Register target"}
       </button>

@@ -12,9 +12,7 @@ it("requires an explicit target URL and registers only the operator's input", as
           options?.method === "POST"
             ? { id: "target" }
             : {
-                sandbox_backend: "docker",
-                default_target_image: "allowed",
-                allowed_target_images: ["allowed"],
+                items: [{image: "discovered:local", id: "sha256:abc"}],
               },
         ),
       ),
@@ -30,7 +28,6 @@ it("requires an explicit target URL and registers only the operator's input", as
       <TargetForm projectId="project" onCreated={onCreated} />
     </QueryClientProvider>,
   );
-  await screen.findByRole("option", { name: "allowed" });
   const user = userEvent.setup();
   const url = screen.getByLabelText("Registered URL");
   const submit = screen.getByRole("button", { name: "Register target" });
@@ -41,6 +38,9 @@ it("requires an explicit target URL and registers only the operator's input", as
   expect(fetcher.mock.calls.filter(([, options]) => options?.method === "POST"))
     .toHaveLength(0);
   await user.type(url, "https://owned.test/");
+  expect(submit).toBeDisabled();
+  await user.type(screen.getByLabelText("Docker image"), "arbitrary:local");
+  await user.click(screen.getByRole("button", {name: "Refresh images"}));
   await user.click(submit);
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("target"));
   const writes = fetcher.mock.calls.filter(([, options]) => options?.method === "POST");
@@ -49,6 +49,6 @@ it("requires an explicit target URL and registers only the operator's input", as
     project_id: "project",
     name: "Owned target",
     url: "https://owned.test/",
-    image: "allowed",
+    image: "arbitrary:local",
   });
 });

@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { expect, it, vi } from "vitest";
 import NewAssessmentPage from "./NewAssessmentPage";
 
-it("uses the catalog and valid scope, blocks duplicate submissions, and preserves selection on failure", async () => {
+it("uses the catalog and target URL, blocks duplicate submissions, and preserves selection on failure", async () => {
   let rejectWrite: ((response: Response) => void) | undefined;
   const target = {
     id: "t",
@@ -14,22 +14,6 @@ it("uses the catalog and valid scope, blocks duplicate submissions, and preserve
     image: "allowed",
     url: "http://demo.test/",
   };
-  const scopes = [
-    {
-      id: "s",
-      target_id: "t",
-      project_id: "p",
-      allowed_url: target.url,
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
-    },
-    {
-      id: "old",
-      target_id: "t",
-      project_id: "p",
-      allowed_url: target.url,
-      expires_at: new Date(0).toISOString(),
-    },
-  ];
   const json = (data: unknown) => new Response(JSON.stringify(data));
   const fetcher = vi.fn((path: string, options?: RequestInit) => {
     if (options?.method === "POST")
@@ -40,8 +24,6 @@ it("uses the catalog and valid scope, blocks duplicate submissions, and preserve
       return Promise.resolve(
         json({
           sandbox_backend: "inmemory",
-          default_target_image: "allowed",
-          allowed_target_images: ["allowed"],
         }),
       );
     if (path.endsWith("/plugins"))
@@ -57,10 +39,6 @@ it("uses the catalog and valid scope, blocks duplicate submissions, and preserve
     if (path.includes("/targets?"))
       return Promise.resolve(json({ items: [target], has_more: false }));
     if (path.endsWith("/targets/t")) return Promise.resolve(json(target));
-    if (path.includes("/authorization-scopes?"))
-      return Promise.resolve(json({ items: scopes, has_more: false }));
-    if (path.endsWith("/authorization-scopes/s"))
-      return Promise.resolve(json(scopes[0]));
     return Promise.resolve(
       json({ id: "p", name: "Project", created_at: new Date().toISOString() }),
     );
@@ -85,8 +63,9 @@ it("uses the catalog and valid scope, blocks duplicate submissions, and preserve
   expect(screen.getByRole("button", { name: "Run assessment" })).toBeDisabled();
   await screen.findByRole("option", { name: /Demo/ });
   await user.selectOptions(screen.getByLabelText("Registered target"), "t");
-  expect(await screen.findByRole("option", { name: /Expired/ })).toBeDisabled();
-  await user.selectOptions(screen.getByLabelText("Authorized scope"), "s");
+  await waitFor(() => expect(screen.getByLabelText("Assessment URL")).toHaveValue(target.url));
+  await user.clear(screen.getByLabelText("Assessment URL"));
+  await user.type(screen.getByLabelText("Assessment URL"), target.url + "cookies");
   await user.click(
     await screen.findByRole("checkbox", { name: /Catalog supplied check/ }),
   );
@@ -105,14 +84,14 @@ it("uses the catalog and valid scope, blocks duplicate submissions, and preserve
   expect(JSON.parse(String(writes[0][1]?.body))).toEqual({
     project_id: "p",
     target_id: "t",
-    scope_id: "s",
+    url: target.url + "cookies",
     plugins: ["catalog-check"],
   });
   rejectWrite!(
-    new Response(JSON.stringify({ detail: "scope expired" }), { status: 403 }),
+    new Response(JSON.stringify({ detail: "URL outside target" }), { status: 403 }),
   );
-  expect(await screen.findByRole("alert")).toHaveTextContent("scope expired");
-  expect(screen.getByLabelText("Authorized scope")).toHaveValue("s");
+  expect(await screen.findByRole("alert")).toHaveTextContent("URL outside target");
+  expect(screen.getByLabelText("Assessment URL")).toHaveValue(target.url + "cookies");
   expect(
     screen.getByRole("checkbox", { name: /Catalog supplied check/ }),
   ).toBeChecked();
