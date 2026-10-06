@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 import pytest
 from sqlalchemy import select
 
@@ -7,13 +5,13 @@ from app.persistence import models
 from tests.api.helpers import snapshot, submission
 
 
-def test_scope_is_required(client, project, target):
+def test_assessment_url_must_stay_within_target(client, project, target):
     response = client.post(
         "/api/v1/assessments",
         json={
             "project_id": project,
             "target_id": target["id"],
-            "scope_id": "missing",
+            "url": "http://other-app:8080/",
             "plugins": ["security-headers"],
         },
     )
@@ -85,8 +83,7 @@ def test_passive_assessment_returns_json_and_cleanup(
             "x-frame-options",
         }
         assert all(
-            item.data
-            == {"header": item.data["header"], "url": "http://demo-target:8080/"}
+            item.data == {"header": item.data["header"], "url": "http://demo-app:8080/"}
             for item in evidence
         )
     assessment = (client.get(result.headers["location"])).json()
@@ -97,7 +94,6 @@ def test_passive_assessment_returns_json_and_cleanup(
     assert [event["action"] for event in audit] == [
         "project.created",
         "target.registered",
-        "scope.authorized",
         "assessment.queued",
         "assessment.running",
         "assessment.completed",
@@ -229,7 +225,7 @@ def evidence_row(database):
                 data=data
                 if data is not None
                 else {
-                    "url": "http://demo-target:8080/",
+                    "url": "http://demo-app:8080/",
                     "header": "content-security-policy",
                 },
             )
@@ -251,7 +247,7 @@ def evidence_row(database):
     return create
 
 
-def test_evidence_retrieval_is_scoped_ordered_read_only_and_allows_expired_scope(
+def test_evidence_retrieval_is_ordered_read_only_and_assessment_specific(
     client, database, assessment_graph, evidence_row, dispatch_calls
 ):
     first = assessment_graph(status="completed")
@@ -259,11 +255,6 @@ def test_evidence_retrieval_is_scoped_ordered_read_only_and_allows_expired_scope
     z_finding, z_id = evidence_row(first.assessment.id, identity="z-evidence")
     a_finding, a_id = evidence_row(first.assessment.id, identity="a-evidence")
     evidence_row(second.assessment.id, identity="other-assessment-evidence")
-    with database.SessionLocal() as db:
-        db.get(models.AuthorizationScope, first.scope.id).expires_at = (
-            models.now() - timedelta(hours=1)
-        )
-        db.commit()
     before = snapshot(database)
     path = f"/api/v1/assessments/{first.assessment.id}/evidence"
     response = client.get(path)
@@ -278,7 +269,7 @@ def test_evidence_retrieval_is_scoped_ordered_read_only_and_allows_expired_scope
                 "finding_id": finding,
                 "kind": "http-response",
                 "data": {
-                    "url": "http://demo-target:8080/",
+                    "url": "http://demo-app:8080/",
                     "header": "content-security-policy",
                 },
             }
@@ -325,7 +316,7 @@ def test_unknown_assessment_evidence_returns_not_found(client):
         (
             "http-response",
             {
-                "url": "http://demo-target:8080/",
+                "url": "http://demo-app:8080/",
                 "header": "x-frame-options",
                 "cookie_value": "synthetic-evidence-secret",
             },
@@ -337,12 +328,12 @@ def test_unknown_assessment_evidence_returns_not_found(client):
         ),
         (
             "http-response",
-            {"url": "http://demo-target:8080/", "header": "synthetic-evidence-secret"},
+            {"url": "http://demo-app:8080/", "header": "synthetic-evidence-secret"},
         ),
         (
             "http-response",
             {
-                "url": "http://demo-target:8080/",
+                "url": "http://demo-app:8080/",
                 "header": "set-cookie",
                 "cookie_name": "cross",
                 "rule": "samesite-none-without-secure",
@@ -371,7 +362,7 @@ def test_invalid_stored_evidence_fails_without_partial_response_or_secret_diagno
     assert snapshot(database) == before
 
 
-@pytest.mark.parametrize("target", ["https://demo-target:8080/"], indirect=True)
+@pytest.mark.parametrize("target", ["https://demo-app:8080/"], indirect=True)
 def test_repeated_cookies_and_multiple_rules_keep_their_exact_finding_links(
     client, assessment_payload, monkeypatch, wait_until, database
 ):
@@ -452,7 +443,7 @@ def test_omitted_plugin_selection_is_rejected(client, assessment_payload):
     assert response.json()["detail"][0]["loc"] == ["body", "plugins"]
 
 
-@pytest.mark.parametrize("field", ["project_id", "target_id", "scope_id"])
+@pytest.mark.parametrize("field", ["project_id", "target_id"])
 def test_assessment_rejects_cross_project_identifiers(
     client, database, assessment_graph, dispatch_calls, field
 ):
@@ -462,7 +453,7 @@ def test_assessment_rejects_cross_project_identifiers(
     before = snapshot(database)
     response = client.post("/api/v1/assessments", json=payload)
     assert response.status_code == 403
-    assert response.json()["detail"] == "valid authorization scope required"
+    assert response.json()["detail"] == "target does not belong to this project"
     assert snapshot(database) == before
     assert dispatch_calls == {"submit": [], "cancel": []}
 
@@ -502,38 +493,27 @@ def test_terminal_assessments_cannot_be_cancelled(
     assert dispatch_calls == {"submit": [], "cancel": []}
 
 
-def test_assessment_and_scope_ordering_breaks_timestamp_ties(
+def test_assessment_ordering_breaks_timestamp_ties(
     read_client, database, assessment_graph
 ):
     graph = assessment_graph(status="completed")
     with database.SessionLocal() as db:
         current = db.get(models.Assessment, graph.assessment.id)
-        scope = db.get(models.AuthorizationScope, graph.scope.id)
         for identity in ["z", "a"]:
             db.add(
                 models.Assessment(
                     id=identity,
                     project_id=graph.project.id,
                     target_id=graph.target.id,
-                    scope_id=graph.scope.id,
+                    url=graph.assessment.url,
                     status="completed",
                     plugins=["security-headers"],
                     created_at=current.created_at,
                 )
             )
-            db.add(
-                models.AuthorizationScope(
-                    id=identity,
-                    project_id=graph.project.id,
-                    target_id=graph.target.id,
-                    allowed_url=scope.allowed_url,
-                    expires_at=scope.expires_at,
-                )
-            )
         db.commit()
     for resource, identities in [
         ("assessments", [graph.assessment.id, "a", "z"]),
-        ("authorization-scopes", [graph.scope.id, "a", "z"]),
     ]:
         items = read_client.get(
             f"/api/v1/projects/{graph.project.id}/{resource}"

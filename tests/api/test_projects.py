@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 import pytest
 
 from app.persistence import models
@@ -13,8 +11,6 @@ def test_saved_work_reads_are_authorized_scoped_ordered_and_read_only(
     second = assessment_graph(status="failed")
     denied = assessment_graph(owner="other-actor", status="completed")
     with database.SessionLocal() as db:
-        scope = db.get(models.AuthorizationScope, first.scope.id)
-        scope.expires_at = models.now() - timedelta(hours=1)
         for identity in ["a", "b"]:
             db.add(
                 models.Target(
@@ -46,36 +42,23 @@ def test_saved_work_reads_are_authorized_scoped_ordered_and_read_only(
         ).json()["items"][0]["id"]
         == expected[1]
     )
-    scopes = read_client.get(
-        f"/api/v1/projects/{first.project.id}/authorization-scopes?target_id={first.target.id}"
-    ).json()
-    assert [s["id"] for s in scopes["items"]] == [first.scope.id]
-    assert scopes["items"][0]["expires_at"] < models.now().isoformat()
-    assert (
-        read_client.get(
-            f"/api/v1/projects/{first.project.id}/authorization-scopes?target_id={second.target.id}"
-        ).status_code
-        == 404
-    )
     runs = read_client.get(f"/api/v1/projects/{first.project.id}/assessments").json()[
         "items"
     ]
     assert len(runs) == 1 and runs[0]["target_id"] == first.target.id
-    assert runs[0]["scope_id"] == first.scope.id and runs[0]["created_at"]
+    assert runs[0]["url"] == first.assessment.url and runs[0]["created_at"]
     for resource, identity in [
         ("projects", first.project.id),
         ("targets", first.target.id),
-        ("authorization-scopes", first.scope.id),
     ]:
         assert read_client.get(f"/api/v1/{resource}/{identity}").status_code == 200
         assert read_client.get(f"/api/v1/{resource}/missing").status_code == 404
     for resource, identity in [
         ("projects", denied.project.id),
         ("targets", denied.target.id),
-        ("authorization-scopes", denied.scope.id),
     ]:
         assert read_client.get(f"/api/v1/{resource}/{identity}").status_code == 403
-    for resource in ["targets", "authorization-scopes", "assessments"]:
+    for resource in ["targets", "assessments"]:
         assert (
             read_client.get(
                 f"/api/v1/projects/{denied.project.id}/{resource}"

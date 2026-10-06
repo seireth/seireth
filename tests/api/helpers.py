@@ -20,6 +20,6 @@ def submission(graph):
     return {
         "project_id": graph.project.id,
         "target_id": graph.target.id,
-        "scope_id": graph.scope.id,
+        "url": graph.assessment.url,
         "plugins": ["security-headers"],
     }
