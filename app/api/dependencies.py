@@ -5,7 +5,8 @@ from urllib.parse import urlsplit
 from fastapi import HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from ..assessments.policy import ACTOR, http_origin
+from ..assessments.policy import http_origin
+from ..core.identity import ACTOR
 from ..persistence import models
 
 

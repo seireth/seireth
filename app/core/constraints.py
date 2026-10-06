@@ -11,13 +11,14 @@ PLUGIN_ID_MAX_LENGTH = 100
 FINDING_TITLE_MAX_LENGTH = 300
 FINDING_SEVERITY_MAX_LENGTH = 30
 STORED_URL_MAX_LENGTH = 500
+TARGET_IMAGE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$"
 
 TargetImage = Annotated[
     str,
     Field(
         min_length=1,
         max_length=TARGET_IMAGE_MAX_LENGTH,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$",
+        pattern=TARGET_IMAGE_PATTERN,
     ),
 ]
 

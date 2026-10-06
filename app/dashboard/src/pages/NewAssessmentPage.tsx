@@ -100,13 +100,7 @@ export default function NewAssessmentPage() {
           }}
         />
         <ErrorMessage error={target.error} />
-        <More
-          hasMore={targets.hasNextPage}
-          loading={targets.isFetchingNextPage}
-          load={() => {
-            void targets.fetchNextPage();
-          }}
-        />
+        <More query={targets} />
         <button
           type="button"
           className="subtle"

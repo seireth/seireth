@@ -88,13 +88,7 @@ export default function ProjectsPage() {
           ))}
         </div>
       )}
-      <More
-        hasMore={projects.hasNextPage}
-        loading={projects.isFetchingNextPage}
-        load={() => {
-          void projects.fetchNextPage();
-        }}
-      />
+      <More query={projects} />
     </>
   );
 }

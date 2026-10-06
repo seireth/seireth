@@ -46,13 +46,7 @@ export default function App() {
             void projects.refetch();
           }}
         />
-        <More
-          hasMore={projects.hasNextPage}
-          loading={projects.isFetchingNextPage}
-          load={() => {
-            void projects.fetchNextPage();
-          }}
-        />
+        <More query={projects} />
         <div className="sidebar-footer">
           <span className="eyebrow">Execution backend</span>
           <strong>

@@ -21,6 +21,7 @@ from ..core.constraints import (
     STORED_URL_MAX_LENGTH,
     TARGET_IMAGE_MAX_LENGTH,
 )
+from ..core.identity import ACTOR
 from .db import Base
 
 
@@ -47,9 +48,7 @@ class Project(Base):
 
     __tablename__ = "projects"
     name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH))
-    owner_actor: Mapped[str] = mapped_column(
-        String(200), default="local-development", index=True
-    )
+    owner_actor: Mapped[str] = mapped_column(String(200), default=ACTOR, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 

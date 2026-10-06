@@ -2,7 +2,7 @@
 
 from urllib.parse import SplitResult, unquote, urlsplit
 
-ACTOR = "local-development"
+from ..core.identity import ACTOR
 
 
 class PolicyError(ValueError):
