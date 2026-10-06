@@ -96,15 +96,86 @@ def test_direct_verification_rejects_invalid_timeout_before_http(monkeypatch, va
     with pytest.raises(
         ValueError, match="timeout must be finite and greater than zero"
     ):
-        verify.verify("http://test", timeout_seconds=value)
+        verify.verify(
+            "http://test",
+            image="arbitrary:local",
+            target_url="http://arbitrary:8080/",
+            plugins=["security-headers"],
+            timeout_seconds=value,
+        )
     client.assert_not_called()
+
+
+def test_verification_accepts_completed_zero_findings_with_explicit_target(monkeypatch):
+    import json
+
+    actions = [
+        "project.created",
+        "target.registered",
+        "assessment.queued",
+        "assessment.running",
+        "assessment.completed",
+    ]
+
+    def respond(request):
+        path = request.url.path
+        if path == "/health":
+            body = {"status": "ok"}
+        elif path == "/api/v1/projects":
+            body = {"id": "p"}
+        elif path == "/api/v1/targets":
+            payload = json.loads(request.content)
+            assert payload["image"] == "another:local"
+            assert payload["url"] == "http://another:8080/"
+            body = {"id": "t", "url": payload["url"]}
+        elif path == "/api/v1/assessments":
+            assert json.loads(request.content) == {
+                "project_id": "p",
+                "target_id": "t",
+                "url": "http://another:8080/",
+                "plugins": ["security-headers", "cookie-security"],
+            }
+            return httpx.Response(202, json={"id": "a"})
+        elif path.endswith("/results"):
+            body = {
+                "status": "completed",
+                "findings": [],
+                "result": {"cleanup_verified": True, "sandbox_backend": "docker"},
+            }
+        elif path.endswith("/evidence"):
+            body = {
+                "assessment_id": "a",
+                "status": "completed",
+                "cleanup_pending": False,
+                "evidence": [],
+            }
+        elif path.endswith("/audit-events"):
+            body = [{"action": action} for action in actions]
+        else:
+            pytest.fail(f"Unexpected request: {path}")
+        return httpx.Response(200, json=body)
+
+    original = httpx.Client
+    monkeypatch.setattr(
+        verify.httpx,
+        "Client",
+        lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    report = verify.verify(
+        "http://test",
+        image="another:local",
+        target_url="http://another:8080/",
+        plugins=["security-headers", "cookie-security"],
+        expected_backend="docker",
+    )
+    assert report["results"]["findings"] == []
+    assert report["evidence"]["evidence"] == []
 
 
 @pytest.mark.parametrize(
     "failure,message",
     [
-        ("failed", "assessment did not produce findings"),
-        ("empty", "assessment did not produce findings"),
+        ("failed", "assessment did not complete"),
         ("cleanup", "sandbox cleanup was not verified"),
         ("backend", "expected docker backend"),
         ("audit", "unexpected audit trail"),
@@ -131,7 +202,6 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
     actions = [
         "project.created",
         "target.registered",
-        "scope.authorized",
         "assessment.queued",
         "assessment.running",
         "assessment.completed",
@@ -154,7 +224,7 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
                 else "finding-1",
                 "kind": "http-response",
                 "data": {
-                    "url": "http://demo-target:8080/",
+                    "url": "http://demo-app:8080/",
                     "header": "content-security-policy",
                 },
             }
@@ -167,8 +237,10 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
     routes = {
         ("GET", "/health"): (200, {"status": "ok"}),
         ("POST", "/api/v1/projects"): (200, {"id": "project-1"}),
-        ("POST", "/api/v1/targets"): (200, {"id": "target-1"}),
-        ("POST", "/api/v1/authorization-scopes"): (200, {"id": "scope-1"}),
+        ("POST", "/api/v1/targets"): (
+            200,
+            {"id": "target-1", "url": "http://arbitrary:8080/"},
+        ),
         ("POST", "/api/v1/assessments"): (202, {"id": "assessment-1"}),
         ("GET", "/api/v1/assessments/assessment-1/results"): (200, results),
         ("GET", "/api/v1/assessments/assessment-1/evidence"): (
@@ -185,6 +257,10 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
 
     def respond(request):
         observed.append((request.method, request.url.path))
+        if request.method == "POST" and request.url.path == "/api/v1/targets":
+            import json
+
+            assert json.loads(request.content)["image"] == "arbitrary:local"
         status, body = routes[observed[-1]]
         return httpx.Response(status, json=body)
 
@@ -197,6 +273,9 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
     with pytest.raises(RuntimeError, match=message) as error:
         verify.verify(
             "http://test",
+            image="arbitrary:local",
+            target_url="http://arbitrary:8080/",
+            plugins=["security-headers"],
             expected_backend="docker" if failure == "backend" else "inmemory",
         )
     assert "synthetic-private-cookie-value" not in str(error.value)

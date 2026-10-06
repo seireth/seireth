@@ -106,14 +106,33 @@ def test_verify_forwards_options_and_prints_json(
 
     monkeypatch.setattr(settings, "api_host", "127.0.0.2")
     monkeypatch.setattr(settings, "api_port", 9001)
-    monkeypatch.setattr(sys, "argv", ["app", "verify", *arguments])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "app",
+            "verify",
+            "--image",
+            "arbitrary:local",
+            "--target-url",
+            "http://arbitrary:8080/",
+            "--plugins",
+            "security-headers",
+            *arguments,
+        ],
+    )
     result = {"assessment": {"id": "assessment-1"}, "results": {"status": "completed"}}
     check = Mock(return_value=result)
     monkeypatch.setattr(commands, "verify", check)
 
     assert commands.main() == 0
     check.assert_called_once_with(
-        base_url, timeout_seconds=timeout, expected_backend=backend
+        base_url,
+        timeout_seconds=timeout,
+        expected_backend=backend,
+        image="arbitrary:local",
+        target_url="http://arbitrary:8080/",
+        plugins=["security-headers"],
     )
     output = capsys.readouterr()
     assert json.loads(output.out) == result
@@ -123,7 +142,20 @@ def test_verify_forwards_options_and_prints_json(
 def test_verify_failure_reports_error_and_returns_failure(monkeypatch, capsys):
     from app.cli import commands
 
-    monkeypatch.setattr(sys, "argv", ["app", "verify"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "app",
+            "verify",
+            "--image",
+            "arbitrary:local",
+            "--target-url",
+            "http://arbitrary:8080/",
+            "--plugins",
+            "security-headers",
+        ],
+    )
     monkeypatch.setattr(
         commands,
         "verify",
@@ -244,7 +276,7 @@ def test_docker_up_uses_detected_socket_group_without_changing_host_env(
     assert os.environ["SEIRETH_DOCKER_SOCKET_GID"] == "123"
 
 
-@pytest.mark.parametrize("result", ["", "root", "-1", "0\n987", "１２３", None])
+@pytest.mark.parametrize("result", ["", "root", "-1", "0\n987", "ï¼‘ï¼’ï¼“", None])
 def test_docker_up_socket_probe_failure_stops_before_services(
     monkeypatch, capsys, result
 ):
