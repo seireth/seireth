@@ -1,7 +1,7 @@
 # Contributing to SEIRETH
 
 Read the [Code of Conduct](CODE_OF_CONDUCT.md), [architecture](docs/architecture.md),
-and [security model](docs/security-model.md). Preserve authorized, scoped,
+and [security model](docs/security-model.md). Preserve project and URL boundaries,
 isolated assessments and their cleanup, evidence, and audit guarantees.
 
 ## Proposing changes
@@ -20,7 +20,7 @@ of commits; commit the generated dependency lock alongside its manifest.
 
 ## Security-sensitive changes
 
-Changes to authorization, scope, sandboxing, networking, cleanup, secrets,
+Changes to project authorization, target boundaries, sandboxing, networking, cleanup, secrets,
 runtime access, authentication, project or tenant isolation, evidence, reports,
 audit integrity, or dependency, image and plugin execution must include
 failure-path tests and explain how boundaries remain intact. Fail closed when
@@ -155,8 +155,10 @@ npm --prefix app/dashboard test -- --coverage
 ```
 
 Python coverage measures `app`, including Python subprocesses, with branch
-coverage and relative source paths. Frontend coverage includes unimported source
-files and excludes tests, test setup, and declarations. SonarQube imports
+coverage and relative source paths. The demo application is excluded from Python
+and SonarQube coverage; its unit tests guard against false verification success.
+Frontend coverage includes unimported source files and excludes tests, test setup,
+and declarations. SonarQube imports
 `coverage.xml` and `app/dashboard/coverage/lcov.info`; Docker and browser runs do not
 contribute to these reports. Generated coverage and analysis output stay untracked.
 

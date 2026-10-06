@@ -19,7 +19,7 @@
 </p>
 
 SEIRETH is a local, single-operator GUI and API for passive HTTP header and cookie
-security checks. Docker assessments inspect disposable instances of approved
+security checks. Docker assessments inspect disposable instances of locally available
 images. Findings, evidence, and audit events are stored in PostgreSQL 18, and
 SEIRETH verifies cleanup after execution.
 
@@ -27,15 +27,15 @@ SEIRETH verifies cleanup after execution.
 
 ```mermaid
 flowchart LR
-    A[Register & authorize] --> B[Queue assessment]
+    A[Register image & base URL] --> B[Queue assessment]
     B --> C[Run sandbox checks]
     C --> D[Destroy & verify cleanup]
     D --> E[Record outcome]
 ```
 
-Scopes bound requests by project, target, origin, path, and expiry. An operator
-image allowlist restricts image selection; Docker provides a private network,
-restricted target, and runner.
+Targets bound requests by project, origin, and path. Supply a local image and base
+URL, then choose a response URL and plugins. Docker provides a private network,
+restricted target, and runner; it never pulls assessment images automatically.
 
 ## Checks
 
