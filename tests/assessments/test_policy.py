@@ -23,7 +23,7 @@ BASE = "https://example.test/app"
         ),
     ],
 )
-def test_scope_accepts_bounded_urls(candidate, registered):
+def test_target_boundary_accepts_bounded_urls(candidate, registered):
     assert bounded_url(candidate, registered)
 
 
@@ -50,14 +50,14 @@ def test_scope_accepts_bounded_urls(candidate, registered):
         pytest.param("/app", BASE, id="missing-origin"),
     ],
 )
-def test_scope_rejects_unbounded_urls(candidate, registered):
+def test_target_boundary_rejects_unbounded_urls(candidate, registered):
     assert not bounded_url(candidate, registered)
 
 
 @pytest.mark.parametrize("scheme,default_port", [("http", 80), ("https", 443)])
 @pytest.mark.parametrize("explicit_default", [False, True])
 @pytest.mark.parametrize("zero_port_side", ["candidate", "registered"])
-def test_scope_distinguishes_zero_port_from_default(
+def test_target_boundary_distinguishes_zero_port_from_default(
     scheme, default_port, explicit_default, zero_port_side
 ):
     zero = f"{scheme}://example.test:0/app"
@@ -77,9 +77,10 @@ def test_scope_distinguishes_zero_port_from_default(
         "https://example.test/app/../secret",
         BASE + "\\secret",
         "https://example.test:invalid/app",
+        "https://[invalid/app",
     ],
 )
 @pytest.mark.parametrize("side", ["candidate", "registered"])
-def test_scope_rejects_unsafe_components_on_either_url(unsafe, side):
+def test_target_boundary_rejects_unsafe_components_on_either_url(unsafe, side):
     candidate, registered = (unsafe, BASE) if side == "candidate" else (BASE, unsafe)
     assert not bounded_url(candidate, registered)

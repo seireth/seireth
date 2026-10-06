@@ -1,7 +1,6 @@
 """Dispatcher concurrency regressions and PostgreSQL-backed execution tests."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
 from threading import Event, Lock, Thread
 from time import monotonic, sleep
 from types import SimpleNamespace
@@ -31,13 +30,6 @@ def assessment(assessment_graph):
 def execution_clock(monkeypatch):
     clock = SimpleNamespace(wall=models.now(), elapsed=0.0)
 
-    class FixedDatetime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return clock.wall.astimezone(tz) if tz else clock.wall.replace(tzinfo=None)
-
-    monkeypatch.setattr(worker, "datetime", FixedDatetime)
-    monkeypatch.setattr(policy, "datetime", FixedDatetime)
     monkeypatch.setattr(worker, "monotonic", lambda: clock.elapsed)
     monkeypatch.setattr(execution, "monotonic", lambda: clock.elapsed)
     return clock
@@ -302,20 +294,25 @@ def test_recovery_rejects_stale_cleanup_results_without_database(
     state.session.commit.assert_called_once()
 
 
-@pytest.mark.parametrize("change", ["expiry", "image", "relationship"])
+@pytest.mark.parametrize("change", ["url", "malformed-url", "image", "relationship"])
 def test_execution_revalidates_policy(database, assessment, monkeypatch, change):
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
-        scope = db.get(models.AuthorizationScope, item.scope_id)
-        if change == "expiry":
-            scope.expires_at = models.now() - timedelta(seconds=1)
+        if change == "url":
+            item.url = "http://other-app:8080/"
+        elif change == "malformed-url":
+            item.url = "http://[invalid/"
         elif change == "relationship":
             other_project = models.Project(name="other")
             db.add(other_project)
             db.flush()
-            scope.project_id = other_project.id
+            item.project_id = other_project.id
         else:
-            monkeypatch.setattr(settings, "docker_allowed_target_images", [])
+            monkeypatch.setattr(
+                worker,
+                "require_local_image",
+                Mock(side_effect=worker.ImageUnavailable("image missing")),
+            )
         db.commit()
     called = []
     monkeypatch.setattr(InMemorySandbox, "execute", lambda *a: called.append(True))
@@ -368,7 +365,7 @@ def test_running_visible_duplicate_claims_and_terminal_redispatch(
         )
 
 
-@pytest.mark.parametrize("reason", ["cancel", "timeout", "expiry", "shutdown"])
+@pytest.mark.parametrize("reason", ["cancel", "timeout", "shutdown"])
 def test_active_execution_stops_and_cleans(
     database, assessment, monkeypatch, reason, execution_clock
 ):
@@ -386,13 +383,6 @@ def test_active_execution_stops_and_cleans(
     )
     if reason == "timeout":
         monkeypatch.setattr(settings, "assessment_timeout_seconds", 30)
-    if reason == "expiry":
-        with database.SessionLocal() as db:
-            item = db.get(models.Assessment, assessment)
-            db.get(models.AuthorizationScope, item.scope_id).expires_at = (
-                execution_clock.wall + timedelta(seconds=30)
-            )
-            db.commit()
     dispatcher, cancel = AssessmentDispatcher(), Event()
     thread = Thread(target=dispatcher._run, args=(assessment, cancel))
     thread.start()
@@ -427,7 +417,6 @@ def test_active_execution_stops_and_cleans(
                 "cancel": "assessment cancelled",
                 "shutdown": "execution interrupted",
                 "timeout": "assessment execution timed out",
-                "expiry": "assessment execution timed out",
             }[reason]
         )
     finally:
@@ -502,18 +491,16 @@ def test_recovery_preserves_cancellation(database, assessment):
     assert item.result["cleanup_verified"]
 
 
-def test_recovery_rejects_expired_authorization(database, assessment):
+def test_recovery_rejects_changed_url_boundary(database, assessment):
     interrupted(database, assessment)
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
-        db.get(models.AuthorizationScope, item.scope_id).expires_at = (
-            models.now() - timedelta(seconds=1)
-        )
+        item.url = "http://other-app:8080/"
         db.commit()
     AssessmentDispatcher().recover()
     item = read(database, assessment)
     assert item.status == "failed" and not item.cleanup_pending
-    assert item.result["error"] == "authorization expired or outside registered target"
+    assert item.result["error"] == "assessment URL is outside the registered target"
     assert item.result["cleanup_verified"]
 
 
@@ -744,7 +731,7 @@ def pending_docker(database, assessment):
     journal = new_journal()
     journal["resources"]["network"]["state"] = "uncertain"
     sandbox = DockerSandbox(
-        settings.docker_target_image,
+        "seireth/demo-app:local",
         runner_image=settings.docker_runner_image,
         assessment_id=assessment,
         attempt_id=attempt_id,
@@ -872,7 +859,7 @@ def test_background_cleanup_runs_without_blocking_new_assessments(
             new = models.Assessment(
                 project_id=old.project_id,
                 target_id=old.target_id,
-                scope_id=old.scope_id,
+                url=old.url,
                 plugins=["security-headers"],
             )
             db.add(new)
