@@ -12,7 +12,14 @@ FINDING_TITLE_MAX_LENGTH = 300
 FINDING_SEVERITY_MAX_LENGTH = 30
 STORED_URL_MAX_LENGTH = 500
 
-TargetImage = Annotated[str, Field(max_length=TARGET_IMAGE_MAX_LENGTH)]
+TargetImage = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=TARGET_IMAGE_MAX_LENGTH,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]*$",
+    ),
+]
 
 StoredHttpUrl = Annotated[
     AnyHttpUrl,

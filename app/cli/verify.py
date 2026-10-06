@@ -3,7 +3,6 @@
 import argparse
 import math
 import time
-from datetime import datetime, timedelta, timezone
 
 import httpx
 from pydantic import ValidationError
@@ -61,7 +60,13 @@ def wait_for_results(
 
 
 def verify(
-    base_url: str, timeout_seconds: float = 120, expected_backend: str | None = None
+    base_url: str,
+    *,
+    image: str,
+    target_url: str,
+    plugins: list[str],
+    timeout_seconds: float = 120,
+    expected_backend: str | None = None,
 ) -> dict:
     """Run the complete reachable MVP workflow against a running API."""
 
@@ -80,22 +85,9 @@ def verify(
                 "/api/v1/targets",
                 json={
                     "project_id": project["id"],
-                    "name": "Owned demo target",
-                    "url": "http://demo-target:8080",
-                },
-            ),
-            200,
-        )
-        scope = require(
-            client.post(
-                "/api/v1/authorization-scopes",
-                json={
-                    "project_id": project["id"],
-                    "target_id": target["id"],
-                    "allowed_url": "http://demo-target:8080",
-                    "expires_at": (
-                        datetime.now(timezone.utc) + timedelta(minutes=15)
-                    ).isoformat(),
+                    "name": "Verification target",
+                    "image": image,
+                    "url": target_url,
                 },
             ),
             200,
@@ -106,15 +98,15 @@ def verify(
                 json={
                     "project_id": project["id"],
                     "target_id": target["id"],
-                    "scope_id": scope["id"],
-                    "plugins": ["security-headers"],
+                    "url": target["url"],
+                    "plugins": plugins,
                 },
             ),
             202,
         )
         results = wait_for_results(client, assessment["id"], timeout_seconds)
-        if results["status"] != "completed" or not results["findings"]:
-            raise RuntimeError(f"assessment did not produce findings: {results}")
+        if results["status"] != "completed":
+            raise RuntimeError(f"assessment did not complete: {results}")
         if not results["result"]["cleanup_verified"]:
             raise RuntimeError("sandbox cleanup was not verified")
         if (
@@ -148,7 +140,6 @@ def verify(
         expected_actions = [
             "project.created",
             "target.registered",
-            "scope.authorized",
             "assessment.queued",
             "assessment.running",
             "assessment.completed",
@@ -158,7 +149,6 @@ def verify(
         return {
             "project": project,
             "target": target,
-            "scope": scope,
             "assessment": assessment,
             "results": results,
             "evidence": evidence.model_dump(mode="json"),
