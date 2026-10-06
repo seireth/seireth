@@ -2,14 +2,27 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..assessments import images
 from ..assessments.lifecycle import audit
-from ..core.config import settings
+from ..assessments.policy import bounded_url
 from ..persistence import models
 from ..persistence.db import get_db
 from .dependencies import authorize_project, page, pagination
-from .schemas import PageOut, TargetCreate, TargetOut
+from .schemas import PageOut, TargetCreate, TargetImagesOut, TargetOut
 
 router = APIRouter()
+
+
+@router.get(
+    "/target-images",
+    response_model=TargetImagesOut,
+    responses={503: {"description": "Docker image discovery unavailable"}},
+)
+def target_images():
+    try:
+        return {"items": images.local_images()}
+    except images.DockerUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
 
 
 @router.get("/projects/{project_id}/targets", response_model=PageOut[TargetOut])
@@ -41,8 +54,10 @@ def get_target(target_id: str, db: Session = Depends(get_db)):
 
 @router.post(
     "/targets",
+    response_model=TargetOut,
     responses={
-        400: {"description": "Target image is not in the trusted image allowlist"}
+        400: {"description": "Target URL or local image is unavailable"},
+        503: {"description": "Docker image inspection unavailable"},
     },
 )
 def create_target(payload: TargetCreate, db: Session = Depends(get_db)):
@@ -50,9 +65,15 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)):
 
     authorize_project(db, payload.project_id)
     target_url = str(payload.url)
-    target_image = payload.image or settings.docker_target_image
-    if target_image not in settings.docker_allowed_target_images:
-        raise HTTPException(400, "target image is not in the trusted image allowlist")
+    target_image = payload.image
+    if not bounded_url(target_url, target_url):
+        raise HTTPException(400, "invalid target URL boundary")
+    try:
+        images.require_local_image(target_image)
+    except images.ImageUnavailable as exc:
+        raise HTTPException(400, str(exc)) from None
+    except images.DockerUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
     item = models.Target(
         project_id=payload.project_id,
         name=payload.name,
@@ -63,4 +84,4 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)):
     db.flush()
     audit(db, item.project_id, "target.registered", item.id)
     db.commit()
-    return {"id": item.id, "url": item.url}
+    return item

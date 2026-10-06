@@ -5,10 +5,10 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..assessments import images
 from ..assessments.lifecycle import audit, transition
 from ..assessments.policy import PolicyError, validate
 from ..assessments.worker import dispatcher
-from ..core.config import settings
 from ..persistence import models
 from ..persistence.db import get_db
 from ..plugins.registry import registry as plugin_registry
@@ -46,18 +46,20 @@ def list_assessments(
     response_model=AssessmentOut,
     status_code=202,
     responses={
-        400: {"description": "Plugin selection is invalid"},
-        403: {"description": "Project access or assessment authorization is denied"},
+        400: {
+            "description": "Plugin selection is invalid or image is unavailable locally"
+        },
+        403: {"description": "Project access or target boundary is denied"},
+        503: {"description": "Docker image inspection unavailable"},
     },
 )
 def create_assessment(
     payload: AssessmentCreate, response: Response, db: Session = Depends(get_db)
 ):
-    """Validate authorization and enqueue a passive assessment."""
+    """Validate the target, response URL, and plugins before enqueueing."""
 
     project = authorize_project(db, payload.project_id)
     target = db.get(models.Target, payload.target_id)
-    scope = db.get(models.AuthorizationScope, payload.scope_id)
     try:
         plugins = plugin_registry.select(payload.plugins)
     except ValueError as exc:
@@ -66,15 +68,20 @@ def create_assessment(
         validate(
             project,
             target,
-            scope,
-            settings.docker_allowed_target_images,
+            str(payload.url),
         )
     except PolicyError as exc:
         raise HTTPException(403, str(exc)) from exc
+    try:
+        images.require_local_image(target.image)
+    except images.ImageUnavailable as exc:
+        raise HTTPException(400, str(exc)) from None
+    except images.DockerUnavailable as exc:
+        raise HTTPException(503, str(exc)) from None
     item = models.Assessment(
         project_id=payload.project_id,
         target_id=target.id,
-        scope_id=scope.id,
+        url=str(payload.url),
         plugins=[plugin.manifest.id for plugin in plugins],
     )
     db.add(item)
