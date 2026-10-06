@@ -3,7 +3,6 @@
 import json
 import os
 from contextlib import ExitStack, contextmanager
-from datetime import timedelta
 from functools import partial
 from importlib import import_module
 from pathlib import Path
@@ -34,8 +33,6 @@ os.environ.update(
     SEIRETH_API_HOST="127.0.0.1",
     SEIRETH_API_PORT="8000",
     SEIRETH_SANDBOX_BACKEND="inmemory",
-    SEIRETH_DOCKER_TARGET_IMAGE="seireth/demo-target:local",
-    SEIRETH_DOCKER_ALLOWED_TARGET_IMAGES='["seireth/demo-target:local"]',
     SEIRETH_DATABASE_URL="postgresql+psycopg://unused:unused@127.0.0.1/unused",
 )
 
@@ -132,7 +129,6 @@ def database(database_context):
 
 @pytest.fixture
 def assessment_graph(database):
-    from app.core.config import settings
     from app.persistence import models
 
     def make(*, owner="local-development", plugins=None, status="queued"):
@@ -143,30 +139,22 @@ def assessment_graph(database):
             target = models.Target(
                 project_id=project.id,
                 name="demo",
-                image=settings.docker_target_image,
-                url="http://demo-target:8080/",
+                image="seireth/demo-app:local",
+                url="http://demo-app:8080/",
             )
             db.add(target)
-            db.flush()
-            scope = models.AuthorizationScope(
-                project_id=project.id,
-                target_id=target.id,
-                allowed_url=target.url,
-                expires_at=models.now() + timedelta(minutes=5),
-            )
-            db.add(scope)
             db.flush()
             assessment = models.Assessment(
                 project_id=project.id,
                 target_id=target.id,
-                scope_id=scope.id,
+                url=target.url,
                 plugins=["security-headers"] if plugins is None else plugins,
                 status=status,
             )
             db.add(assessment)
             db.commit()
             return SimpleNamespace(
-                project=project, target=target, scope=scope, assessment=assessment
+                project=project, target=target, assessment=assessment
             )
 
     return make
@@ -197,7 +185,7 @@ def finding_payload():
         "severity": "low",
         "description": "Example description",
         "remediation": "Example remediation",
-        "evidence": {"url": "http://demo-target:8080/", "observed": True},
+        "evidence": {"url": "http://demo-app:8080/", "observed": True},
     }
 
 

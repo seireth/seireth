@@ -13,7 +13,7 @@ from app.plugins.base import (
 from app.plugins.registry import PluginRegistry, registry
 from app.plugins.security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 
-URL = "http://demo-target:8080/"
+URL = "http://demo-app:8080/"
 
 
 def test_plugin_contract_round_trips_through_json(finding_payload):
