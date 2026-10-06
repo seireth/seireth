@@ -15,8 +15,8 @@ preserves the browser's `Origin` and `Host` headers for these checks.
 The GUI renders stored content as text. Target HTTP requests remain inside the
 sandbox; the browser sends assessment requests only to Seireth.
 
-Admission and execution check project/target/scope relationships, origin/path,
-expiry, plugins, and image policy. Root URL scopes include child paths; traversal,
+Admission, execution, and retries check project/target ownership, origin/path,
+plugins, and local image availability. Registered root URLs include child paths; traversal,
 credentials, fragments, and ambiguous multiply encoded paths are rejected.
 Redirect responses are inspected without following them.
 
@@ -26,7 +26,7 @@ that alias; custom hostname/TLS mapping is unsupported.
 
 Targets and runners have an internal network, no published ports or Docker socket,
 a non-root numeric user, dropped capabilities, no-new-privileges, read-only
-filesystems, and CPU/memory/PID limits. Scope expiry and cancellation interrupt
+filesystems, and CPU/memory/PID limits. Execution timeouts and cancellation interrupt
 runner operations; cleanup independently verifies each resource.
 
 ## Privileged and remaining boundaries
@@ -34,9 +34,9 @@ runner operations; cleanup independently verifies each resource.
 The API and demo images default to UID/GID 65532. `docker-up` gives the API the
 mounted Docker socket's group as a supplementary group; it never changes socket
 permissions. Application files remain root-owned. The API's Docker socket still
-grants substantial host control. Allowlisting cannot protect a compromised API,
-operator, or daemon. Tags are mutable; containers share
-a kernel and are unsuitable for arbitrary hostile workloads. Scope checks do not
+grants substantial host control. Image discovery is a convenience, not an
+approval or trust check; the operator chooses images and builds or pulls explicitly. Tags are mutable; containers share
+a kernel and are unsuitable for arbitrary hostile workloads. URL boundaries do not
 prove ownership. Multi-user authentication, tenant isolation, and production TLS
 are absent; audit records are not tamper-proof evidence.
 

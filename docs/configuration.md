@@ -10,11 +10,9 @@ together, using URL-safe credentials without unescaped URL delimiters.
 
 | Setting | Meaning |
 | --- | --- |
-| `SEIRETH_API_HOST`, `SEIRETH_API_PORT` | Native binding / Docker published address; port 1–65535; example `127.0.0.1`, `8000` |
+| `SEIRETH_API_HOST`, `SEIRETH_API_PORT` | Native binding / Docker published address; port 1â€“65535; example `127.0.0.1`, `8000` |
 | `SEIRETH_DATABASE_URL` | `postgresql+psycopg://...`; SQLite unsupported |
 | `SEIRETH_SANDBOX_BACKEND` | `inmemory` or `docker`; example selects `inmemory` |
-| `SEIRETH_DOCKER_TARGET_IMAGE` | Default target image |
-| `SEIRETH_DOCKER_ALLOWED_TARGET_IMAGES` | JSON array of exact allowed image references |
 
 ## Optional defaults
 
@@ -25,13 +23,17 @@ together, using URL-safe credentials without unescaped URL delimiters.
 | `SEIRETH_DOCKER_MEMORY`, `SEIRETH_DOCKER_CPUS`, `SEIRETH_DOCKER_PIDS_LIMIT` | `256m`, `0.5`, `64`; CPUs must be positive and finite, PIDs a positive integer |
 | `SEIRETH_DOCKER_TIMEOUT_SECONDS` | 15; positive finite base command timeout |
 
-Registration and every execution/retry enforce the image allowlist, including
-simulated registration. Removing an image blocks future execution, not active
-runs. Prefer immutable digests; allowlisting does not establish safety.
+Target registration requires an explicit image and base URL. Docker registration,
+assessment submission, execution, and retries require that image to exist locally.
+`GET /api/v1/target-images` discovers tagged images; callers may supply another
+local reference directly. Build or pull images explicitly; both target and runner
+containers use `--pull=never`. Simulated workflows never contact Docker and image
+discovery returns an empty list. Cleanup uses persisted resource ownership and
+continues when an image is unavailable.
 
 ## Timeouts
 
-The execution deadline is the earlier of the assessment timeout and scope expiry.
+The execution deadline is the configured assessment timeout.
 Checks are cooperative: Docker operations check interruption, but synchronous
 Python analyzers cannot be forcibly preempted and are checked between calls.
 

@@ -32,7 +32,7 @@ migration revisions. Follow [startup](getting-started.md) and
 
 ## Execution and transactions
 
-1. Admission validates ownership, target, scope, plugins, and image policy;
+1. Admission validates ownership, target origin/path, plugins, and local image availability;
    commits `queued` with its audit event; then submits the assessment ID.
 2. The worker locks the assessment, rechecks policy, and commits `running` with
    a durable attempt, resource names, and operation journal before Docker commands.
@@ -49,7 +49,7 @@ migration revisions. Follow [startup](getting-started.md) and
 Evidence has a required `finding_id`; assessment and project ownership derive
 from that finding.
 
-`app/assessments/policy.py` owns authorization rules;
+`app/assessments/policy.py` owns target boundary rules;
 `app/assessments/lifecycle.py` owns transitions and finalization.
 [Plugin manifests](plugins.md) produce the API catalog.
 
@@ -58,7 +58,8 @@ from that finding.
 Startup and background reconciliation recover orphaned nonterminal attempts after
 crashes, shutdown, or transient finalization failures, including while the API
 remains running. One retry is allowed (two attempts total), requiring verified
-cleanup and current authorization. Persisted resource names and labels survive
+cleanup, valid target boundaries, and a locally available image. Cleanup itself
+requires no target image, so removing an image cannot prevent resource removal. Persisted resource names and labels survive
 crashes; journal ownership tokens fence stale workers.
 
 Finalized cancellations and failures, including deadline, policy, and plugin
