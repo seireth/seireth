@@ -6,7 +6,6 @@ import type {
   EvidenceResponse,
   Project,
   Results,
-  Scope,
   Target,
 } from "../api/types";
 import { date, Empty, ErrorMessage, StatusBadge } from "../components/common";
@@ -33,10 +32,6 @@ export default function AssessmentPage() {
   );
   const target = useResource<Target>(
     `/targets/${assessment?.target_id}`,
-    !!assessment,
-  );
-  const scope = useResource<Scope>(
-    `/authorization-scopes/${assessment?.scope_id}`,
     !!assessment,
   );
   const cancel = useMutation({
@@ -112,12 +107,12 @@ export default function AssessmentPage() {
         </div>
       </section>
       <section className="panel">
-        <h2>Authorized assessment</h2>
+        <h2>Assessment request</h2>
         <dl>
           <dt>Target URL</dt>
           <dd>{target.data?.url || "Loading…"}</dd>
-          <dt>Scope URL</dt>
-          <dd>{scope.data?.allowed_url || "Loading…"}</dd>
+          <dt>Assessment URL</dt>
+          <dd>{assessment.url}</dd>
           <dt>Checks</dt>
           <dd>{assessment.plugins.join(", ")}</dd>
           {assessment.result?.plugins && (
@@ -132,7 +127,6 @@ export default function AssessmentPage() {
           )}
         </dl>
         <ErrorMessage error={target.error} />
-        <ErrorMessage error={scope.error} />
         <ErrorMessage error={project.error} />
         {assessment.result?.error && (
           <div className="error" role="alert">

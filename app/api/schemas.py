@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ..assessments.policy import bounded_url
 from ..core.constraints import NAME_MAX_LENGTH, StoredHttpUrl, TargetImage
 from ..persistence.models import AssessmentStatus
 
@@ -11,26 +12,29 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=NAME_MAX_LENGTH)
 
 
-class TargetCreate(BaseModel):
+class ResponseUrlInput(BaseModel):
+    url: StoredHttpUrl
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def safe_url(cls, value):
+        # Check before normalization can erase traversal or backslashes.
+        if isinstance(value, str) and not bounded_url(value, value):
+            raise ValueError("URL contains unsafe or ambiguous components")
+        return value
+
+
+class TargetCreate(ResponseUrlInput):
     project_id: str
     name: str = Field(min_length=1, max_length=NAME_MAX_LENGTH)
-    image: TargetImage | None = None
-    url: StoredHttpUrl = Field(default="http://demo-target:8080", validate_default=True)
+    image: TargetImage
 
 
-class ScopeCreate(BaseModel):
-    project_id: str
-    target_id: str
-    allowed_url: StoredHttpUrl
-    expires_at: datetime
-
-
-class AssessmentCreate(BaseModel):
+class AssessmentCreate(ResponseUrlInput):
     model_config = ConfigDict(extra="forbid")
 
     project_id: str
     target_id: str
-    scope_id: str
     plugins: list[str] = Field(min_length=1)
 
 
@@ -42,7 +46,7 @@ class AssessmentOut(ReadModel):
     id: str
     project_id: str
     target_id: str
-    scope_id: str
+    url: str
     created_at: datetime
     status: AssessmentStatus
     plugins: list[str]
@@ -62,14 +66,6 @@ class TargetOut(ReadModel):
     name: str
     image: str
     url: str
-
-
-class ScopeOut(ReadModel):
-    id: str
-    project_id: str
-    target_id: str
-    allowed_url: str
-    expires_at: datetime
 
 
 class PageOut[Item](BaseModel):
@@ -96,8 +92,15 @@ class AssessmentResultsOut(BaseModel):
 
 class RuntimeOut(BaseModel):
     sandbox_backend: Literal["inmemory", "docker"]
-    default_target_image: str
-    allowed_target_images: list[str]
+
+
+class TargetImageOut(BaseModel):
+    image: str
+    id: str
+
+
+class TargetImagesOut(BaseModel):
+    items: list[TargetImageOut]
 
 
 class HeaderEvidenceData(BaseModel):

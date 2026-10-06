@@ -43,23 +43,6 @@ def upgrade():
     )
     op.create_index("ix_targets_project_id", "targets", ["project_id"])
     op.create_table(
-        "authorization_scopes",
-        sa.Column("id", sa.String(36), nullable=False),
-        sa.Column("project_id", sa.String(36), nullable=False),
-        sa.Column("target_id", sa.String(36), nullable=False),
-        sa.Column("allowed_url", sa.String(500), nullable=False),
-        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["project_id"], [PROJECT_ID_REFERENCE]),
-        sa.ForeignKeyConstraint(["target_id"], ["targets.id"]),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_authorization_scopes_project_id",
-        "authorization_scopes",
-        ["project_id"],
-        unique=False,
-    )
-    op.create_table(
         "assessments",
         sa.Column(
             "cleanup_pending", sa.Boolean(), server_default="false", nullable=False
@@ -67,7 +50,7 @@ def upgrade():
         sa.Column("id", sa.String(36), nullable=False),
         sa.Column("project_id", sa.String(36), nullable=False),
         sa.Column("target_id", sa.String(36), nullable=False),
-        sa.Column("scope_id", sa.String(36), nullable=False),
+        sa.Column("url", sa.String(500), nullable=False),
         sa.Column("plugins", sa.JSON(), nullable=False),
         sa.Column("status", sa.String(30), nullable=False),
         sa.Column("result", sa.JSON(), nullable=True),
@@ -77,7 +60,6 @@ def upgrade():
             name="assessment_status_valid",
         ),
         sa.ForeignKeyConstraint(["project_id"], [PROJECT_ID_REFERENCE]),
-        sa.ForeignKeyConstraint(["scope_id"], ["authorization_scopes.id"]),
         sa.ForeignKeyConstraint(["target_id"], ["targets.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -130,7 +112,6 @@ def downgrade():
     op.drop_table("findings")
     op.drop_table("attempts")
     op.drop_table("assessments")
-    op.drop_table("authorization_scopes")
     op.drop_table("targets")
     op.drop_table("projects")
     op.drop_table("audit_events")

@@ -10,7 +10,7 @@ const assessment = (status: Status, cleanup_pending = false): Assessment => ({
   id: "a",
   project_id: "p",
   target_id: "t",
-  scope_id: "s",
+  url: "http://demo.test/",
   created_at: new Date().toISOString(),
   plugins: ["cookie-security"],
   status,
@@ -62,13 +62,7 @@ function metadata(path: string) {
       project_id: "p",
       image: "demo",
     };
-  return {
-    id: "s",
-    target_id: "t",
-    project_id: "p",
-    allowed_url: "http://demo.test/",
-    expires_at: new Date().toISOString(),
-  };
+  throw new Error(`Unexpected metadata request: ${path}`);
 }
 
 it("keeps findings when evidence fails and retries evidence independently", async () => {

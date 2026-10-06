@@ -7,12 +7,6 @@ import ProjectPage from "./ProjectPage";
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status });
-const runtime = {
-  sandbox_backend: "inmemory",
-  default_target_image: "demo",
-  allowed_target_images: ["demo"],
-};
-
 function show(fetcher: ReturnType<typeof vi.fn>) {
   vi.stubGlobal("fetch", fetcher);
   const client = new QueryClient({
@@ -38,18 +32,12 @@ function show(fetcher: ReturnType<typeof vi.fn>) {
 
 function metadata(path: string) {
   return json(
-    path.endsWith("/runtime") ? runtime : { items: [], has_more: false },
+    path.endsWith("/target-images") ? { items: [{image: "demo", id: "sha256:abc"}]} : { items: [], has_more: false },
   );
 }
 
 it.each([
   ["Targets", "/targets?", "Loading targets…", "No targets registered."],
-  [
-    "Scopes",
-    "/authorization-scopes?",
-    "Loading scopes…",
-    "No authorization scopes.",
-  ],
 ])("distinguishes loading, failed, and empty %s requests", async (tab, path, loading, empty) => {
   let resolveRead: ((response: Response) => void) | undefined;
   let retry = false;
@@ -80,7 +68,7 @@ it.each([
 it("clears the target draft when switching between cached projects", async () => {
   show(vi.fn(async (url: string) => metadata(url)));
   await userEvent.click(screen.getByRole("button", { name: "Targets" }));
-  await screen.findByRole("option", { name: "demo" });
+  await screen.findByLabelText("Docker image");
   await userEvent.type(screen.getByLabelText("Target name"), "Unfinished target");
   await userEvent.type(screen.getByLabelText("Registered URL"), "https://p.test/");
   await userEvent.click(screen.getByRole("link", { name: "Switch to project q" }));

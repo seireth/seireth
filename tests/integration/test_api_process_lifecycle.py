@@ -5,9 +5,9 @@ import socket
 import subprocess
 import sys
 from contextlib import ExitStack
-from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -130,6 +130,14 @@ def api_process(database, tmp_path, request, wait_until):
             3,
             marks=[docker_only, pytest.mark.docker],
         ),
+        pytest.param(
+            "docker",
+            "image-removed",
+            "failed",
+            1,
+            0,
+            marks=[docker_only, pytest.mark.docker],
+        ),
     ],
     indirect=["api_process"],
 )
@@ -143,7 +151,13 @@ def test_real_api_lifecycle(
 ):
     client = api_process.client
     if api_process.backend == "inmemory":
-        result = verify(str(client.base_url), expected_backend="inmemory")
+        result = verify(
+            str(client.base_url),
+            image="demo:local",
+            target_url="http://demo-app:8080/",
+            plugins=["security-headers"],
+            expected_backend="inmemory",
+        )
         assert result["results"]["status"] == expected_status
         assert result["results"]["result"]["finding_count"] == expected_findings
         assert result["results"]["result"]["attempt"] == expected_attempt
@@ -159,21 +173,17 @@ def test_real_api_lifecycle(
         return response.json()
 
     project = post("/api/v1/projects", {"name": "Docker recovery"})
+    image = "seireth/demo-app:local"
+    if action == "image-removed":
+        image = f"seireth/recovery-test:{uuid4().hex}"
+        docker("tag", "seireth/demo-app:local", image)
     target = post(
         "/api/v1/targets",
         {
             "project_id": project["id"],
             "name": "slow",
-            "url": "http://demo-target:8080/slow",
-        },
-    )
-    scope = post(
-        "/api/v1/authorization-scopes",
-        {
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "allowed_url": "http://demo-target:8080/slow",
-            "expires_at": (models.now() + timedelta(minutes=5)).isoformat(),
+            "image": image,
+            "url": "http://demo-app:8080/slow",
         },
     )
     assessment = post(
@@ -181,7 +191,7 @@ def test_real_api_lifecycle(
         {
             "project_id": project["id"],
             "target_id": target["id"],
-            "scope_id": scope["id"],
+            "url": target["url"],
             "plugins": ["security-headers"],
         },
     )
@@ -197,9 +207,11 @@ def test_real_api_lifecycle(
         timeout=30,
         interval=0.05,
     )
-    if action == "crash":
+    if action in {"crash", "image-removed"}:
         api_process.process.kill()
         api_process.process.wait(timeout=10)
+        if action == "image-removed":
+            docker("image", "rm", image)
         api_process.start()
     else:
         response = client.post(f"/api/v1/assessments/{aid}/cancel")
@@ -216,6 +228,9 @@ def test_real_api_lifecycle(
     assert report["status"] == expected_status, report
     assert report["result"]["cleanup_verified"]
     assert report["result"]["attempt"] == expected_attempt
+    if action == "image-removed":
+        assert "not available locally" in report["result"]["error"]
+        assert not report["cleanup_pending"]
     assert client.get(f"/api/v1/assessments/{aid}").json()["plugins"] == [
         "security-headers"
     ]
@@ -249,16 +264,8 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
         {
             "project_id": project["id"],
             "name": "cookies",
-            "url": "http://demo-target:8080/cookies",
-        },
-    )
-    scope = post(
-        "/api/v1/authorization-scopes",
-        {
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "allowed_url": target["url"],
-            "expires_at": (models.now() + timedelta(minutes=5)).isoformat(),
+            "image": "seireth/demo-app:local",
+            "url": "http://demo-app:8080/cookies",
         },
     )
     selection = ["security-headers", "cookie-security"]
@@ -267,7 +274,7 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
         {
             "project_id": project["id"],
             "target_id": target["id"],
-            "scope_id": scope["id"],
+            "url": target["url"],
             "plugins": selection,
         },
     )

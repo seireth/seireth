@@ -43,7 +43,7 @@ class AssessmentStatus(StrEnum):
 
 
 class Project(Base):
-    """A project groups targets, authorization, and assessment activity."""
+    """A project groups targets and assessment activity."""
 
     __tablename__ = "projects"
     name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH))
@@ -54,23 +54,13 @@ class Project(Base):
 
 
 class Target(Base):
-    """An authorized software target that may be assessed."""
+    """An image and base URL that may be assessed."""
 
     __tablename__ = "targets"
     project_id: Mapped[str] = mapped_column(ForeignKey(Project.id), index=True)
     name: Mapped[str] = mapped_column(String(NAME_MAX_LENGTH))
     image: Mapped[str] = mapped_column(String(TARGET_IMAGE_MAX_LENGTH))
     url: Mapped[str] = mapped_column(String(STORED_URL_MAX_LENGTH))
-
-
-class AuthorizationScope(Base):
-    """A time-bounded URL scope authorizing testing of a target."""
-
-    __tablename__ = "authorization_scopes"
-    project_id: Mapped[str] = mapped_column(ForeignKey(Project.id), index=True)
-    target_id: Mapped[str] = mapped_column(ForeignKey(Target.id))
-    allowed_url: Mapped[str] = mapped_column(String(STORED_URL_MAX_LENGTH))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class Assessment(Base):
@@ -88,7 +78,7 @@ class Assessment(Base):
     cleanup_pending: Mapped[bool] = mapped_column(default=False, server_default="false")
     project_id: Mapped[str] = mapped_column(ForeignKey(Project.id), index=True)
     target_id: Mapped[str] = mapped_column(ForeignKey(Target.id))
-    scope_id: Mapped[str] = mapped_column(ForeignKey(AuthorizationScope.id))
+    url: Mapped[str] = mapped_column(String(STORED_URL_MAX_LENGTH))
     plugins: Mapped[list[str]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(30), default=AssessmentStatus.queued)
     result: Mapped[dict | None] = mapped_column(JSON)

@@ -3,18 +3,24 @@
 Use the API's generated `/docs` explorer for schemas and interactive requests, or
 run the [verification workflow](getting-started.md#simulated-assessment).
 
-## Authorize and select
+## Register and select
 
 | Step | Endpoint |
 | --- | --- |
 | Create project | `POST /api/v1/projects` |
-| Register allowlisted target | `POST /api/v1/targets` |
-| Authorize URL and expiry | `POST /api/v1/authorization-scopes` |
+| Register image and base URL | `POST /api/v1/targets` |
+| Discover local tagged images | `GET /api/v1/target-images` |
 | Read plugin catalog | `GET /api/v1/plugins` |
 | Submit assessment | `POST /api/v1/assessments` |
 
-Scopes must match the project/target and registered origin/path, and remain
-unexpired at creation, submission, execution, and retry. Requests use one
+Register a target with `project_id`, `name`, `image`, and `url`. Image discovery
+returns `{"items":[{"image":"repository:tag","id":"sha256:…"}]}` and is optional.
+Docker rejects missing local images with HTTP 400 and daemon failures with 503.
+The simulated backend accepts valid image metadata without Docker.
+
+Assessment URLs must stay within the target's origin and registered path, including
+child paths. Ownership, URL boundaries, plugins, and local image availability are
+rechecked during submission, execution, and recovery retries. Requests use one
 development actor; there is no login flow.
 
 Get selectable IDs from `GET /api/v1/plugins`. The built-ins are `security-headers`
@@ -28,7 +34,7 @@ Submit this body, replacing placeholder IDs with those returned above:
 {
   "project_id": "project-id",
   "target_id": "target-id",
-  "scope_id": "scope-id",
+  "url": "http://demo-app:8080/cookies",
   "plugins": ["security-headers"]
 }
 ```
@@ -36,7 +42,7 @@ Submit this body, replacing placeholder IDs with those returned above:
 ## Poll status and results
 
 Submission returns HTTP 202, the saved assessment, and a `Location` to poll.
-Selected plugin IDs are persisted. `result` is null until an outcome exists;
+The requested URL and selected plugin IDs are persisted and returned in assessment details and history. `result` is null until an outcome exists;
 execution can advance the initial status before the response arrives.
 
 | Status | Meaning |
@@ -87,19 +93,16 @@ with HTTP 500 and `stored evidence is invalid`. See
 | `GET /api/v1/projects/{id}` | Project name and creation time |
 | `GET /api/v1/projects/{id}/targets` | Registered targets |
 | `GET /api/v1/targets/{id}` | Target name, image, URL, and project ID |
-| `GET /api/v1/projects/{id}/authorization-scopes` | Scopes, including expired scopes; optional `target_id` from the same project |
-| `GET /api/v1/authorization-scopes/{id}` | Scope project/target IDs, URL boundary, and expiry |
 | `GET /api/v1/projects/{id}/assessments` | Assessment history |
-| `GET /api/v1/runtime` | `sandbox_backend`, `default_target_image`, `allowed_target_images` |
+| `GET /api/v1/runtime` | `sandbox_backend` |
 
-Project, target, scope, and assessment lists return `items` and `has_more`.
-Use `offset` (default 0) and `limit` (default 50, range 1–100). While `has_more` is
+Project, target, and assessment lists return `items` and `has_more`.
+Use `offset` (default 0) and `limit` (default 50, range 1â€“100). While `has_more` is
 true, advance `offset` by `limit`. Projects and assessments sort newest first,
-scopes by expiry descending, and targets by ID, with ID tie breakers.
+and targets by ID, with ID tie breakers.
 Audit events return a chronological array.
 
-Unknown resources return 404; denied project access returns 403. Expired
-scopes permit reads but cannot authorize execution. Reads perform no assessment
+Unknown resources return 404; denied project access returns 403. Reads perform no assessment
 work and write no records or audit events.
 
 Browser writes require a same-origin `Origin`; cross-origin and opaque origins
@@ -163,11 +166,11 @@ active work returns 202 / `cancelling`. Pending repeats are idempotent; terminal
 runs return 409. Continue polling nonterminal states, including recovery.
 
 Cancellation interrupts the runner and verifies cleanup before `cancelled`.
-Deadline/scope expiry fails after cleanup. [Crash recovery](architecture.md#recovery)
-can retry once after cleanup and fresh authorization; results expose `attempt`.
+Execution timeout fails after cleanup. [Crash recovery](architecture.md#recovery)
+can retry once after cleanup and fresh boundary and image checks; results expose `attempt`.
 
 `GET /api/v1/projects/{id}/audit-events` returns chronological events. Normal success
-records `project.created`, `target.registered`, `scope.authorized`,
+records `project.created`, `target.registered`,
 `assessment.queued`, `assessment.running`, and `assessment.completed`.
 Cancellation/recovery add their transitions, including `assessment.cancelling`.
 Each transition commits with its audit record.

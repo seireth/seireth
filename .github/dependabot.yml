@@ -14,7 +14,7 @@ updates:
     schedule: { interval: daily }
 
   - package-ecosystem: docker
-    directories: [/, /examples/demo-target]
+    directories: [/, /examples/demo_app]
     schedule: { interval: daily }
     ignore:
       # Update Node together with frontend, CI, and development pins.

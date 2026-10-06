@@ -21,7 +21,7 @@ def make_sandbox():
         return DockerSandbox(
             "demo:local",
             runner_image="python:3.14-slim",
-            target_host="demo-target",
+            target_host="demo-app",
             operation_journal=journal,
             persist_journal=persist,
         )
@@ -43,9 +43,9 @@ def test_restricted_owned_commands(sandbox, fake_docker, custom_limits):
         "Set-Cookie": ["first=synthetic"],
         "set-cookie": ["second=synthetic"],
     }
-    observation = sandbox.execute("http://demo-target:8080/app?test=1")
+    observation = sandbox.execute("http://demo-app:8080/app?test=1")
     assert isinstance(observation, HttpObservation)
-    assert str(observation.url) == "http://demo-target:8080/app?test=1"
+    assert str(observation.url) == "http://demo-app:8080/app?test=1"
     assert observation.headers == {
         "x-test": ["ok"],
         "set-cookie": ["first=synthetic", "second=synthetic"],
@@ -69,6 +69,7 @@ def test_restricted_owned_commands(sandbox, fake_docker, custom_limits):
         )
     for args in (call for call in calls if call[0] == "create"):
         for flag in [
+            "--pull=never",
             "--read-only",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
@@ -103,7 +104,7 @@ def test_invalid_runner_response_still_allows_cleanup(
 ):
     fake_docker.runner_status, fake_docker.runner_output = status, output
     with pytest.raises(error):
-        sandbox.execute("http://demo-target:8080/")
+        sandbox.execute("http://demo-app:8080/")
     assert sandbox.cleanup().verified
     assert not fake_docker.live
 
@@ -125,7 +126,7 @@ def test_invalid_runner_output_is_not_logged_and_always_cleans_up(
     fake_docker.runner_output = output
     outcome = execute(
         sandbox,
-        "http://demo-target:8080/",
+        "http://demo-app:8080/",
         execution_context,
         registry.select(["cookie-security"]),
     )
@@ -140,14 +141,14 @@ def test_simulated_backend_preserves_values_and_returns_independent_observations
     sandbox = InMemorySandbox(
         headers={"Set-Cookie": ["first=synthetic"], "set-cookie": ["second=synthetic"]}
     )
-    observation = sandbox.execute("http://demo-target:8080/app?test=1")
+    observation = sandbox.execute("http://demo-app:8080/app?test=1")
     assert isinstance(observation, HttpObservation)
-    assert str(observation.url) == "http://demo-target:8080/app?test=1"
+    assert str(observation.url) == "http://demo-app:8080/app?test=1"
     assert observation.headers == {
         "set-cookie": ["first=synthetic", "second=synthetic"]
     }
     observation.headers["set-cookie"].append("changed=synthetic")
-    assert sandbox.execute("http://demo-target:8080/app?test=1").headers == {
+    assert sandbox.execute("http://demo-app:8080/app?test=1").headers == {
         "set-cookie": ["first=synthetic", "second=synthetic"]
     }
 
@@ -160,7 +161,7 @@ def test_simulated_backend_rejects_invalid_headers_without_logging_values(
 ):
     outcome = execute(
         InMemorySandbox(headers=headers),
-        "http://demo-target:8080/",
+        "http://demo-app:8080/",
         execution_context,
         registry.select(["cookie-security"]),
     )
@@ -255,7 +256,7 @@ def test_network_created_before_cli_timeout_is_reconciled(
     fake_docker.create_hook = timeout_after_creation
     outcome = execute(
         sandbox,
-        "http://demo-target:8080",
+        "http://demo-app:8080",
         execution_context,
         registry.select(["security-headers"]),
     )
@@ -330,7 +331,7 @@ def test_late_creation_is_not_certified_absent(
     fake_docker.create_hook = timeout
     outcome = execute(
         sandbox,
-        "http://demo-target:8080",
+        "http://demo-app:8080",
         execution_context,
         registry.select(["security-headers"]),
     )
@@ -373,7 +374,7 @@ def test_cleanup_requires_proven_resource_state_after_crash(
             TimeoutError("crash before request reached daemon")
         )
     with pytest.raises((OSError, TimeoutError)):
-        sandbox.execute("http://demo-target:8080")
+        sandbox.execute("http://demo-app:8080")
     recovered = DockerSandbox(
         "demo:local",
         runner_image="python:3.14-slim",

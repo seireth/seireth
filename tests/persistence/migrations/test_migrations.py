@@ -63,7 +63,7 @@ def test_status_constraint(database):
         with pytest.raises(IntegrityError) as error:
             connection.execute(
                 text(
-                    "INSERT INTO assessments (id, project_id, target_id, scope_id, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', '[\"security-headers\"]'::json, 'unknown', now())"
+                    "INSERT INTO assessments (id, project_id, target_id, url, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', '[\"security-headers\"]'::json, 'unknown', now())"
                 )
             )
     assert error.value.orig.diag.constraint_name == "assessment_status_valid"

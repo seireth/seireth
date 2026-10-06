@@ -5,7 +5,6 @@ from app.api.schemas import (
     AssessmentCreate,
     EvidenceOut,
     ProjectCreate,
-    ScopeCreate,
     TargetCreate,
 )
 from app.persistence.models import Evidence
@@ -13,8 +12,13 @@ from app.persistence.models import Evidence
 
 @pytest.mark.parametrize("image", [None, "", "a" * 300, "a" * 301])
 def test_target_image_input_respects_storage_limit(image):
-    payload = {"project_id": "project", "name": "target", "image": image}
-    if image is not None and len(image) > 300:
+    payload = {
+        "project_id": "project",
+        "name": "target",
+        "image": image,
+        "url": "http://demo-app:8080/",
+    }
+    if not image or len(image) > 300:
         with pytest.raises(ValidationError) as error:
             TargetCreate(**payload)
         assert error.value.errors()[0]["loc"] == ("image",)
@@ -29,7 +33,10 @@ def test_target_image_input_respects_storage_limit(image):
 def test_assessment_requires_explicit_nonempty_plugins(selection):
     with pytest.raises(ValidationError) as error:
         AssessmentCreate(
-            project_id="project", target_id="target", scope_id="scope", **selection
+            project_id="project",
+            target_id="target",
+            url="http://demo-app:8080/",
+            **selection,
         )
     assert error.value.errors()[0]["loc"] == ("plugins",)
 
@@ -42,11 +49,15 @@ def sized_url(length, *, normalized_growth=False):
 @pytest.mark.parametrize(
     "schema,field,base",
     [
-        (TargetCreate, "url", {"project_id": "p", "name": "target"}),
         (
-            ScopeCreate,
-            "allowed_url",
-            {"project_id": "p", "target_id": "t", "expires_at": "2099-01-01T00:00:00Z"},
+            TargetCreate,
+            "url",
+            {"project_id": "p", "name": "target", "image": "demo:local"},
+        ),
+        (
+            AssessmentCreate,
+            "url",
+            {"project_id": "p", "target_id": "t", "plugins": ["security-headers"]},
         ),
     ],
 )
@@ -77,7 +88,7 @@ def test_assessment_rejects_unknown_fields():
         AssessmentCreate(
             project_id="p",
             target_id="t",
-            scope_id="s",
+            url="http://demo-app:8080/",
             plugins=["security-headers"],
             unexpected=True,
         )
@@ -86,7 +97,14 @@ def test_assessment_rejects_unknown_fields():
 
 
 @pytest.mark.parametrize(
-    "schema,base", [(ProjectCreate, {}), (TargetCreate, {"project_id": "p"})]
+    "schema,base",
+    [
+        (ProjectCreate, {}),
+        (
+            TargetCreate,
+            {"project_id": "p", "image": "demo:local", "url": "http://demo-app:8080/"},
+        ),
+    ],
 )
 @pytest.mark.parametrize("length", [200, 201])
 def test_names_respect_storage_limit(schema, base, length):

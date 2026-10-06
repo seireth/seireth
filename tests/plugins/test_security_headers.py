@@ -5,7 +5,7 @@ import pytest
 from app.plugins.base import HttpObservation
 from app.plugins.security_headers import analyze
 
-URL = "http://demo-target:8080/"
+URL = "http://demo-app:8080/"
 
 
 def response(headers):

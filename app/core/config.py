@@ -18,9 +18,7 @@ class Settings(BaseSettings):
     sandbox_backend: Literal["inmemory", "docker"]
     assessment_timeout_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
 
-    docker_runner_image: str = "python:3.14-slim"
-    docker_target_image: TargetImage
-    docker_allowed_target_images: list[TargetImage]
+    docker_runner_image: TargetImage = "python:3.14-slim"
 
     docker_memory: str = "256m"
     docker_cpus: float = Field(default=0.5, gt=0, allow_inf_nan=False)

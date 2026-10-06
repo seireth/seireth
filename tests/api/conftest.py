@@ -1,7 +1,5 @@
 """HTTP fixtures; read_client deliberately omits dispatcher startup."""
 
-from datetime import datetime, timedelta, timezone
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -39,7 +37,8 @@ def target(client, project, request):
         json={
             "project_id": project,
             "name": "demo",
-            "url": getattr(request, "param", "http://demo-target:8080"),
+            "image": "seireth/demo-app:local",
+            "url": getattr(request, "param", "http://demo-app:8080"),
         },
     )
     assert response.status_code == 200
@@ -47,23 +46,11 @@ def target(client, project, request):
 
 
 @pytest.fixture
-def scope_payload(project, target):
+def assessment_payload(project, target):
     return {
         "project_id": project,
         "target_id": target["id"],
-        "allowed_url": target["url"],
-        "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
-    }
-
-
-@pytest.fixture
-def assessment_payload(client, scope_payload):
-    response = client.post("/api/v1/authorization-scopes", json=scope_payload)
-    assert response.status_code == 200
-    return {
-        "project_id": scope_payload["project_id"],
-        "target_id": scope_payload["target_id"],
-        "scope_id": response.json()["id"],
+        "url": target["url"],
         "plugins": ["security-headers"],
     }
 

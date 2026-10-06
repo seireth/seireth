@@ -5,7 +5,7 @@ from tests.api.helpers import snapshot, submission
 
 @pytest.mark.parametrize(
     "operation",
-    ["target", "scope", "assessment", "read", "results", "evidence", "cancel", "audit"],
+    ["target", "assessment", "read", "results", "evidence", "cancel", "audit"],
 )
 def test_foreign_project_access_is_denied_without_side_effects(
     client, database, assessment_graph, dispatch_calls, operation
@@ -13,15 +13,14 @@ def test_foreign_project_access_is_denied_without_side_effects(
     graph = assessment_graph(owner="other-actor", status="completed")
     aid, pid = graph.assessment.id, graph.project.id
     requests = {
-        "target": ("post", "/api/v1/targets", {"project_id": pid, "name": "foreign"}),
-        "scope": (
+        "target": (
             "post",
-            "/api/v1/authorization-scopes",
+            "/api/v1/targets",
             {
                 "project_id": pid,
-                "target_id": graph.target.id,
-                "allowed_url": graph.target.url,
-                "expires_at": graph.scope.expires_at.isoformat(),
+                "name": "foreign",
+                "image": graph.target.image,
+                "url": graph.target.url,
             },
         ),
         "assessment": ("post", "/api/v1/assessments", submission(graph)),
@@ -48,28 +47,23 @@ def test_foreign_project_access_is_denied_without_side_effects(
         ("post", "/api/v1/assessments/missing/cancel"),
         ("get", "/api/v1/projects/missing/audit-events"),
         ("post", "/api/v1/targets"),
-        ("post", "/api/v1/authorization-scopes"),
         ("post", "/api/v1/assessments"),
     ],
 )
 def test_missing_resources_return_404_without_side_effects(
     client, database, dispatch_calls, method, path
 ):
-    payload = (
-        {
-            "project_id": "missing",
-            "target_id": "missing",
-            "allowed_url": "http://demo-target:8080/",
-            "expires_at": "2099-01-01T00:00:00Z",
-        }
-        if "authorization-scopes" in path
-        else {"project_id": "missing", "name": "missing"}
-    )
+    payload = {
+        "project_id": "missing",
+        "name": "missing",
+        "image": "demo:local",
+        "url": "http://demo-app:8080/",
+    }
     if path == "/api/v1/assessments":
         payload = {
             "project_id": "missing",
             "target_id": "missing",
-            "scope_id": "missing",
+            "url": "http://demo-app:8080/",
             "plugins": ["security-headers"],
         }
     before = snapshot(database)

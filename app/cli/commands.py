@@ -86,6 +86,9 @@ def main() -> int:
     check.add_argument("--base-url", default=None)
     check.add_argument("--timeout-seconds", type=positive_timeout, default=120)
     check.add_argument("--expected-backend", choices=("inmemory", "docker"))
+    check.add_argument("--image", required=True)
+    check.add_argument("--target-url", required=True)
+    check.add_argument("--plugins", nargs="+", required=True)
 
     subparsers.add_parser("migrate", help="Apply versioned database migrations")
     docker_up = subparsers.add_parser(
@@ -125,6 +128,9 @@ def main() -> int:
                     else settings.api_base_url,
                     timeout_seconds=args.timeout_seconds,
                     expected_backend=args.expected_backend,
+                    image=args.image,
+                    target_url=args.target_url,
+                    plugins=args.plugins,
                 ),
                 indent=2,
                 default=str,
