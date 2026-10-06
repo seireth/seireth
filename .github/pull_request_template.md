@@ -8,7 +8,7 @@
 
 ## Security and authorization impact
 
-- [ ] This change does not affect authorization, scope validation, sandboxing, networking, secrets, isolation, evidence, or audit events.
+- [ ] This change does not affect project authorization, target boundaries, sandboxing, networking, secrets, isolation, evidence, or audit events.
 - [ ] If it does, I have included failure-path tests and described how the security boundary is preserved below.
 
 <!-- Describe relevant security impact, or write "None". -->

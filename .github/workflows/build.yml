@@ -96,6 +96,7 @@ jobs:
             -Dsonar.exclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**,**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
             -Dsonar.tests=tests,app/dashboard/e2e,app/dashboard/src
             -Dsonar.test.inclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**
+            -Dsonar.coverage.exclusions=examples/demo_app/**
             -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.javascript.lcov.reportPaths=app/dashboard/coverage/lcov.info
       - name: PostgreSQL diagnostics
