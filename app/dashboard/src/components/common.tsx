@@ -8,14 +8,20 @@ export function ErrorMessage({
   retry,
 }: {
   error: Error | null;
-  retry?: () => void;
+  retry?: () => void | Promise<unknown>;
 }) {
   if (!error) return null;
   return (
     <div role="alert" className="error">
       {error.message}
       {retry && (
-        <button type="button" className="subtle" onClick={retry}>
+        <button
+          type="button"
+          className="subtle"
+          onClick={() => {
+            void retry();
+          }}
+        >
           Try again
         </button>
       )}

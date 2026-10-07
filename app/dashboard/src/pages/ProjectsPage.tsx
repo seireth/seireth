@@ -64,12 +64,7 @@ export default function ProjectsPage() {
         <h2>Your projects</h2>
         <span>{items.length} loaded</span>
       </section>
-      <ErrorMessage
-        error={projects.error}
-        retry={() => {
-          void projects.refetch();
-        }}
-      />
+      <ErrorMessage error={projects.error} retry={projects.refetch} />
       {projects.isPending ? (
         <p role="status">Loading projects…</p>
       ) : !items.length && !projects.error ? (

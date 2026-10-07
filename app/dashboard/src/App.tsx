@@ -40,12 +40,7 @@ export default function App() {
               </NavLink>
             ))}
         </nav>
-        <ErrorMessage
-          error={projects.error}
-          retry={() => {
-            void projects.refetch();
-          }}
-        />
+        <ErrorMessage error={projects.error} retry={projects.refetch} />
         <More query={projects} />
         <div className="sidebar-footer">
           <span className="eyebrow">Execution backend</span>

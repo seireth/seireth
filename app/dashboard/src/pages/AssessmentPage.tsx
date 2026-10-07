@@ -46,12 +46,7 @@ export default function AssessmentPage() {
     return run.isPending ? (
       <p role="status">Loading assessment…</p>
     ) : (
-      <ErrorMessage
-        error={run.error}
-        retry={() => {
-          void run.refetch();
-        }}
-      />
+      <ErrorMessage error={run.error} retry={run.refetch} />
     );
   return (
     <>
@@ -72,12 +67,7 @@ export default function AssessmentPage() {
         </div>
         <StatusBadge status={assessment.status} />
       </header>
-      <ErrorMessage
-        error={run.error}
-        retry={() => {
-          void run.refetch();
-        }}
-      />
+      <ErrorMessage error={run.error} retry={run.refetch} />
       <section className="summary-grid">
         <div className="panel metric">
           <span>Execution</span>
@@ -169,18 +159,8 @@ export default function AssessmentPage() {
               Refresh
             </button>
           </div>
-          <ErrorMessage
-            error={results.error}
-            retry={() => {
-              void results.refetch();
-            }}
-          />
-          <ErrorMessage
-            error={evidence.error}
-            retry={() => {
-              void evidence.refetch();
-            }}
-          />
+          <ErrorMessage error={results.error} retry={results.refetch} />
+          <ErrorMessage error={evidence.error} retry={evidence.refetch} />
           {results.isPending ? (
             <p role="status">Loading results…</p>
           ) : results.data?.findings.length === 0 ? (

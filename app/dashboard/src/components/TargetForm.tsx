@@ -87,12 +87,7 @@ export default function TargetForm({
         onClick={() => { void images.refetch(); }}>
         Refresh images
       </button>
-      <ErrorMessage
-        error={images.error}
-        retry={() => {
-          void images.refetch();
-        }}
-      />
+      <ErrorMessage error={images.error} retry={images.refetch} />
       <ErrorMessage error={create.error} />
       <button
         type="submit"

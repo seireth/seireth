@@ -29,12 +29,7 @@ export default function ProjectPage() {
   if (project.isPending) return <p role="status">Loading project…</p>;
   if (!project.data)
     return (
-      <ErrorMessage
-        error={project.error}
-        retry={() => {
-          void project.refetch();
-        }}
-      />
+      <ErrorMessage error={project.error} retry={project.refetch} />
     );
   return (
     <>
@@ -66,12 +61,7 @@ export default function ProjectPage() {
       {tab === "assessments" && (
         <section className="panel">
           <h2>Assessment history</h2>
-          <ErrorMessage
-            error={assessments.error}
-            retry={() => {
-              void assessments.refetch();
-            }}
-          />
+          <ErrorMessage error={assessments.error} retry={assessments.refetch} />
           {assessments.isPending ? (
             <p role="status">Loading history…</p>
           ) : !runs.length && !assessments.error ? (
@@ -133,12 +123,7 @@ export default function ProjectPage() {
           </section>
           <section className="panel">
             <h2>Registered targets</h2>
-            <ErrorMessage
-              error={targets.error}
-              retry={() => {
-                void targets.refetch();
-              }}
-            />
+            <ErrorMessage error={targets.error} retry={targets.refetch} />
             {targets.isPending && <p role="status">Loading targets…</p>}
             {targets.isSuccess && !targetItems.length && (
               <Empty>No targets registered.</Empty>
@@ -157,12 +142,7 @@ export default function ProjectPage() {
       {tab === "audit" && (
         <section className="panel">
           <h2>Audit trail</h2>
-          <ErrorMessage
-            error={audit.error}
-            retry={() => {
-              void audit.refetch();
-            }}
-          />
+          <ErrorMessage error={audit.error} retry={audit.refetch} />
           {audit.isPending ? (
             <p role="status">Loading audit trail…</p>
           ) : (

@@ -66,12 +66,7 @@ export default function NewAssessmentPage() {
         </span>
       </header>
       <ErrorMessage error={project.error} />
-      <ErrorMessage
-        error={runtime.error}
-        retry={() => {
-          void runtime.refetch();
-        }}
-      />
+      <ErrorMessage error={runtime.error} retry={runtime.refetch} />
       <section className="panel step">
         <span className="step-number">01</span>
         <h2>Target</h2>
@@ -93,12 +88,7 @@ export default function NewAssessmentPage() {
           </select>
           <FieldError error={create.error} name="target_id" />
         </label>
-        <ErrorMessage
-          error={targets.error}
-          retry={() => {
-            void targets.refetch();
-          }}
-        />
+        <ErrorMessage error={targets.error} retry={targets.refetch} />
         <ErrorMessage error={target.error} />
         <More query={targets} />
         <button
@@ -139,12 +129,7 @@ export default function NewAssessmentPage() {
       <section className="panel step">
         <span className="step-number">03</span>
         <h2>Checks</h2>
-        <ErrorMessage
-          error={plugins.error}
-          retry={() => {
-            void plugins.refetch();
-          }}
-        />
+        <ErrorMessage error={plugins.error} retry={plugins.refetch} />
         <fieldset className="plugin-grid">
           <legend>Select at least one plugin</legend>
           {plugins.data?.map((plugin) => (
