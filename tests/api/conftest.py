@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.router import router
+from app.persistence import models
+from tests.header_evidence import header_evidence
 
 
 @pytest.fixture
@@ -63,3 +65,29 @@ def dispatch_calls(client, monkeypatch):
     for method, recorded in calls.items():
         monkeypatch.setattr(dispatcher, method, recorded.append)
     return calls
+
+
+@pytest.fixture
+def evidence_row(database):
+    def create(assessment_id, *, identity=None, kind="http-response", data=None):
+        with database.SessionLocal() as db:
+            evidence = models.Evidence(
+                kind=kind,
+                data=data if data is not None else header_evidence(),
+            )
+            if identity is not None:
+                evidence.id = identity
+            finding = models.Finding(
+                assessment_id=assessment_id,
+                plugin="http-security-headers",
+                title="Test finding",
+                severity="medium",
+                description="Test evidence retrieval",
+                remediation="Configure the inspected response header.",
+                evidence=[evidence],
+            )
+            db.add(finding)
+            db.commit()
+            return finding.id, evidence.id
+
+    return create

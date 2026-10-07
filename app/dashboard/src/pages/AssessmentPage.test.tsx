@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { expect, it, vi } from "vitest";
 import type { Assessment, Status } from "../api/types";
 import AssessmentPage from "./AssessmentPage";
+import { blobText, reportFixture } from "../test/report";
 
 const assessment = (status: Status, cleanup_pending = false): Assessment => ({
   id: "a",
@@ -214,4 +215,107 @@ it("aborts an in-flight assessment read when the page is disposed", async () => 
   await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
   unmount();
   expect(signal?.aborted).toBe(true);
+});
+
+function exportFetcher(reportResponse: (options: RequestInit) => Promise<Response>) {
+  return vi.fn(async (path: string, options: RequestInit) => {
+    if (path.endsWith("/report")) return reportResponse(options);
+    if (path.endsWith("/results")) return json({ findings: [finding] });
+    if (path.endsWith("/evidence")) return json({ evidence: [] });
+    return json(path.endsWith("/assessments/a") ? assessment("completed") : metadata(path));
+  });
+}
+
+it.each(["JSON", "HTML"])("downloads %s from a fresh report without changing page reads", async (format) => {
+  const createObjectURL = vi.fn((blob: Blob) => {
+    expect(blob).toBeInstanceOf(Blob);
+    return "blob:report";
+  });
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = revokeObjectURL; });
+  let filename = "";
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { filename = this.download; });
+  try {
+    const fetcher = exportFetcher(async () => json(reportFixture));
+    show(fetcher);
+    const button = await screen.findByRole("button", { name: `Download ${format}` });
+    await userEvent.click(button);
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    const text = await blobText(blob);
+    expect(filename).toBe(`seireth-assessment-a.${format.toLowerCase()}`);
+    if (format === "JSON") expect(JSON.parse(text)).toEqual(reportFixture);
+    else expect(new DOMParser().parseFromString(text, "text/html").querySelector("script, img")).toBeNull();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"));
+    await userEvent.click(button);
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2));
+    expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/report"))).toHaveLength(2);
+    expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/results"))).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: finding.title })).toBeVisible();
+  } finally { click.mockRestore(); }
+});
+
+it("disables both exports during a request and allows retry after failure", async () => {
+  let resolve!: (response: Response) => void;
+  const fetcher = exportFetcher(() => new Promise((done) => { resolve = done; }));
+  show(fetcher);
+  const button = await screen.findByRole("button", { name: "Download JSON" });
+  await userEvent.click(button);
+  expect(button).toBeDisabled();
+  const html = screen.getByRole("button", { name: "Download HTML" });
+  expect(html).toBeDisabled();
+  await userEvent.click(html);
+  expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/report"))).toHaveLength(1);
+  resolve(json({ detail: "stored report data is invalid" }, 500));
+  expect(await screen.findByRole("alert")).toHaveTextContent("stored report data is invalid");
+  expect(button).toBeEnabled();
+  expect(screen.getByRole("heading", { name: finding.title })).toBeVisible();
+  await userEvent.click(html);
+  expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/report"))).toHaveLength(2);
+  resolve(json({ detail: "assessment is not finished" }, 409));
+  await screen.findByText("assessment is not finished");
+});
+
+it("shows HTML rendering failures without downloading and allows a successful retry", async () => {
+  const createObjectURL = vi.fn(() => "blob:report");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = revokeObjectURL; });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  let reportCalls = 0;
+  try {
+    const fetcher = exportFetcher(async () => json(reportCalls++ === 0 ? {
+      ...reportFixture, assessment: { ...reportFixture.assessment,
+        result: { ...reportFixture.assessment.result, completed_at: "20261007T120000+0000" },
+      },
+    } : reportFixture));
+    show(fetcher);
+    const html = await screen.findByRole("button", { name: "Download HTML" });
+    await userEvent.click(html);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not generate the HTML report.");
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+    expect(html).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Download JSON" })).toBeEnabled();
+    expect(screen.getByRole("heading", { name: finding.title })).toBeVisible();
+    await userEvent.click(html);
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect(reportCalls).toBe(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"));
+  } finally { click.mockRestore(); }
+});
+
+it("aborts a pending export and suppresses downloads after navigation", async () => {
+  let signal: AbortSignal | undefined;
+  const createObjectURL = vi.fn();
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; });
+  const fetcher = exportFetcher((options) => {
+    signal = options.signal as AbortSignal;
+    return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))));
+  });
+  const { unmount } = show(fetcher);
+  await userEvent.click(await screen.findByRole("button", { name: "Download HTML" }));
+  unmount();
+  expect(signal?.aborted).toBe(true);
+  expect(createObjectURL).not.toHaveBeenCalled();
 });

@@ -8,9 +8,16 @@ import type {
   Results,
   Target,
 } from "../api/types";
-import { date, Empty, ErrorMessage, StatusBadge } from "../components/common";
+import { date, ErrorMessage, StatusBadge } from "../components/common";
+import {
+  AssessmentSummary,
+  EmptyFindings,
+  FindingDetails,
+  ResponseChecks,
+} from "../components/AssessmentDetails";
 import { EvidenceDetails } from "../components/EvidenceDetails";
 import { terminal, useAssessment } from "../hooks/useAssessment";
+import { useReportDownload } from "../hooks/useReportDownload";
 
 export default function AssessmentPage() {
   const { assessmentId = "" } = useParams();
@@ -34,6 +41,7 @@ export default function AssessmentPage() {
     `/targets/${assessment?.target_id}`,
     !!assessment,
   );
+  const report = useReportDownload(assessmentId);
   const cancel = useMutation({
     mutationFn: () => post(`/assessments/${assessmentId}/cancel`),
     onSettled: () => {
@@ -65,37 +73,36 @@ export default function AssessmentPage() {
             {target.data?.name || "Target"} · {date(assessment.created_at)}
           </p>
         </div>
-        <StatusBadge status={assessment.status} />
+        <div>
+          <StatusBadge status={assessment.status} />
+          {finished && (
+            <div className="report-actions">
+              <button
+                type="button"
+                className="subtle"
+                disabled={report.isPending}
+                onClick={() => report.download("json")}
+              >
+                Download JSON
+              </button>
+              <button
+                type="button"
+                className="subtle"
+                disabled={report.isPending}
+                onClick={() => report.download("html")}
+              >
+                Download HTML
+              </button>
+            </div>
+          )}
+        </div>
       </header>
       <ErrorMessage error={run.error} retry={run.refetch} />
-      <section className="summary-grid">
-        <div className="panel metric">
-          <span>Execution</span>
-          <strong>{assessment.status}</strong>
-          <small>
-            {assessment.result?.sandbox_backend || "Awaiting outcome"}
-          </small>
-        </div>
-        <div className="panel metric">
-          <span>Cleanup</span>
-          <strong>
-            {assessment.cleanup_pending
-              ? "Pending verification"
-              : assessment.result?.cleanup_verified
-                ? "Verified"
-                : "No execution outcome"}
-          </strong>
-          <small>
-            {assessment.result?.cleanup_reason ||
-              "Cleanup is checked independently of execution."}
-          </small>
-        </div>
-        <div className="panel metric">
-          <span>Findings</span>
-          <strong>{results.data ? results.data.findings.length : "—"}</strong>
-          <small>{assessment.plugins.length} selected plugins</small>
-        </div>
-      </section>
+      <ErrorMessage error={report.error} />
+      <AssessmentSummary
+        assessment={assessment}
+        findingCount={results.data?.findings.length}
+      />
       <section className="panel">
         <h2>Assessment request</h2>
         <dl>
@@ -143,36 +150,7 @@ export default function AssessmentPage() {
         )}
         <ErrorMessage error={cancel.error} />
       </section>
-      {finished && assessment.result?.response && (
-        <section className="panel" aria-label="Response and check outcomes">
-          <h2>Response and check outcomes</h2>
-          <dl>
-            <dt>HTTP status</dt>
-            <dd>{assessment.result.response.status_code}</dd>
-            <dt>Declared media type</dt>
-            <dd>{assessment.result.response.media_type ?? "Unknown"}</dd>
-          </dl>
-          <p>Outcomes cover only the listed rules and declared response metadata.</p>
-          {assessment.result.plugins
-            ?.filter((plugin) => plugin.checks?.length)
-            .map((plugin) => (
-              <div key={plugin.id}>
-                <h3>{plugin.id}</h3>
-                <ul className="check-outcomes">
-                  {plugin.checks?.map((check) => (
-                    <li key={check.rule_id}>
-                      <span className={`badge check-${check.status}`}>
-                        {check.status}
-                      </span>{" "}
-                      <strong>{check.rule_id}</strong>
-                      <p>{check.reason}</p>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-        </section>
-      )}
+      {finished && <ResponseChecks result={assessment.result} />}
       {finished && (
         <section className="findings-section">
           <div className="section-header">
@@ -194,41 +172,24 @@ export default function AssessmentPage() {
           {results.isPending ? (
             <p role="status">Loading results…</p>
           ) : results.data?.findings.length === 0 ? (
-            <Empty>
-              {assessment.status === "completed"
-                ? "No covered violations were identified. This does not certify security."
-                : "This assessment produced no persisted findings."}
-            </Empty>
+            <EmptyFindings status={assessment.status} />
           ) : (
             results.data?.findings.map((finding) => (
-              <article className="panel finding" key={finding.id}>
-                <header>
-                  <span className={`badge severity ${finding.severity}`}>
-                    {finding.severity}
-                  </span>
-                  <span className="eyebrow">{finding.plugin}</span>
-                </header>
-                <h3>{finding.title}</h3>
-                <p>{finding.description}</p>
-                <h4>Remediation</h4>
-                <p>{finding.remediation}</p>
-                <details>
-                  <summary>Evidence</summary>
-                  {evidence.isPending ? (
-                    <p>Loading evidence…</p>
-                  ) : evidence.error ? (
-                    <p>Evidence could not be retrieved. Use Try again above.</p>
-                  ) : (
-                    <EvidenceDetails
-                      evidence={
-                        evidence.data?.evidence.filter(
-                          (e) => e.finding_id === finding.id,
-                        ) ?? []
-                      }
-                    />
-                  )}
-                </details>
-              </article>
+              <FindingDetails key={finding.id} finding={finding}>
+                {evidence.isPending ? (
+                  <p>Loading evidence…</p>
+                ) : evidence.error ? (
+                  <p>Evidence could not be retrieved. Use Try again above.</p>
+                ) : (
+                  <EvidenceDetails
+                    evidence={
+                      evidence.data?.evidence.filter(
+                        (e) => e.finding_id === finding.id,
+                      ) ?? []
+                    }
+                  />
+                )}
+              </FindingDetails>
             ))
           )}
         </section>

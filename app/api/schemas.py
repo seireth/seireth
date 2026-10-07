@@ -11,6 +11,7 @@ from ..core.constraints import (
     TargetImage,
 )
 from ..persistence.models import AssessmentStatus
+from ..plugins.base import CheckOutcome, require_unique_check_ids
 from ..plugins.http_security_headers_contract import (
     EVIDENCE_CONDITIONS,
     RULE_REQUIREMENTS,
@@ -184,4 +185,91 @@ class AssessmentEvidenceOut(BaseModel):
     assessment_id: str
     status: AssessmentStatus
     cleanup_pending: bool
+    evidence: list[EvidenceOut]
+
+
+class ReportData(BaseModel):
+    """Project only documented result fields, without coercing stored values."""
+
+    model_config = ConfigDict(extra="ignore", strict=True, hide_input_in_errors=True)
+
+
+class ReportResponseOut(ReportData):
+    status_code: int = Field(ge=100, le=599)
+    media_type: NormalizedMediaType | None
+
+
+class ReportCheckOut(CheckOutcome):
+    model_config = ReportData.model_config
+
+
+class ReportPluginOut(ReportData):
+    id: str
+    finding_count: int = Field(ge=0)
+    checks: list[ReportCheckOut] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def supplied_checks_are_not_null(cls, value):
+        if isinstance(value, dict) and "checks" in value and value["checks"] is None:
+            raise ValueError("supplied check outcomes must be a list")
+        return value
+
+    @field_validator("checks")
+    @classmethod
+    def unique_checks(cls, checks):
+        if checks is not None:
+            require_unique_check_ids(checks)
+        return checks
+
+
+class ReportResultOut(ReportData):
+    sandbox_backend: Literal["inmemory", "docker"] | None = None
+    attempt: int | None = Field(default=None, ge=1)
+    completed_at: str | None = Field(
+        default=None,
+        pattern=(
+            r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+            r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?"
+            r"(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
+        ),
+    )
+    error: str | None = None
+    cleanup_verified: bool | None = None
+    cleanup_reason: str | None = None
+    response: ReportResponseOut | None = None
+    finding_count: int | None = Field(default=None, ge=0)
+    plugins: list[ReportPluginOut] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def supplied_fields_are_not_null(cls, value):
+        if isinstance(value, dict) and any(
+            value[key] is None
+            for key in cls.model_fields
+            if key in value and key != "cleanup_reason"
+        ):
+            raise ValueError("supplied execution fields must not be null")
+        return value
+
+    @field_validator("completed_at")
+    @classmethod
+    def valid_completion_time(cls, value):
+        if value is not None:
+            # The pattern ensures a browser-readable format; parsing checks the date.
+            datetime.fromisoformat(value)
+        return value
+
+
+class ReportAssessmentOut(AssessmentOut):
+    result: ReportResultOut | None = None
+
+
+class AssessmentReportOut(BaseModel):
+    schema_version: Literal[1] = 1
+    generated_at: datetime
+    project: ProjectOut
+    target: TargetOut
+    assessment: ReportAssessmentOut
+    findings: list[FindingOut]
     evidence: list[EvidenceOut]

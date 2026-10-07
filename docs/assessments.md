@@ -96,6 +96,36 @@ unlisted fields are rejected. Invalid stored evidence fails the entire response
 with HTTP 500 and `stored evidence is invalid`. See
 [diagnostic redaction](security-model.md).
 
+## Download assessment reports
+
+`GET /api/v1/assessments/{assessment_id}/report` returns a versioned JSON snapshot
+for a `completed`, `failed`, or `cancelled` assessment. Other states return 409
+after project authorization. The dashboard's **Download JSON** and **Download HTML**
+buttons each fetch a fresh snapshot; HTML generation happens in the browser.
+
+The report contains `schema_version` (currently 1), UTC `generated_at`, the public
+`project` and `target`, `assessment`, ID-ordered `findings`, and ID-ordered
+`evidence`. Request and plugin-selection metadata are preserved. The assessment's
+result projects only documented execution, cleanup, response, and check-outcome
+fields; unknown stored result fields are excluded. Missing outcomes remain missing.
+The existing results and evidence endpoints retain their response shapes.
+
+Reports do not rerun checks or change saved records. Cleanup can remain pending
+in a terminal assessment; the report states that uncertainty. Regenerating it
+reflects later reconciliation. Simulated runs are identified, and zero findings
+does not certify security. JSON retains saved timestamps; HTML displays them in UTC.
+Completion timestamps require an extended ISO date and time with seconds, a `T`
+separator, and `Z` or a `±HH:MM` timezone offset; up to six fractional-second digits
+are supported. Unparseable or unsupported stored timestamps fail report validation.
+
+HTML includes expanded finding evidence and inline styles, works offline, and can
+be printed using the browser. It contains no scripts or external assets. Stored
+text is rendered as text. Both formats retain the existing evidence validation
+and redaction rules: raw cookie values, complete fields, and arbitrary header
+values are excluded. Invalid evidence or documented result fields fail the entire
+export with HTTP 500 and generic diagnostics. Authorized URLs, names, and finding
+text are preserved; reports do not anonymize target details.
+
 ## Discover saved records
 
 | Read endpoint | Response |
