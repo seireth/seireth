@@ -28,7 +28,7 @@ def test_target_image_input_respects_storage_limit(image):
 
 @pytest.mark.parametrize(
     "selection",
-    [{}, {"plugins": None}, {"plugins": []}, {"plugins": "security-headers"}],
+    [{}, {"plugins": None}, {"plugins": []}, {"plugins": "http-security-headers"}],
 )
 def test_assessment_requires_explicit_nonempty_plugins(selection):
     with pytest.raises(ValidationError) as error:
@@ -57,7 +57,7 @@ def sized_url(length, *, normalized_growth=False):
         (
             AssessmentCreate,
             "url",
-            {"project_id": "p", "target_id": "t", "plugins": ["security-headers"]},
+            {"project_id": "p", "target_id": "t", "plugins": ["http-security-headers"]},
         ),
     ],
 )
@@ -89,7 +89,7 @@ def test_assessment_rejects_unknown_fields():
             project_id="p",
             target_id="t",
             url="http://demo-app:8080/",
-            plugins=["security-headers"],
+            plugins=["http-security-headers"],
             unexpected=True,
         )
     assert error.value.errors()[0]["type"] == "extra_forbidden"
@@ -147,11 +147,26 @@ def test_names_respect_storage_limit(schema, base, length):
     ]
 )
 def public_evidence(request):
+    data = {"url": "https://example.test/app", **request.param}
+    if data["header"] != "set-cookie":
+        data.update(
+            rule_id="framing-protection"
+            if data["header"] == "x-frame-options"
+            else data["header"],
+            status_code=200,
+            media_type="text/html",
+            condition="missing",
+            expected={
+                "x-content-type-options": "nosniff",
+                "content-security-policy": "nonblank enforced CSP",
+                "x-frame-options": "recognized restrictive framing protection",
+            }[data["header"]],
+        )
     return {
         "id": "evidence-id",
         "finding_id": "finding-id",
         "kind": "http-response",
-        "data": {"url": "https://example.test/app", **request.param},
+        "data": data,
     }
 
 
@@ -161,6 +176,36 @@ def test_public_evidence_payloads_round_trip_without_changing_fields(public_evid
     assert EvidenceOut.model_validate_json(evidence.model_dump_json()) == evidence
     row = Evidence(**public_evidence)
     assert EvidenceOut.model_validate(row, from_attributes=True) == evidence
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"status_code": True},
+        {"status_code": "200"},
+        {"status_code": 600},
+        {"rule_id": "arbitrary-rule"},
+        {"condition": "raw-secret"},
+        {"expected": "raw-secret"},
+        {"media_type": "Text/HTML"},
+        {"media_type": "text/html; raw-secret"},
+        {"media_type": "raw-secret"},
+    ],
+)
+def test_header_evidence_rejects_unvalidated_metadata(changes):
+    data = {
+        "url": "https://example.test/",
+        "header": "x-content-type-options",
+        "rule_id": "x-content-type-options",
+        "status_code": 200,
+        "media_type": "text/html",
+        "condition": "missing",
+        "expected": "nosniff",
+        **changes,
+    }
+    with pytest.raises(ValidationError) as error:
+        EvidenceOut(id="e", finding_id="f", kind="http-response", data=data)
+    assert "raw-secret" not in str(error.value)
 
 
 @pytest.mark.parametrize("field", ["cookie_value", "raw_header", "unexpected"])

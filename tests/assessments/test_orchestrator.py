@@ -5,7 +5,7 @@ import pytest
 from app.assessments.orchestrator import execute
 from app.assessments.sandbox import CleanupOutcome
 from app.plugins.base import HttpObservation, PluginFinding, PluginResponse
-from app.plugins.security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
+from app.plugins.http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 
 URL = "http://demo-app:8080/"
 
@@ -16,7 +16,12 @@ def recording_sandbox():
 
     class Sandbox:
         observation = HttpObservation(
-            url=URL, headers={"Set-Cookie": ["theme=synthetic-cookie"]}
+            status_code=200,
+            url=URL,
+            headers={
+                "Content-Type": ["text/html"],
+                "Set-Cookie": ["theme=synthetic-cookie"],
+            },
         )
 
         def execute(self, url):
@@ -51,7 +56,10 @@ def test_multiple_plugins_share_one_fetch_but_not_mutable_observations(
     assert outcome.status == "completed"
     assert [item.plugin_id for item in outcome.plugin_results] == ["first", "second"]
     assert calls == ["fetch", "first", "second", "cleanup"]
-    assert sandbox.observation.headers == {"set-cookie": ["theme=synthetic-cookie"]}
+    assert sandbox.observation.headers == {
+        "content-type": ["text/html"],
+        "set-cookie": ["theme=synthetic-cookie"],
+    }
 
 
 @pytest.mark.parametrize("mode", ["raises", "invalid-response"])
@@ -76,7 +84,10 @@ def test_plugin_error_fails_attempt_but_still_cleans_up(
     assert calls == ["fetch", "broken", "cleanup"]
     assert len(observations) == 1
     assert str(observations[0].url) == URL
-    assert observations[0].headers == {"set-cookie": ["theme=synthetic-cookie"]}
+    assert observations[0].headers == {
+        "content-type": ["text/html"],
+        "set-cookie": ["theme=synthetic-cookie"],
+    }
     assert (
         "plugin broken returned an invalid response"
         if mode == "invalid-response"
@@ -115,7 +126,10 @@ def test_blank_finding_fails_only_its_attempt_and_cleans_up(
     assert calls == ["fetch", "broken", "cleanup"]
     assert len(observations) == 1
     assert str(observations[0].url) == URL
-    assert observations[0].headers == {"set-cookie": ["theme=synthetic-cookie"]}
+    assert observations[0].headers == {
+        "content-type": ["text/html"],
+        "set-cookie": ["theme=synthetic-cookie"],
+    }
     assert (
         "plugin broken returned an invalid response" if bypass_validation else field
     ) in caplog.text

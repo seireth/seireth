@@ -4,20 +4,93 @@ import pytest
 from pydantic import ValidationError
 
 from app.plugins.base import (
+    CheckOutcome,
     HttpObservation,
     Plugin,
     PluginFinding,
     PluginManifest,
     PluginResponse,
 )
+from app.plugins.http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 from app.plugins.registry import PluginRegistry, registry
-from app.plugins.security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 
 URL = "http://demo-app:8080/"
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"rule_id": "invalid rule"},
+        {"status": "unknown"},
+        {"reason": ""},
+        {"reason": " \t\n"},
+        {"reason": "x" * 301},
+    ],
+)
+def test_check_outcomes_reject_invalid_or_unexplained_results(changes):
+    with pytest.raises(ValidationError):
+        CheckOutcome(
+            **{
+                "rule_id": "rule",
+                "status": "passed",
+                "reason": "Protection recognized.",
+                **changes,
+            }
+        )
+
+
+def test_plugin_response_rejects_duplicate_checks():
+    check = CheckOutcome(
+        rule_id="rule", status="passed", reason="Protection recognized."
+    )
+    with pytest.raises(ValidationError, match="unique"):
+        PluginResponse(findings=(), checks=(check, check))
+    response = PluginResponse(findings=(), checks=(check,))
+    assert PluginResponse.model_validate_json(response.model_dump_json()) == response
+
+
+@pytest.mark.parametrize("value", [None, True, "200", 200.0, 99, 600])
+def test_observation_requires_a_strict_http_status(value):
+    with pytest.raises(ValidationError):
+        HttpObservation(url=URL, status_code=value, headers={})
+
+
+def test_observation_status_is_required():
+    with pytest.raises(ValidationError):
+        HttpObservation(url=URL, headers={})
+
+
+@pytest.mark.parametrize(
+    "fields,expected",
+    [
+        (["TEXT/HTML; charset=UTF-8"], "text/html"),
+        (['text/html; charset="utf-8"', "text/html"], "text/html"),
+        (["application/problem+json"], "application/problem+json"),
+        ([], None),
+        ([""], None),
+        (["text/html,application/json"], None),
+        (["text/html", "application/json"], None),
+        (["text/html; garbage"], None),
+        (["text/html\r\nSet-Cookie: synthetic-secret"], None),
+    ],
+)
+def test_observation_normalizes_only_unambiguous_content_types(fields, expected):
+    headers = {"Content-Type": fields} if fields else {}
+    assert (
+        HttpObservation(url=URL, status_code=200, headers=headers).media_type
+        == expected
+    )
+
+
+def test_legacy_header_plugin_id_is_rejected():
+    with pytest.raises(ValueError, match="unknown or inactive"):
+        registry.select(["security-headers"])
+
+
 def test_plugin_contract_round_trips_through_json(finding_payload):
-    observation = HttpObservation(url=URL, headers={"Example": ["value"]})
+    observation = HttpObservation(
+        status_code=200, url=URL, headers={"Example": ["value"]}
+    )
     restored_observation = HttpObservation.model_validate_json(
         observation.model_dump_json()
     )
@@ -31,6 +104,7 @@ def test_plugin_contract_round_trips_through_json(finding_payload):
 
 def test_observation_merges_case_insensitive_repeated_headers_in_order():
     observation = HttpObservation(
+        status_code=200,
         url=URL,
         headers={
             "Set-Cookie": ["first=synthetic", "second=synthetic"],
@@ -54,7 +128,7 @@ def test_observation_merges_case_insensitive_repeated_headers_in_order():
 )
 def test_observation_rejects_invalid_headers_without_echoing_values(headers):
     with pytest.raises(ValidationError) as error:
-        HttpObservation(url=URL, headers=headers)
+        HttpObservation(status_code=200, url=URL, headers=headers)
     assert "synthetic-secret" not in str(error.value)
 
 
@@ -107,14 +181,18 @@ def test_registry_is_ordered_validated_and_catalog_backed(make_plugin):
 
     second = make_plugin("second", no_findings)
     local = PluginRegistry((SECURITY_HEADERS_PLUGIN, second))
-    assert [item["id"] for item in local.catalog()] == ["security-headers", "second"]
+    assert [item["id"] for item in local.catalog()] == [
+        "http-security-headers",
+        "second",
+    ]
     assert [plugin.manifest.id for plugin in local.select(["second"])] == ["second"]
     assert [
-        plugin.manifest.id for plugin in local.select(["second", "security-headers"])
-    ] == ["second", "security-headers"]
-    assert [plugin.manifest.id for plugin in registry.select(["security-headers"])] == [
-        "security-headers"
-    ]
+        plugin.manifest.id
+        for plugin in local.select(["second", "http-security-headers"])
+    ] == ["second", "http-security-headers"]
+    assert [
+        plugin.manifest.id for plugin in registry.select(["http-security-headers"])
+    ] == ["http-security-headers"]
     with pytest.raises(ValueError, match="unique"):
         PluginRegistry((second, second))
 

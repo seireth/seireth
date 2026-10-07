@@ -117,7 +117,7 @@ def test_verify_forwards_options_and_prints_json(
             "--target-url",
             "http://arbitrary:8080/",
             "--plugins",
-            "security-headers",
+            "http-security-headers",
             *arguments,
         ],
     )
@@ -132,7 +132,7 @@ def test_verify_forwards_options_and_prints_json(
         expected_backend=backend,
         image="arbitrary:local",
         target_url="http://arbitrary:8080/",
-        plugins=["security-headers"],
+        plugins=["http-security-headers"],
     )
     output = capsys.readouterr()
     assert json.loads(output.out) == result
@@ -153,7 +153,7 @@ def test_verify_failure_reports_error_and_returns_failure(monkeypatch, capsys):
             "--target-url",
             "http://arbitrary:8080/",
             "--plugins",
-            "security-headers",
+            "http-security-headers",
         ],
     )
     monkeypatch.setattr(

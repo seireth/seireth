@@ -14,7 +14,9 @@ SECRET = "synthetic-value-never-retained"
 def findings(*cookies, url=URL):
     return analyze(
         HttpObservation(
-            url=url, headers={"Set-Cookie": list(cookies)} if cookies else {}
+            status_code=200,
+            url=url,
+            headers={"Set-Cookie": list(cookies)} if cookies else {},
         )
     ).findings
 
@@ -186,7 +188,9 @@ def test_parser_retains_only_used_attributes_and_leaves_shared_headers_intact():
         "__Host-session",
         {"secure": "", "samesite": "Lax", "domain": "", "path": "/"},
     )
-    observation = HttpObservation(url=URL, headers={"Set-Cookie": [field]})
+    observation = HttpObservation(
+        status_code=200, url=URL, headers={"Set-Cookie": [field]}
+    )
     assert not analyze(observation).findings
     assert observation.headers == {"set-cookie": [field]}
 
@@ -324,6 +328,7 @@ def test_malformed_fields_are_skipped_without_losing_other_cookies(cookie):
 def test_no_cookie_values_or_raw_attribute_values_in_findings(caplog):
     caplog.set_level(logging.DEBUG)
     observation = HttpObservation(
+        status_code=200,
         url=URL,
         headers={
             "Set-Cookie": [

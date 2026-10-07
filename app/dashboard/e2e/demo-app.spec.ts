@@ -12,15 +12,18 @@ test("the demo workspace loads its API and creates a support ticket", async ({ p
   await expect(page.getByRole("cell", { name: title, exact: true })).toBeVisible();
   await page.getByRole("link", { name: "Plugin lab", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Plugin lab" })).toBeVisible();
-  await expect(page.locator("tbody tr")).toHaveCount(38);
+  await expect(page.locator("tbody tr")).toHaveCount(44);
   expect(failures).toEqual([]);
   await page.screenshot({ path: "test-results/demo-app-lab.png", fullPage: true });
 });
 
 for (const scenario of [
-  { path: "/", name: "Protected workspace", findings: 0 },
-  { path: "/lab/csp-wildcard", name: "Permissive framing policy", findings: 1 },
-  { path: "/cookies/protected", name: "Protected cookies", findings: 0 },
+  { path: "/", name: "Protected workspace", findings: 0, outcomes: ["passed", "passed", "passed"] },
+  { path: "/lab/csp-wildcard", name: "Permissive framing policy", findings: 1, outcomes: ["passed", "passed", "failed"] },
+  { path: "/cookies/protected", name: "Protected cookies", findings: 0, outcomes: ["passed", "passed", "passed"] },
+  { path: "/api/tickets", name: "JSON applicability", findings: 0, outcomes: ["passed", "skipped", "skipped"] },
+  { path: "/lab/unknown-type", name: "Unknown applicability", findings: 1, outcomes: ["failed", "inconclusive", "inconclusive"] },
+  { path: "/login", name: "Unfollowed redirect", findings: 0, outcomes: ["skipped", "skipped", "skipped"] },
 ]) {
   test(`selects the new demo image and assesses ${scenario.name}`, async ({ page, request }) => {
     await page.goto("/dashboard/");
@@ -45,7 +48,7 @@ for (const scenario of [
     await expect(page.locator(".finding")).toHaveCount(scenario.findings);
     await expect(page.getByText("Verified", { exact: true })).toBeVisible();
     if (scenario.findings) {
-      await expect(page.getByText("Missing or ineffective framing protection", { exact: true })).toBeVisible();
+      await expect(page.getByText(scenario.path === "/lab/unknown-type" ? "Missing or ineffective X-Content-Type-Options" : "Missing or ineffective framing protection", { exact: true })).toBeVisible();
       await page.locator(".finding summary").click();
       await expect(page.getByRole("region", { name: "Finding evidence" })).toBeVisible();
     } else {
@@ -57,7 +60,11 @@ for (const scenario of [
     expect(results.result.sandbox_backend).toBe("docker");
     expect(results.result.cleanup_verified).toBe(true);
     expect(results.cleanup_pending).toBe(false);
-    expect(evidence.evidence.map((entry: { data: { header: string } }) => entry.data.header)).toEqual(scenario.findings ? ["x-frame-options"] : []);
+    expect(evidence.evidence.map((entry: { data: { rule_id: string } }) => entry.data.rule_id)).toEqual(scenario.findings ? [scenario.path === "/lab/unknown-type" ? "x-content-type-options" : "framing-protection"] : []);
+    expect(results.result.plugins.find((plugin: {id: string}) => plugin.id === "http-security-headers").checks.map((check: {status: string}) => check.status)).toEqual(scenario.outcomes);
+    await expect(page.getByRole("region", {name: "Response and check outcomes"})).toBeVisible();
+    for (const outcome of new Set(scenario.outcomes))
+      await expect(page.locator(`.check-${outcome}`).first()).toBeVisible();
     await page.reload();
     await expect(page.locator(".finding")).toHaveCount(scenario.findings);
     await page.screenshot({ path: `test-results/demo-app-${scenario.findings}-findings.png`, fullPage: true });

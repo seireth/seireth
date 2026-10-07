@@ -21,5 +21,5 @@ def submission(graph):
         "project_id": graph.project.id,
         "target_id": graph.target.id,
         "url": graph.assessment.url,
-        "plugins": ["security-headers"],
+        "plugins": ["http-security-headers"],
     }

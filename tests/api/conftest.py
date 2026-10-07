@@ -51,7 +51,7 @@ def assessment_payload(project, target):
         "project_id": project,
         "target_id": target["id"],
         "url": target["url"],
-        "plugins": ["security-headers"],
+        "plugins": ["http-security-headers"],
     }
 
 

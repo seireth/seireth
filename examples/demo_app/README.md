@@ -1,8 +1,9 @@
 # Northstar Workspace plugin demo
 
-One runnable ticket application exercises both current plugins. Its 36 header
+One runnable ticket application exercises both current plugins. Its 42 header
 scenarios cover protected and misconfigured pages, JSON, assets, redirects, errors,
-repeated headers, policy precedence, and ordered MIME options. `/cookies` preserves
+repeated headers, policy precedence, ordered MIME options, bodyless responses,
+and missing/malformed/conflicting content types. `/cookies` preserves
 the three cookie findings and six combined findings; `/cookies/protected` yields
 zero findings with either or both plugins. `/slow` delays 1.5 seconds for
 cancellation and crash recovery tests. Tickets are synthetic and reset per instance.
@@ -32,9 +33,10 @@ python -m examples.demo_app.verify --output artifacts/demo-app.json
 ```
 
 The verifier creates one **Northstar Workspace | Plugin demo** project and one
-target. It runs all 36 header cases and both cookie paths with header-only,
-cookie-only, and combined selections: 42 assessments. Expected results are grouped
-by plugin in `scenarios.py`. Verification requires exact findings, evidence URLs
+target. It runs all 42 header cases and both cookie paths with header-only,
+cookie-only, and combined selections: 48 assessments. Expected results are grouped
+by plugin in `scenarios.py`. Verification requires exact findings by stable rule
+ID, declared response context, all three check outcomes and reasons, evidence URLs
 and finding associations, redacted cookie evidence, remediation, audit events,
 and verified resource removal. The report includes links to saved assessments.
 
@@ -43,7 +45,7 @@ and plugins in the GUI. For a smaller run:
 
 ```bash
 python -m examples.demo_app.verify --case / --case /cookies --case /cookies/protected
-python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies/protected --plugins security-headers cookie-security --expected-backend docker
+python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies/protected --plugins http-security-headers cookie-security --expected-backend docker
 ```
 
 `--base-url` chooses the API address. `--skip-resource-check` supports an API using
@@ -54,12 +56,17 @@ pulls are explicit operator actions; assessments use `--pull=never`.
 | -------------------------------------------------------------------------------- | ----------------- | --------------- |
 | `/`, `/tickets`, `/account`, `/api/tickets`, `/assets/app.css`, `/assets/app.js` | 0                 | 0               |
 | `/lab/missing-all`, `/errors/not-found`, `/slow`                                 | 3                 | 0               |
-| `/login`, `/lab/report-only`                                                     | 2                 | 0               |
+| `/login`, `/lab/no-content`                                                      | 0 (all skipped)   | 0               |
+| `/lab/report-only`                                                              | 2                 | 0               |
+| `/lab/json-unprotected`, `/lab/css-unprotected`                                  | 1 (`nosniff`)     | 0               |
+| `/lab/unknown-type`, `/lab/malformed-type`, `/lab/conflicting-types`               | 1 (`nosniff`); CSP/framing inconclusive | 0 |
 | `/lab/csp-wildcard`                                                              | 1 framing finding | 0               |
 | `/cookies`                                                                       | 3                 | 3               |
 | `/cookies/protected`                                                             | 0                 | 0               |
 
-Each assessment inspects one response. The ticket workflow is covered separately
+JSON and asset responses skip CSP/framing; redirects skip every header rule
+without following the destination. Each assessment inspects one response using
+declared response metadata. The ticket workflow is covered separately
 by browser tests. Zero findings means no covered violations were found; neither
 plugin certifies the application or fully validates CSP or browser cookie policy.
 

@@ -37,9 +37,13 @@ execution. Startup rejects duplicate IDs and invalid manifests.
 Observation `headers` is a `dict[str, list[str]]`: names are lowercased,
 differently cased names merge, and values retain response order. Do not join
 repeated `Set-Cookie` fields or split them on commas, which also occur in cookie
-expiry dates. Each sandbox validates and returns an `HttpObservation` containing the
-original authorized URL. Docker's internal `target` alias is only used for the
-runner request. The orchestrator reuses this validated observation.
+expiry dates. Each sandbox validates and returns an `HttpObservation` containing
+the original authorized URL and a required integer `status_code` (100–599).
+`media_type` is derived from the ordered `Content-Type` fields: parameters and
+case are ignored, while missing, malformed, or conflicting declarations return
+`None`. Docker's internal `target` alias is only used for the runner request.
+Redirects are not followed, and response bodies are not read or retained. The
+simulated backend defaults to HTTP 200 with `text/html`.
 
 See the [header checks](assessments.md#header-checks) and
 [cookie checks](assessments.md#cookie-checks) for built-in behavior. Their
@@ -47,7 +51,10 @@ See the [header checks](assessments.md#header-checks) and
 and boundary cases.
 
 Each analyzer receives an independent copy of the shared HTTP observation and
-returns `PluginResponse`. Titles and severities have length limits; descriptions
+returns `PluginResponse`. Its optional `checks` tuple contains unique stable
+`rule_id` values, a `passed`, `failed`, `skipped`, or `inconclusive` status, and a
+short nonblank reason. The header plugin reports every check, including those
+that produce no finding; cookie output remains unchanged. Titles and severities have length limits; descriptions
 and remediation must contain non-whitespace text, and evidence must be
 JSON-compatible. Accepted text retains its formatting. Invalid output fails the
 affected assessment without partial persistence.

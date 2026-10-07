@@ -1,7 +1,9 @@
 """Typed, JSON-compatible contract for response-analysis plugins."""
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -9,6 +11,7 @@ from pydantic import (
     Field,
     JsonValue,
     field_validator,
+    model_validator,
 )
 
 from ..core.constraints import (
@@ -19,6 +22,12 @@ from ..core.constraints import (
 )
 
 _PLUGIN_ID_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+_TOKEN = r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
+_MEDIA_TYPE = re.compile(
+    r"[ \t]*(?P<media>[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/"
+    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126})[ \t]*"
+    rf'(?:;[ \t]*{_TOKEN}[ \t]*=[ \t]*(?:{_TOKEN}|"(?:[^"\\\x00-\x1f\x7f]|\\[\x20-\x7e])*")[ \t]*)*'
+)
 
 
 class ContractModel(BaseModel):
@@ -33,7 +42,22 @@ class ContractModel(BaseModel):
 
 class HttpObservation(ContractModel):
     url: StoredHttpUrl
+    status_code: int = Field(ge=100, le=599)
     headers: dict[str, list[str]]
+
+    @property
+    def media_type(self) -> str | None:
+        fields = self.headers.get("content-type", [])
+        if not fields:
+            return None
+        types = set()
+        for value in fields:
+            # Do not guess a type from malformed or conflicting fields.
+            match = _MEDIA_TYPE.fullmatch(value)
+            if match is None:
+                return None
+            types.add(match["media"].lower())
+        return types.pop() if len(types) == 1 else None
 
     @field_validator("headers")
     @classmethod
@@ -69,8 +93,29 @@ class PluginFinding(ContractModel):
         return value
 
 
+class CheckOutcome(ContractModel):
+    rule_id: str = Field(min_length=1, max_length=100, pattern=_PLUGIN_ID_PATTERN)
+    status: Literal["passed", "failed", "skipped", "inconclusive"]
+    reason: str = Field(min_length=1, max_length=300)
+
+    @field_validator("reason")
+    @classmethod
+    def require_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("check reason must not be blank")
+        return value
+
+
 class PluginResponse(ContractModel):
     findings: tuple[PluginFinding, ...]
+    checks: tuple[CheckOutcome, ...] = ()
+
+    @model_validator(mode="after")
+    def unique_checks(self):
+        ids = [check.rule_id for check in self.checks]
+        if len(ids) != len(set(ids)):
+            raise ValueError("check rule IDs must be unique")
+        return self
 
 
 @dataclass(frozen=True)
@@ -83,3 +128,4 @@ class Plugin:
 class PluginResult:
     plugin_id: str
     findings: tuple[PluginFinding, ...]
+    checks: tuple[CheckOutcome, ...] = ()

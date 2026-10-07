@@ -153,6 +153,36 @@ export default function AssessmentPage() {
         )}
         <ErrorMessage error={cancel.error} />
       </section>
+      {finished && assessment.result?.response && (
+        <section className="panel" aria-label="Response and check outcomes">
+          <h2>Response and check outcomes</h2>
+          <dl>
+            <dt>HTTP status</dt>
+            <dd>{assessment.result.response.status_code}</dd>
+            <dt>Declared media type</dt>
+            <dd>{assessment.result.response.media_type ?? "Unknown"}</dd>
+          </dl>
+          <p>Outcomes cover only the listed rules and declared response metadata.</p>
+          {assessment.result.plugins
+            ?.filter((plugin) => plugin.checks?.length)
+            .map((plugin) => (
+              <div key={plugin.id}>
+                <h3>{plugin.id}</h3>
+                <ul className="check-outcomes">
+                  {plugin.checks?.map((check) => (
+                    <li key={check.rule_id}>
+                      <span className={`badge check-${check.status}`}>
+                        {check.status}
+                      </span>{" "}
+                      <strong>{check.rule_id}</strong>
+                      <p>{check.reason}</p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+        </section>
+      )}
       {finished && (
         <section className="findings-section">
           <div className="section-header">

@@ -11,7 +11,8 @@ class FakeDocker:
         self.calls = []
         self.create_hook = None
         self.available = True
-        self.headers = {}
+        self.headers = {"content-type": ["text/html"]}
+        self.status_code = 200
         self.kept = set()
         self.remove_error = False
         self.runner_status = 0
@@ -83,7 +84,9 @@ class FakeDocker:
             if "--attach" in args:
                 assert record["kind"] == "runner"
                 output = (
-                    json.dumps(self.headers)
+                    json.dumps(
+                        {"status_code": self.status_code, "headers": self.headers}
+                    )
                     if self.runner_output is None
                     else self.runner_output
                 )

@@ -4,7 +4,8 @@ import { EvidenceDetails } from "./EvidenceDetails";
 import type { EvidenceData } from "../api/types";
 
 it.each([
-  { url: "https://example.test/", header: "content-security-policy" },
+  { url: "https://example.test/", header: "content-security-policy", rule_id: "content-security-policy", status_code: 200, media_type: "text/html", condition: "missing", expected: "nonblank enforced CSP" },
+  { url: "https://example.test/", header: "x-content-type-options", rule_id: "x-content-type-options", status_code: 404, media_type: null, condition: "missing", expected: "nosniff" },
   {
     url: "https://example.test/",
     header: "set-cookie",
@@ -54,6 +55,13 @@ it.each([
     expect(screen.getByText("Secure present").nextElementSibling).toHaveTextContent(
       data.secure ? "Yes" : "No",
     );
+  }
+  if ("rule_id" in data) {
+    expect(screen.getByText("Rule").nextElementSibling).toHaveTextContent(data.rule_id);
+    expect(screen.getByText("HTTP status").nextElementSibling).toHaveTextContent(String(data.status_code));
+    expect(screen.getByText("Declared media type").nextElementSibling).toHaveTextContent(data.media_type ?? "Unknown");
+    expect(screen.getByText("Observed condition").nextElementSibling).toHaveTextContent(data.condition);
+    expect(screen.getByText("Expected requirement").nextElementSibling).toHaveTextContent(data.expected);
   }
   if ("https" in data)
     expect(screen.getByText("HTTPS response").nextElementSibling).toHaveTextContent(

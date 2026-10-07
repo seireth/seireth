@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from .base import Plugin, PluginManifest
 from .cookie_security import PLUGIN as COOKIE_SECURITY_PLUGIN
-from .security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
+from .http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 
 
 @dataclass(frozen=True)

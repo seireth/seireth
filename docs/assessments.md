@@ -23,7 +23,7 @@ child paths. Ownership, URL boundaries, plugins, and local image availability ar
 rechecked during submission, execution, and recovery retries. Requests use one
 development actor; there is no login flow.
 
-Get selectable IDs from `GET /api/v1/plugins`. The built-ins are `security-headers`
+Get selectable IDs from `GET /api/v1/plugins`. The built-ins are `http-security-headers`
 and `cookie-security`; select either or both. Selection must be explicit, nonempty,
 and contain unique active IDs. Registering a plugin never automatically selects it.
 See [Plugin development](plugins.md) to add checks.
@@ -35,7 +35,7 @@ Submit this body, replacing placeholder IDs with those returned above:
   "project_id": "project-id",
   "target_id": "target-id",
   "url": "http://demo-app:8080/cookies",
-  "plugins": ["security-headers"]
+  "plugins": ["http-security-headers"]
 }
 ```
 
@@ -58,8 +58,14 @@ execution can advance the initial status before the response arrives.
 Poll until `completed`, `failed`, or `cancelled`. Append `/results` to `Location`
 for findings. For completed assessments, `result` includes `sandbox_backend`,
 `attempt`, and `completed_at`. `result.plugins` preserves selection order with
-per-plugin counts; `result.finding_count` is the total. Zero findings does not
-establish security.
+per-plugin counts; `result.finding_count` is the total. `result.response` contains
+the HTTP `status_code` and normalized `media_type` (null when unknown). The
+`http-security-headers` entry includes `checks`, each with a stable `rule_id`,
+`status`, and short `reason`. Only `failed` checks generate findings. `passed`
+means the limited rule accepted the response; `skipped` means the rule did not
+apply; `inconclusive` means document applicability could not be established.
+The dashboard shows these outcomes and response context even with zero findings.
+Zero findings does not establish security.
 
 Execution errors populate `result.error`. Inspect cleanup independently:
 unverified cleanup produces `failed`, even after cancellation. Both responses
@@ -78,7 +84,10 @@ cancels its reads. Evidence failures show a retry action without hiding findings
 by evidence ID. Match each entry's `finding_id` to a finding's `id` in `/results`.
 The array is empty unless the assessment is completed with findings.
 
-Evidence identifies the response URL and header. Cookie evidence also identifies
+Header evidence identifies the response URL, header, stable `rule_id`, HTTP
+`status_code`, normalized `media_type`, safe observed `condition` (missing,
+blank, unrecognized, or unrestricted), and expected requirement. Raw CSP policies
+and arbitrary header values are excluded. Cookie evidence identifies
 the cookie name, rule, and normalized requirement values or flags. Cookie values
 and complete fields are excluded. See `/docs` for the accepted payload models;
 unlisted fields are rejected. Invalid stored evidence fails the entire response
@@ -110,11 +119,30 @@ return 403. CLI requests without `Origin` continue to work.
 
 ## Header checks
 
-| Check | Accepted values |
+Select `http-security-headers` (**HTTP security headers** in the catalog).
+The former `security-headers` ID is rejected. Applicability is based on declared
+status and content type, without inspecting a body or assessing redirect
+destinations. Content types are normalized by case and stripped of parameters;
+repeated declarations must agree and be well formed.
+
+| Response | Applicable checks |
 | --- | --- |
-| MIME type protection | `X-Content-Type-Options: nosniff` |
-| Content security policy | A nonblank enforced `Content-Security-Policy` |
-| Framing protection | `X-Frame-Options: DENY` / `SAMEORIGIN`, or an enforced CSP whose first `frame-ancestors` directive uses `'none'` alone or only supported sources, e.g. `'self' https://trusted.test` |
+| HTML or XHTML, including rendered error pages | All three |
+| JSON (including `application/*+json`), JavaScript, CSS, plain text, or recognized raster images | `nosniff`; CSP and framing are skipped |
+| 301, 302, 303, 307, 308 | All skipped; destination not assessed |
+| Informational status, 204, 205, 304 | All skipped; no complete representation assessed |
+| Missing, malformed, conflicting, or unsupported content type | `nosniff`; CSP and framing are inconclusive |
+
+The status rules take precedence over content type. Unsupported types include
+PDF and SVG. Declared metadata may not describe the actual body; these outcomes
+do not establish how a browser would render it. The document rules follow
+[OWASP's framing and CSP applicability guidance](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html).
+
+| Stable rule ID | Accepted protection |
+| --- | --- |
+| `x-content-type-options` | `X-Content-Type-Options: nosniff` |
+| `content-security-policy` | A nonblank enforced `Content-Security-Policy` |
+| `framing-protection` | `X-Frame-Options: DENY` / `SAMEORIGIN`, or an enforced CSP whose first `frame-ancestors` directive uses `'none'` alone or only supported sources, e.g. `'self' https://trusted.test` |
 
 Bare `*`, scheme-only sources, and report-only framing policies do not qualify.
 The MIME check uses the first parsed header-list value. Any enforced
@@ -122,7 +150,7 @@ The MIME check uses the first parsed header-list value. Any enforced
 policy is enough, and an empty ancestor list also counts as blocking framing.
 When no such directive exists, the plugin uses `X-Frame-Options`, including
 repeated/comma-separated values and conflicts that block framing.
-See the [implementation](../app/plugins/security_headers.py) for exact matching.
+See the [implementation](../app/plugins/http_security_headers.py) for exact matching.
 These checks do not fully validate CSP, prove security, or assess every response.
 
 ## Cookie checks

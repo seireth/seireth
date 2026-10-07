@@ -18,7 +18,10 @@ sandbox; the browser sends assessment requests only to Seireth.
 Admission, execution, and retries check project/target ownership, origin/path,
 plugins, and local image availability. Registered root URLs include child paths; traversal,
 credentials, fragments, and ambiguous multiply encoded paths are rejected.
-Redirect responses are inspected without following them.
+Redirect responses are inspected without following them. The runner reads
+status and headers, then closes the response without reading or retaining its
+body. Header-check applicability uses declared metadata; skipped or inconclusive
+checks do not establish protection for an unassessed representation or destination.
 
 The runner replaces the registered hostname with Docker alias `target`, measuring
 the disposable image instance. HTTPS certificates must be valid and trusted for
@@ -40,7 +43,7 @@ a kernel and are unsuitable for arbitrary hostile workloads. URL boundaries do n
 prove ownership. Multi-user authentication, tenant isolation, and production TLS
 are absent; audit records are not tamper-proof evidence.
 
-The in-memory backend simulates headers without networking. The
+The in-memory backend simulates HTTP 200 and HTML headers without networking. The
 [header checks](assessments.md#header-checks) provide limited value checks, not
 proof of security or complete CSP validation.
 The passive [cookie checks](assessments.md#cookie-checks) inspect only response

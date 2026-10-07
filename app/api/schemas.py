@@ -103,18 +103,33 @@ class TargetImagesOut(BaseModel):
     items: list[TargetImageOut]
 
 
-class HeaderEvidenceData(BaseModel):
+class ResponseEvidenceData(BaseModel):
     """Public response evidence; arbitrary stored JSON is never exposed."""
 
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
 
     url: StoredHttpUrl
+
+
+class HeaderEvidenceData(ResponseEvidenceData):
     header: Literal[
         "x-content-type-options", "content-security-policy", "x-frame-options"
     ]
+    rule_id: Literal[
+        "x-content-type-options", "content-security-policy", "framing-protection"
+    ]
+    status_code: int = Field(ge=100, le=599)
+    media_type: str | None = Field(
+        max_length=255,
+        pattern=r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
+    )
+    condition: Literal["missing", "blank", "unrecognized", "unrestricted"]
+    expected: Literal[
+        "nosniff", "nonblank enforced CSP", "recognized restrictive framing protection"
+    ]
 
 
-class CookieEvidenceData(HeaderEvidenceData):
+class CookieEvidenceData(ResponseEvidenceData):
     header: Literal["set-cookie"]
     cookie_name: str = Field(min_length=1)
     secure: bool
