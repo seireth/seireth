@@ -29,12 +29,14 @@ logger = logging.getLogger(__name__)
 _ASSESSMENT_NOT_FOUND_RESPONSE = {"description": "Assessment not found"}
 
 
-def load_assessment(db: Session, assessment_id: str) -> models.Assessment:
+def load_assessment(
+    db: Session, assessment_id: str
+) -> tuple[models.Assessment, models.Project]:
     item = db.get(models.Assessment, assessment_id)
     if not item:
         raise HTTPException(404, "assessment not found")
-    authorize_project(db, item.project_id)
-    return item
+    project = authorize_project(db, item.project_id)
+    return item, project
 
 
 def load_evidence(db: Session, item: models.Assessment) -> list[EvidenceOut]:
@@ -133,7 +135,8 @@ def create_assessment(
 def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
     """Return the persisted state of one assessment."""
 
-    return load_assessment(db, assessment_id)
+    item, _ = load_assessment(db, assessment_id)
+    return item
 
 
 @router.get(
@@ -144,7 +147,7 @@ def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
 def get_results(assessment_id: str, db: Session = Depends(get_db)):
     """Return the assessment status, JSON result, and normalized findings."""
 
-    item = load_assessment(db, assessment_id)
+    item, _ = load_assessment(db, assessment_id)
     return {
         "assessment_id": item.id,
         "status": item.status,
@@ -164,7 +167,7 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
 )
 def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
     """Return validated evidence for an authorized, completed assessment."""
-    item = load_assessment(db, assessment_id)
+    item, _ = load_assessment(db, assessment_id)
     return AssessmentEvidenceOut(
         assessment_id=item.id,
         status=item.status,
@@ -185,7 +188,7 @@ def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
 )
 def get_report(assessment_id: str, response: Response, db: Session = Depends(get_db)):
     """Assemble a current, read-only snapshot from documented public fields."""
-    item = load_assessment(db, assessment_id)
+    item, project = load_assessment(db, assessment_id)
     if item.status not in {"completed", "failed", "cancelled"}:
         raise HTTPException(409, "assessment is not finished")
     # Capture scalar state once; cleanup reconciliation can update future reports.
@@ -194,7 +197,7 @@ def get_report(assessment_id: str, response: Response, db: Session = Depends(get
         report = AssessmentReportOut(
             schema_version=1,
             generated_at=models.now(),
-            project=authorize_project(db, item.project_id),
+            project=project,
             target=db.get(models.Target, item.target_id),
             assessment=assessment,
             findings=sorted(item.findings, key=lambda finding: finding.id),

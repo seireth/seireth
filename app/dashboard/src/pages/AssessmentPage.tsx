@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Link, useParams } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { post } from "../api/client";
@@ -10,12 +11,14 @@ import type {
 } from "../api/types";
 import { date, ErrorMessage, StatusBadge } from "../components/common";
 import {
+  AssessmentRequestFields,
   AssessmentSummary,
   EmptyFindings,
   FindingDetails,
   ResponseChecks,
 } from "../components/AssessmentDetails";
 import { EvidenceDetails } from "../components/EvidenceDetails";
+import { groupEvidenceByFinding } from "../evidence";
 import { terminal, useAssessment } from "../hooks/useAssessment";
 import { useReportDownload } from "../hooks/useReportDownload";
 
@@ -32,6 +35,10 @@ export default function AssessmentPage() {
   const evidence = useResource<EvidenceResponse>(
     `/assessments/${assessmentId}/evidence`,
     assessment?.status === "completed",
+  );
+  const evidenceByFinding = useMemo(
+    () => groupEvidenceByFinding(evidence.data?.evidence ?? []),
+    [evidence.data?.evidence],
   );
   const project = useResource<Project>(
     `/projects/${assessment?.project_id}`,
@@ -106,12 +113,7 @@ export default function AssessmentPage() {
       <section className="panel">
         <h2>Assessment request</h2>
         <dl>
-          <dt>Target URL</dt>
-          <dd>{target.data?.url || "Loading…"}</dd>
-          <dt>Assessment URL</dt>
-          <dd>{assessment.url}</dd>
-          <dt>Checks</dt>
-          <dd>{assessment.plugins.join(", ")}</dd>
+          <AssessmentRequestFields assessment={assessment} targetUrl={target.data?.url} />
           {assessment.result?.plugins && (
             <>
               <dt>Plugin findings</dt>
@@ -182,11 +184,7 @@ export default function AssessmentPage() {
                   <p>Evidence could not be retrieved. Use Try again above.</p>
                 ) : (
                   <EvidenceDetails
-                    evidence={
-                      evidence.data?.evidence.filter(
-                        (e) => e.finding_id === finding.id,
-                      ) ?? []
-                    }
+                    evidence={evidenceByFinding.get(finding.id) ?? []}
                   />
                 )}
               </FindingDetails>

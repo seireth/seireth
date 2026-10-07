@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import event
 
 from app.persistence import models
 from tests.api.helpers import snapshot
@@ -13,6 +14,28 @@ def save_result(database, assessment_id, result, *, pending=False):
         item.result = result
         item.cleanup_pending = pending
         db.commit()
+
+
+def test_report_reads_the_authorized_project_once(
+    read_client, database, assessment_graph
+):
+    graph = assessment_graph(status="completed")
+    project_reads = []
+
+    def record_select(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().startswith("SELECT") and "FROM projects" in statement:
+            project_reads.append(statement)
+
+    # The HTTP dependency opens a fresh session; fixture objects cannot cache its reads.
+    event.listen(database.engine, "before_cursor_execute", record_select)
+    try:
+        response = read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report")
+    finally:
+        event.remove(database.engine, "before_cursor_execute", record_select)
+
+    assert response.status_code == 200
+    assert response.json()["project"]["id"] == graph.project.id
+    assert len(project_reads) == 1
 
 
 def test_report_matches_existing_reads_and_is_ordered_read_only(

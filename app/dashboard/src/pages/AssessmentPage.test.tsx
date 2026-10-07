@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { expect, it, vi } from "vitest";
 import type { Assessment, Status } from "../api/types";
 import AssessmentPage from "./AssessmentPage";
-import { blobText, reportFixture } from "../test/report";
+import { blobText, multiFindingReport, reportFixture } from "../test/report";
 
 const assessment = (status: Status, cleanup_pending = false): Assessment => ({
   id: "a",
@@ -100,25 +100,9 @@ it("keeps findings when evidence fails and retries evidence independently", asyn
       evidenceCalls++;
       return evidenceCalls === 1
         ? json({ detail: "stored evidence is invalid" }, 500)
-        : json({
-            evidence: [
-              {
-                id: "e",
-                finding_id: "f",
-                kind: "http-response",
-                data: {
-                  url: "http://demo.test/",
-                  header: "set-cookie",
-                  cookie_name: "original",
-                  rule: "samesite-none-without-secure",
-                  samesite: "none",
-                  secure: false,
-                },
-              },
-            ],
-          });
+        : json({ evidence: multiFindingReport.evidence });
     }
-    if (path.endsWith("/results")) return json({ findings: [finding] });
+    if (path.endsWith("/results")) return json({ findings: multiFindingReport.findings });
     return json(
       path.endsWith("/assessments/a")
         ? assessment("completed")
@@ -132,15 +116,47 @@ it("keeps findings when evidence fails and retries evidence independently", asyn
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "stored evidence is invalid",
   );
-  expect(screen.getByText(finding.description)).toBeVisible();
+  expect(screen.getAllByText(multiFindingReport.findings[0].description)[0]).toBeVisible();
   expect(document.querySelector("script")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-  await userEvent.click(screen.getByText("Evidence", { selector: "summary" }));
+  for (const summary of screen.getAllByText("Evidence", { selector: "summary" }))
+    await userEvent.click(summary);
   expect(await screen.findByText("original")).toBeVisible();
+  const articles = multiFindingReport.findings.map((item) =>
+    screen.getByRole("heading", { name: item.title }).closest("article")!,
+  );
+  expect(within(articles[0]).getAllByRole("region", { name: "Finding evidence" }).map((region) => region.textContent))
+    .toEqual([expect.stringContaining("original"), expect.stringContaining("second")]);
+  expect(within(articles[1]).getAllByRole("region", { name: "Finding evidence" }))
+    .toHaveLength(1);
+  expect(within(articles[1]).getByText("other")).toBeVisible();
+  expect(within(articles[2]).queryByRole("region", { name: "Finding evidence" })).toBeNull();
   expect(evidenceCalls).toBe(2);
   expect(
     fetcher.mock.calls.filter(([path]) => path.endsWith("/results")),
   ).toHaveLength(1);
+});
+
+it("keeps request fields and plugin counts while target metadata loads", async () => {
+  const item = { ...multiFindingReport.assessment, url: "http://demo.test/?text=<script>synthetic</script>" };
+  const targetUrl = "http://demo.test/?text=<img src=x onerror=alert(1)>";
+  let resolveTarget!: (response: Response) => void;
+  show(vi.fn(async (path: string) => {
+    if (path.includes("/targets/")) return new Promise<Response>((resolve) => { resolveTarget = resolve; });
+    if (path.endsWith("/results")) return json({ findings: [] });
+    if (path.endsWith("/evidence")) return json({ evidence: [] });
+    return json(path.endsWith("/assessments/a") ? item : metadata(path));
+  }));
+  const request = within((await screen.findByRole("heading", { name: "Assessment request" })).closest("section")!);
+  expect(request.getByText("Loading…")).toBeVisible();
+  expect(request.getByText(item.url)).toBeVisible();
+  expect(request.getByText("http-security-headers, cookie-security")).toBeVisible();
+  expect(request.getByText("http-security-headers: 0 · cookie-security: 3")).toBeVisible();
+  await waitFor(() => expect(resolveTarget).toBeDefined());
+  resolveTarget(json({ ...metadata("/targets/t"), url: targetUrl }));
+  expect(await request.findByText(targetUrl)).toBeVisible();
+  expect(request.queryByText("Loading…")).toBeNull();
+  expect(document.querySelector("script, img")).toBeNull();
 });
 
 it("refreshes after a cancellation race without retrying the write", async () => {

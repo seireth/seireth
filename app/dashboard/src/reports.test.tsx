@@ -1,7 +1,7 @@
-import { act, waitFor } from "@testing-library/react";
+import { act, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { downloadBlob, htmlReport } from "./reports";
-import { reportFixture } from "./test/report";
+import { multiFindingReport, reportFixture } from "./test/report";
 
 function documentFor(report = reportFixture) {
   let html = "";
@@ -22,6 +22,32 @@ it("renders a complete offline report using escaped shared finding and evidence 
   expect(document.querySelector("style")?.textContent).toContain("@media print");
   expect(document.querySelector("script, img, link, [href], [src]")).toBeNull();
   expect(document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute("content")).toContain("default-src 'none'");
+});
+
+it("assigns interleaved evidence to its finding and preserves request metadata", () => {
+  const report = {
+    ...multiFindingReport,
+    target: { ...multiFindingReport.target, url: "http://demo.test/?text=<img src=x onerror=alert(1)>" },
+    assessment: { ...multiFindingReport.assessment, url: "http://demo.test/?text=<script>synthetic</script>" },
+  };
+  const document = documentFor(report);
+  const articles = Array.from(document.querySelectorAll<HTMLElement>(".finding"));
+  expect(articles).toHaveLength(3);
+  expect(Array.from(articles[0].querySelectorAll(".evidence"), (region) => region.textContent))
+    .toEqual([expect.stringContaining("original"), expect.stringContaining("second")]);
+  expect(articles[1].querySelectorAll(".evidence")).toHaveLength(1);
+  expect(articles[1].querySelector(".evidence")?.textContent).toContain("other");
+  expect(articles[2].querySelector(".evidence")).toBeNull();
+  expect(Array.from(document.querySelectorAll("details")).every((details) => details.open)).toBe(true);
+  const metadata = within(document.querySelector<HTMLElement>('[aria-label="Report metadata"]')!);
+  expect(metadata.getByText("Target URL").nextElementSibling?.textContent).toBe(report.target.url);
+  expect(metadata.getByText("Assessment URL").nextElementSibling?.textContent).toBe(report.assessment.url);
+  expect(metadata.getByText("Checks").nextElementSibling?.textContent).toBe("http-security-headers, cookie-security");
+  expect(metadata.getByText("Assessment ID").nextElementSibling?.textContent).toBe(report.assessment.id);
+  expect(metadata.getByText("Target image").nextElementSibling?.textContent).toBe(report.target.image);
+  expect(metadata.getByText("Created at (UTC)").nextElementSibling?.textContent).toBe("2026-10-07T12:00:00.000Z");
+  expect(metadata.getByText("Generated at (UTC)").nextElementSibling?.textContent).toBe("2026-10-07T12:01:00.000Z");
+  expect(document.querySelector("script, img")).toBeNull();
 });
 
 it.each([

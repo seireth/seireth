@@ -1,8 +1,9 @@
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { AssessmentReport } from "./api/types";
-import { AssessmentSummary, EmptyFindings, FindingDetails, ResponseChecks } from "./components/AssessmentDetails";
+import { AssessmentRequestFields, AssessmentSummary, EmptyFindings, FindingDetails, ResponseChecks } from "./components/AssessmentDetails";
 import { EvidenceDetails } from "./components/EvidenceDetails";
+import { groupEvidenceByFinding } from "./evidence";
 import dashboardStyles from "./styles.css?inline";
 
 const reportStyles = `
@@ -20,6 +21,7 @@ const reportStyles = `
 
 function ReportContent({ report }: { report: AssessmentReport }) {
   const { assessment, project, target, findings, evidence } = report;
+  const evidenceByFinding = groupEvidenceByFinding(evidence);
   return (
     <main className="report">
       <header className="page-header"><div>
@@ -33,9 +35,7 @@ function ReportContent({ report }: { report: AssessmentReport }) {
           <dt>Project ID</dt><dd>{project.id}</dd>
           <dt>Target ID</dt><dd>{target.id}</dd>
           <dt>Target image</dt><dd>{target.image}</dd>
-          <dt>Target URL</dt><dd>{target.url}</dd>
-          <dt>Assessment URL</dt><dd>{assessment.url}</dd>
-          <dt>Checks</dt><dd>{assessment.plugins.join(", ")}</dd>
+          <AssessmentRequestFields assessment={assessment} targetUrl={target.url} />
           <dt>Created at (UTC)</dt><dd>{new Date(assessment.created_at).toISOString()}</dd>
           {assessment.result?.completed_at && <><dt>Completed at (UTC)</dt><dd>{new Date(assessment.result.completed_at).toISOString()}</dd></>}
           {assessment.result?.attempt !== undefined && <><dt>Attempt</dt><dd>{assessment.result.attempt}</dd></>}
@@ -52,7 +52,7 @@ function ReportContent({ report }: { report: AssessmentReport }) {
         <h2>Findings and evidence</h2>
         {findings.length === 0 ? <EmptyFindings status={assessment.status} /> : findings.map((finding) => (
           <FindingDetails key={finding.id} finding={finding} expanded>
-            <EvidenceDetails evidence={evidence.filter((entry) => entry.finding_id === finding.id)} />
+            <EvidenceDetails evidence={evidenceByFinding.get(finding.id) ?? []} />
           </FindingDetails>
         ))}
       </section>

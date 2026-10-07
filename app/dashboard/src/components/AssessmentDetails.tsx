@@ -2,6 +2,19 @@ import type { ReactNode } from "react";
 import type { Assessment, Finding, Result, Status } from "../api/types";
 import { Empty } from "./common";
 
+export function AssessmentRequestFields({ assessment, targetUrl }: {
+  assessment: Pick<Assessment, "url" | "plugins">;
+  targetUrl?: string;
+}) {
+  return (
+    <>
+      <dt>Target URL</dt><dd>{targetUrl || "Loading…"}</dd>
+      <dt>Assessment URL</dt><dd>{assessment.url}</dd>
+      <dt>Checks</dt><dd>{assessment.plugins.join(", ")}</dd>
+    </>
+  );
+}
+
 export function AssessmentSummary({ assessment, findingCount }: {
   assessment: Assessment;
   findingCount?: number;

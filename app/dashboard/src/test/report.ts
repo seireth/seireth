@@ -1,4 +1,9 @@
-import type { AssessmentReport } from "../api/types";
+import type { AssessmentReport, Evidence } from "../api/types";
+
+const cookieEvidence = {
+  id: "e", finding_id: "f", kind: "http-response",
+  data: { url: "http://demo.test/", header: "set-cookie", cookie_name: "original", rule: "samesite-none-without-secure", samesite: "none", secure: false },
+} satisfies Evidence;
 
 export const reportFixture: AssessmentReport = {
   schema_version: 1,
@@ -17,7 +22,29 @@ export const reportFixture: AssessmentReport = {
     },
   },
   findings: [{ id: "f", plugin: "cookie-security", title: "SameSite configuration", severity: "low", description: "<img src=x onerror=alert(1)>", remediation: "Set Secure." }],
-  evidence: [{ id: "e", finding_id: "f", kind: "http-response", data: { url: "http://demo.test/", header: "set-cookie", cookie_name: "original", rule: "samesite-none-without-secure", samesite: "none", secure: false } }],
+  evidence: [cookieEvidence],
+};
+
+export const multiFindingReport: AssessmentReport = {
+  ...reportFixture,
+  assessment: {
+    ...reportFixture.assessment,
+    plugins: ["http-security-headers", "cookie-security"],
+    result: {
+      ...reportFixture.assessment.result, finding_count: 3,
+      plugins: [{ id: "http-security-headers", finding_count: 0 }, { id: "cookie-security", finding_count: 3 }],
+    },
+  },
+  findings: [
+    reportFixture.findings[0],
+    { ...reportFixture.findings[0], id: "other", title: "Other cookie configuration" },
+    { ...reportFixture.findings[0], id: "empty", title: "Finding without evidence" },
+  ],
+  evidence: [
+    { ...cookieEvidence, id: "z-original" },
+    { ...cookieEvidence, id: "a-other", finding_id: "other", data: { ...cookieEvidence.data, cookie_name: "other" } },
+    { ...cookieEvidence, id: "b-second", data: { ...cookieEvidence.data, cookie_name: "second" } },
+  ],
 };
 
 export function blobText(blob: Blob): Promise<string> {
