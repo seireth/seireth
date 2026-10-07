@@ -64,7 +64,7 @@ def test_missing_resources_return_404_without_side_effects(
             "project_id": "missing",
             "target_id": "missing",
             "url": "http://demo-app:8080/",
-            "plugins": ["security-headers"],
+            "plugins": ["http-security-headers"],
         }
     before = snapshot(database)
     response = client.request(method, path, json=payload if method == "post" else None)

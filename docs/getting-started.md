@@ -82,7 +82,7 @@ In a **second terminal**, return to the repository and activate `.venv` using
 Then run:
 
 ```bash
-python -m app verify --image sample:local --target-url http://sample:8080/ --plugins security-headers --expected-backend inmemory
+python -m app verify --image sample:local --target-url http://sample:8080/ --plugins http-security-headers --expected-backend inmemory
 ```
 
 Stop the API with Ctrl+C. `docker compose down` stops the database and retains its
@@ -102,7 +102,7 @@ Then start and verify the Docker stack:
 
 ```bash
 python -m app docker-up
-python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins security-headers cookie-security --expected-backend docker
+python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security --expected-backend docker
 ```
 
 Verification checks findings, evidence associations, cleanup, and the audit trail;

@@ -155,7 +155,7 @@ def test_real_api_lifecycle(
             str(client.base_url),
             image="demo:local",
             target_url="http://demo-app:8080/",
-            plugins=["security-headers"],
+            plugins=["http-security-headers"],
             expected_backend="inmemory",
         )
         assert result["results"]["status"] == expected_status
@@ -192,11 +192,11 @@ def test_real_api_lifecycle(
             "project_id": project["id"],
             "target_id": target["id"],
             "url": target["url"],
-            "plugins": ["security-headers"],
+            "plugins": ["http-security-headers"],
         },
     )
     aid = api_process.assessment_id = assessment["id"]
-    assert assessment["plugins"] == ["security-headers"]
+    assert assessment["plugins"] == ["http-security-headers"]
     selector = f"label=seireth.assessment={aid}"
     wait_until(
         lambda: (
@@ -232,12 +232,13 @@ def test_real_api_lifecycle(
         assert "not available locally" in report["result"]["error"]
         assert not report["cleanup_pending"]
     assert client.get(f"/api/v1/assessments/{aid}").json()["plugins"] == [
-        "security-headers"
+        "http-security-headers"
     ]
     if action == "crash":
-        assert report["result"]["plugins"] == [
-            {"id": "security-headers", "finding_count": 3}
-        ]
+        assert [
+            {key: plugin[key] for key in ("id", "finding_count")}
+            for plugin in report["result"]["plugins"]
+        ] == [{"id": "http-security-headers", "finding_count": 3}]
     assert len(report["findings"]) == expected_findings
     assert not docker("ps", "-a", "--filter", selector, "--format", "{{.Names}}")
     assert not docker("network", "ls", "--filter", selector, "--format", "{{.Name}}")
@@ -268,7 +269,7 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
             "url": "http://demo-app:8080/cookies",
         },
     )
-    selection = ["security-headers", "cookie-security"]
+    selection = ["http-security-headers", "cookie-security"]
     assessment = post(
         "/api/v1/assessments",
         {
@@ -287,9 +288,10 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
         interval=0.05,
     )
     assert report["status"] == "completed", report
-    assert report["result"]["plugins"] == [
-        {"id": plugin, "finding_count": 3} for plugin in selection
-    ]
+    assert [
+        {key: plugin[key] for key in ("id", "finding_count")}
+        for plugin in report["result"]["plugins"]
+    ] == [{"id": plugin, "finding_count": 3} for plugin in selection]
     assert report["result"]["finding_count"] == len(report["findings"]) == 6
     assert report["result"]["cleanup_verified"] and not report["cleanup_pending"]
     with database.SessionLocal() as db:

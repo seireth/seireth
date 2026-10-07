@@ -46,8 +46,17 @@ def finish(db, assessment, attempt, outcome):
     if outcome.error:
         result["error"] = outcome.error
     if outcome.status == "completed":
+        result["response"] = outcome.response
         result["plugins"] = [
-            {"id": item.plugin_id, "finding_count": len(item.findings)}
+            {
+                "id": item.plugin_id,
+                "finding_count": len(item.findings),
+                **(
+                    {"checks": [check.model_dump() for check in item.checks]}
+                    if item.checks
+                    else {}
+                ),
+            }
             for item in outcome.plugin_results
         ]
         result["finding_count"] = sum(

@@ -68,7 +68,7 @@ jobs:
       - name: Verify real assessment and resource removal
         run: |
           set -euo pipefail
-          uv run --no-sync --no-build python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins security-headers cookie-security --timeout-seconds 120 --expected-backend docker | tee artifacts/verification.json
+          uv run --no-sync --no-build python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security --timeout-seconds 120 --expected-backend docker | tee artifacts/verification.json
           docker ps -a --format '{{.Names}}' > artifacts/container-names.txt
           docker network ls --format '{{.Name}}' > artifacts/network-names.txt
           containers=$(grep -E '^seireth-(target-|assessment-runner-)' artifacts/container-names.txt || true)

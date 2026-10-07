@@ -63,7 +63,7 @@ def test_status_constraint(database):
         with pytest.raises(IntegrityError) as error:
             connection.execute(
                 text(
-                    "INSERT INTO assessments (id, project_id, target_id, url, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', '[\"security-headers\"]'::json, 'unknown', now())"
+                    "INSERT INTO assessments (id, project_id, target_id, url, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', '[\"http-security-headers\"]'::json, 'unknown', now())"
                 )
             )
     assert error.value.orig.diag.constraint_name == "assessment_status_valid"
@@ -195,7 +195,7 @@ def test_finding_requires_remediation(database, assessment_graph, remediation):
         db.add(
             models.Finding(
                 assessment_id=graph.assessment.id,
-                plugin="security-headers",
+                plugin="http-security-headers",
                 title="test",
                 severity="low",
                 description="test",
@@ -213,7 +213,7 @@ def test_deleting_finding_removes_its_evidence(database, assessment_graph):
         evidence = models.Evidence(kind="http-response", data={})
         finding = models.Finding(
             assessment_id=graph.assessment.id,
-            plugin="security-headers",
+            plugin="http-security-headers",
             title="test",
             severity="low",
             description="test",

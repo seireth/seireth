@@ -18,7 +18,7 @@ from .scenarios import COOKIE_SCENARIOS, IMAGE, ORIGIN, SCENARIOS
 
 
 def validate_outcome(
-    scenario, assessment_id, results, raw_evidence, plugins=("security-headers",)
+    scenario, assessment_id, results, raw_evidence, plugins=("http-security-headers",)
 ):
     """Require exact findings, correctly associated evidence, and verified cleanup."""
     cookie_values = [
@@ -42,14 +42,17 @@ def validate_outcome(
             f"{scenario.path}: assessment or Docker cleanup did not complete: {results}"
         )
     expected = {
-        "security-headers": scenario.expected,
+        "http-security-headers": scenario.expected,
         "cookie-security": scenario.cookie_rules,
     }
     expected_count = sum(len(expected[plugin]) for plugin in plugins)
     findings = results["findings"]
     if (
         result.get("finding_count") != expected_count
-        or result.get("plugins")
+        or [
+            {key: item.get(key) for key in ("id", "finding_count")}
+            for item in result.get("plugins", [])
+        ]
         != [
             {"id": plugin, "finding_count": len(expected[plugin])} for plugin in plugins
         ]
@@ -59,6 +62,30 @@ def validate_outcome(
         )
     ):
         raise RuntimeError(f"{scenario.path}: unexpected plugin summary or remediation")
+    if result.get("response") != {
+        "status_code": scenario.status,
+        "media_type": scenario.media_type,
+    }:
+        raise RuntimeError(f"{scenario.path}: unexpected response context")
+    for summary in result["plugins"]:
+        if summary["id"] == "http-security-headers":
+            checks = summary.get("checks", [])
+            if (
+                [check.get("rule_id") for check in checks]
+                != [
+                    "x-content-type-options",
+                    "content-security-policy",
+                    "framing-protection",
+                ]
+                or tuple(check.get("status") for check in checks)
+                != scenario.expected_checks
+                or any(
+                    not isinstance(check.get("reason"), str)
+                    or not check["reason"].strip()
+                    for check in checks
+                )
+            ):
+                raise RuntimeError(f"{scenario.path}: unexpected check outcomes")
     try:
         evidence = AssessmentEvidenceOut.model_validate(raw_evidence)
     except ValidationError:
@@ -79,9 +106,18 @@ def validate_outcome(
             f"{scenario.path}: findings/evidence do not match expected headers {scenario.expected}"
         )
     by_id = {finding["id"]: finding for finding in findings}
+    if any(
+        by_id[entry.finding_id]["plugin"] == "http-security-headers"
+        and (
+            entry.data.status_code != scenario.status
+            or entry.data.media_type != scenario.media_type
+        )
+        for entry in evidence.evidence
+    ):
+        raise RuntimeError(f"{scenario.path}: evidence response context does not match")
     for plugin in plugins:
         observed = Counter(
-            entry.data.header if plugin == "security-headers" else entry.data.rule
+            entry.data.rule_id if plugin == "http-security-headers" else entry.data.rule
             for entry in evidence.evidence
             if by_id[entry.finding_id]["plugin"] == plugin
         )
@@ -149,12 +185,12 @@ def verify(
             for scenario in scenarios
             for plugins in (
                 (
-                    ("security-headers",),
+                    ("http-security-headers",),
                     ("cookie-security",),
-                    ("security-headers", "cookie-security"),
+                    ("http-security-headers", "cookie-security"),
                 )
                 if scenario in COOKIE_SCENARIOS
-                else (("security-headers",),)
+                else (("http-security-headers",),)
             )
         ]
         for scenario, plugins in cases:

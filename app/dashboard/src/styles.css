@@ -224,6 +224,12 @@ main {
   font-size: 12px;
   color: var(--muted);
 }
+.check-outcomes { list-style: none; padding: 0; }
+.check-outcomes li { margin: 1rem 0; }
+.badge.check-passed { color: #92dfb0; }
+.badge.check-failed { color: #ff9b9b; }
+.badge.check-skipped { color: #b5c5d5; }
+.badge.check-inconclusive { color: #ffd58b; }
 .badge {
   display: inline-flex;
   align-items: center;

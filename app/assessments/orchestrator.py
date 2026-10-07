@@ -43,6 +43,7 @@ class Outcome:
     cleanup_verified: bool = False
     plugin_results: list[PluginResult] = field(default_factory=list)
     cleanup_reason: str | None = None
+    response: dict | None = None
 
 
 def execute(sandbox, url, context, plugins: list[Plugin]) -> Outcome:
@@ -50,6 +51,10 @@ def execute(sandbox, url, context, plugins: list[Plugin]) -> Outcome:
     try:
         context.check()
         observation = sandbox.execute(url)
+        outcome.response = {
+            "status_code": observation.status_code,
+            "media_type": observation.media_type,
+        }
         context.check()
         for plugin in plugins:
             try:
@@ -61,7 +66,7 @@ def execute(sandbox, url, context, plugins: list[Plugin]) -> Outcome:
                     f"plugin {plugin.manifest.id} returned an invalid response"
                 ) from exc
             outcome.plugin_results.append(
-                PluginResult(plugin.manifest.id, response.findings)
+                PluginResult(plugin.manifest.id, response.findings, response.checks)
             )
             context.check()
     except Cancelled:

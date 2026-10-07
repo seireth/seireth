@@ -67,14 +67,16 @@ class InMemorySandbox:
         self,
         headers: dict[str, list[str]] | None = None,
         context: ExecutionContext | None = None,
+        status_code: int = 200,
     ):
-        self.headers = {} if headers is None else headers
+        self.headers = {"content-type": ["text/html"]} if headers is None else headers
+        self.status_code = status_code
         self.context = context
 
     def execute(self, url: str) -> HttpObservation:
         if self.context:
             self.context.check()
-        return _validated_observation(url, self.headers)
+        return _validated_observation(url, self.status_code, self.headers)
 
     def cleanup(self) -> CleanupOutcome:
         return CleanupOutcome(True)
@@ -99,7 +101,8 @@ while time.monotonic() < deadline:
         headers = {}
         for name, value in response.headers.items():
             headers.setdefault(name.lower(), []).append(value)
-        print(json.dumps(headers))
+        print(json.dumps({"status_code": response.status, "headers": headers}))
+        response.close()
         break
     except OSError as error:
         last_error = error
@@ -109,12 +112,14 @@ else:
 """
 
 
-def _validated_observation(url: str, headers: object) -> HttpObservation:
+def _validated_observation(
+    url: str, status_code: object, headers: object
+) -> HttpObservation:
     try:
-        return HttpObservation(url=url, headers=headers)
+        return HttpObservation(url=url, status_code=status_code, headers=headers)
     except ValidationError:
         # Exception chains must not expose raw response or cookie values.
-        raise RuntimeError("sandbox returned invalid headers") from None
+        raise RuntimeError("sandbox returned an invalid HTTP observation") from None
 
 
 class DockerSandbox:
@@ -307,10 +312,15 @@ class DockerSandbox:
         if result.returncode:
             raise RuntimeError("Docker runner failed")
         try:
-            headers = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            raise RuntimeError("runner returned invalid JSON") from None
-        return _validated_observation(url, headers)
+            response = json.loads(result.stdout)
+            if not isinstance(response, dict) or set(response) != {
+                "status_code",
+                "headers",
+            }:
+                raise ValueError("invalid runner response")
+        except ValueError:
+            raise RuntimeError("runner returned an invalid HTTP response") from None
+        return _validated_observation(url, response["status_code"], response["headers"])
 
     def _owned_id(self, kind, name):
         """Absence is only an observation, not proof that creation has settled."""

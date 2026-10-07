@@ -12,6 +12,20 @@ export function EvidenceDetails({ evidence }: { evidence: Evidence[] }) {
             <dd>
               <code>{data.header}</code>
             </dd>
+            {"rule_id" in data && (
+              <>
+                <dt>Rule</dt>
+                <dd>{data.rule_id}</dd>
+                <dt>HTTP status</dt>
+                <dd>{data.status_code}</dd>
+                <dt>Declared media type</dt>
+                <dd>{data.media_type ?? "Unknown"}</dd>
+                <dt>Observed condition</dt>
+                <dd>{data.condition}</dd>
+                <dt>Expected requirement</dt>
+                <dd>{data.expected}</dd>
+              </>
+            )}
             {data.header === "set-cookie" && (
               <>
                 <dt>Cookie name</dt>

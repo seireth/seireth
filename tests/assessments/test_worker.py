@@ -17,8 +17,8 @@ from app.core.config import settings
 from app.persistence import models
 from app.plugins.base import HttpObservation, Plugin, PluginManifest
 from app.plugins.cookie_security import PLUGIN as COOKIE_SECURITY_PLUGIN
+from app.plugins.http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 from app.plugins.registry import PluginRegistry
-from app.plugins.security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 
 
 @pytest.fixture
@@ -467,10 +467,13 @@ def test_recovery_retries_after_verified_cleanup(database, assessment):
     dispatcher._run(assessment, Event())
     item = read(database, assessment)
     assert item.status == "completed"
-    assert item.plugins == ["security-headers"]
+    assert item.plugins == ["http-security-headers"]
     assert item.result["attempt"] == 2
     assert item.result["finding_count"] == 3
-    assert item.result["plugins"] == [{"id": "security-headers", "finding_count": 3}]
+    assert [
+        {key: plugin[key] for key in ("id", "finding_count")}
+        for plugin in item.result["plugins"]
+    ] == [{"id": "http-security-headers", "finding_count": 3}]
 
 
 def test_recovery_enforces_retry_limit(database, assessment):
@@ -551,7 +554,7 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
     )
     with database.SessionLocal() as db:
         db.get(models.Assessment, assessment).plugins = [
-            "security-headers",
+            "http-security-headers",
             "cookie-security",
             "broken",
         ]
@@ -560,8 +563,12 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
         InMemorySandbox,
         "execute",
         lambda self, url: HttpObservation(
+            status_code=200,
             url=url,
-            headers={"Set-Cookie": ["cross=synthetic-cookie-secret; SameSite=None"]},
+            headers={
+                "Content-Type": ["text/html"],
+                **{"Set-Cookie": ["cross=synthetic-cookie-secret; SameSite=None"]},
+            },
         ),
     )
     AssessmentDispatcher()._run(assessment, Event())
@@ -860,7 +867,7 @@ def test_background_cleanup_runs_without_blocking_new_assessments(
                 project_id=old.project_id,
                 target_id=old.target_id,
                 url=old.url,
-                plugins=["security-headers"],
+                plugins=["http-security-headers"],
             )
             db.add(new)
             db.commit()

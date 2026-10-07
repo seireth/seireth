@@ -3,6 +3,7 @@ from sqlalchemy import select
 
 from app.persistence import models
 from tests.api.helpers import snapshot, submission
+from tests.header_evidence import header_evidence
 
 
 def test_assessment_url_must_stay_within_target(client, project, target):
@@ -12,7 +13,7 @@ def test_assessment_url_must_stay_within_target(client, project, target):
             "project_id": project,
             "target_id": target["id"],
             "url": "http://other-app:8080/",
-            "plugins": ["security-headers"],
+            "plugins": ["http-security-headers"],
         },
     )
     assert response.status_code == 403
@@ -27,7 +28,7 @@ def test_passive_assessment_returns_json_and_cleanup(
     )
     assert result.status_code == 202
     assert result.headers["location"].endswith(result.json()["id"])
-    assert result.json()["plugins"] == ["security-headers"]
+    assert result.json()["plugins"] == ["http-security-headers"]
     report = wait_until(
         lambda: client.get(f"/api/v1/assessments/{result.json()['id']}/results").json(),
         lambda report: report["status"] in {"completed", "failed", "cancelled"},
@@ -38,13 +39,26 @@ def test_passive_assessment_returns_json_and_cleanup(
     assert report["cleanup_pending"] is False
     assert report["result"]["cleanup_reason"] is None
     assert "plugin" not in report["result"]
-    assert report["result"]["plugins"] == [
-        {"id": "security-headers", "finding_count": 3}
-    ]
+    assert [
+        {key: plugin[key] for key in ("id", "finding_count")}
+        for plugin in report["result"]["plugins"]
+    ] == [{"id": "http-security-headers", "finding_count": 3}]
     assert report["result"]["finding_count"] == 3
+    assert report["result"]["response"] == {
+        "status_code": 200,
+        "media_type": "text/html",
+    }
+    assert [
+        (check["rule_id"], check["status"])
+        for check in report["result"]["plugins"][0]["checks"]
+    ] == [
+        ("x-content-type-options", "failed"),
+        ("content-security-policy", "failed"),
+        ("framing-protection", "failed"),
+    ]
     assert len(report["findings"]) == report["result"]["finding_count"] == 3
     assert all(
-        finding["plugin"] == "security-headers" for finding in report["findings"]
+        finding["plugin"] == "http-security-headers" for finding in report["findings"]
     )
     assert all(finding["remediation"] for finding in report["findings"])
     with database.SessionLocal() as db:
@@ -83,7 +97,10 @@ def test_passive_assessment_returns_json_and_cleanup(
             "x-frame-options",
         }
         assert all(
-            item.data == {"header": item.data["header"], "url": "http://demo-app:8080/"}
+            item.data["url"] == "http://demo-app:8080/"
+            and item.data["status_code"] == 200
+            and item.data["media_type"] == "text/html"
+            and item.data["condition"] == "missing"
             for item in evidence
         )
     assessment = (client.get(result.headers["location"])).json()
@@ -98,6 +115,86 @@ def test_passive_assessment_returns_json_and_cleanup(
         "assessment.running",
         "assessment.completed",
     ]
+
+
+@pytest.mark.parametrize(
+    "status,headers,media_type,outcomes",
+    [
+        (
+            200,
+            {
+                "Content-Type": ["Application/JSON; charset=utf-8"],
+                "X-Content-Type-Options": ["nosniff"],
+            },
+            "application/json",
+            ["passed", "skipped", "skipped"],
+        ),
+        (303, {"Content-Type": ["text/html"]}, "text/html", ["skipped"] * 3),
+        (204, {}, None, ["skipped"] * 3),
+        (
+            200,
+            {"X-Content-Type-Options": ["nosniff"]},
+            None,
+            ["passed", "inconclusive", "inconclusive"],
+        ),
+    ],
+)
+def test_zero_findings_persist_context_and_outcomes_in_selection_order(
+    client,
+    assessment_payload,
+    database,
+    monkeypatch,
+    wait_until,
+    status,
+    headers,
+    media_type,
+    outcomes,
+):
+    from app.assessments.sandbox import InMemorySandbox
+    from app.plugins.base import HttpObservation
+
+    monkeypatch.setattr(
+        InMemorySandbox,
+        "execute",
+        lambda self, url: HttpObservation(url=url, status_code=status, headers=headers),
+    )
+    selection = ["cookie-security", "http-security-headers"]
+    submitted = client.post(
+        "/api/v1/assessments", json={**assessment_payload, "plugins": selection}
+    )
+    assert submitted.status_code == 202
+    location = submitted.headers["location"]
+    report = wait_until(
+        lambda: client.get(location + "/results").json(),
+        lambda report: report["status"] in {"completed", "failed", "cancelled"},
+        description="response applicability assessment",
+    )
+    assert report["status"] == "completed"
+    assert report["result"]["response"] == {
+        "status_code": status,
+        "media_type": media_type,
+    }
+    assert report["findings"] == []
+    assert report["result"]["finding_count"] == 0
+    assert [plugin["id"] for plugin in report["result"]["plugins"]] == selection
+    assert report["result"]["plugins"][0] == {
+        "id": "cookie-security",
+        "finding_count": 0,
+    }
+    checks = report["result"]["plugins"][1]["checks"]
+    assert [check["rule_id"] for check in checks] == [
+        "x-content-type-options",
+        "content-security-policy",
+        "framing-protection",
+    ]
+    assert [check["status"] for check in checks] == outcomes
+    assert all(check["reason"].strip() for check in checks)
+    assert client.get(location + "/evidence").json()["evidence"] == []
+    assert client.get(location).json()["result"] == report["result"]
+    with database.SessionLocal() as db:
+        assessment = db.get(models.Assessment, report["assessment_id"])
+        assert assessment.plugins == selection
+        assert assessment.result == report["result"]
 
 
 def test_queued_and_cancelled_before_execution_have_no_result(
@@ -128,10 +225,10 @@ def test_queued_and_cancelled_before_execution_have_no_result(
 @pytest.mark.parametrize(
     "plugins",
     [
-        ["security-headers"],
+        ["http-security-headers"],
         ["cookie-security"],
-        ["security-headers", "cookie-security"],
-        ["cookie-security", "security-headers"],
+        ["http-security-headers", "cookie-security"],
+        ["cookie-security", "http-security-headers"],
     ],
 )
 def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
@@ -146,14 +243,18 @@ def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
     def response(self, url):
         calls.append(url)
         return HttpObservation(
+            status_code=200,
             url=url,
             headers={
-                "Set-Cookie": [
-                    f"theme={secret}; SameSite=Lax",
-                    f"cross={secret}; SameSite=None",
-                    f"__Secure-session={secret}",
-                    f"__Host-session={secret}; Secure; Domain={secret}; Path=/{secret}",
-                ]
+                "Content-Type": ["text/html"],
+                **{
+                    "Set-Cookie": [
+                        f"theme={secret}; SameSite=Lax",
+                        f"cross={secret}; SameSite=None",
+                        f"__Secure-session={secret}",
+                        f"__Host-session={secret}; Secure; Domain={secret}; Path=/{secret}",
+                    ]
+                },
             },
         )
 
@@ -170,9 +271,10 @@ def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
         description="cookie assessment completion",
     )
     assert report["status"] == "completed", report
-    assert report["result"]["plugins"] == [
-        {"id": plugin, "finding_count": 3} for plugin in plugins
-    ]
+    assert [
+        {key: plugin[key] for key in ("id", "finding_count")}
+        for plugin in report["result"]["plugins"]
+    ] == [{"id": plugin, "finding_count": 3} for plugin in plugins]
     assert (
         report["result"]["finding_count"] == len(report["findings"]) == 3 * len(plugins)
     )
@@ -222,18 +324,13 @@ def evidence_row(database):
         with database.SessionLocal() as db:
             evidence = models.Evidence(
                 kind=kind,
-                data=data
-                if data is not None
-                else {
-                    "url": "http://demo-app:8080/",
-                    "header": "content-security-policy",
-                },
+                data=data if data is not None else header_evidence(),
             )
             if identity is not None:
                 evidence.id = identity
             finding = models.Finding(
                 assessment_id=assessment_id,
-                plugin="security-headers",
+                plugin="http-security-headers",
                 title="Test finding",
                 severity="medium",
                 description="Test evidence retrieval",
@@ -269,6 +366,11 @@ def test_evidence_retrieval_is_ordered_read_only_and_assessment_specific(
                 "finding_id": finding,
                 "kind": "http-response",
                 "data": {
+                    "rule_id": "content-security-policy",
+                    "status_code": 200,
+                    "media_type": "text/html",
+                    "condition": "missing",
+                    "expected": "nonblank enforced CSP",
                     "url": "http://demo-app:8080/",
                     "header": "content-security-policy",
                 },
@@ -324,7 +426,15 @@ def test_unknown_assessment_evidence_returns_not_found(client):
         ("http-response", {"header": "synthetic-evidence-secret"}),
         (
             "http-response",
-            {"url": "ftp://synthetic-evidence-secret/", "header": "x-frame-options"},
+            {
+                "rule_id": "framing-protection",
+                "status_code": 200,
+                "media_type": "text/html",
+                "condition": "missing",
+                "expected": "recognized restrictive framing protection",
+                "url": "ftp://synthetic-evidence-secret/",
+                "header": "x-frame-options",
+            },
         ),
         (
             "http-response",
@@ -342,6 +452,26 @@ def test_unknown_assessment_evidence_returns_not_found(client):
             },
         ),
         ("http-response", ["synthetic-evidence-secret"]),
+        (
+            "http-response",
+            {
+                **header_evidence("x-content-type-options"),
+                "header": "content-security-policy",
+            },
+        ),
+        ("http-response", {**header_evidence(), "expected": "nosniff"}),
+        (
+            "http-response",
+            header_evidence("framing-protection", condition="unrestricted"),
+        ),
+        (
+            "http-response",
+            header_evidence(
+                "framing-protection",
+                header="content-security-policy",
+                condition="blank",
+            ),
+        ),
     ],
 )
 def test_invalid_stored_evidence_fails_without_partial_response_or_secret_diagnostics(
@@ -374,13 +504,17 @@ def test_repeated_cookies_and_multiple_rules_keep_their_exact_finding_links(
         InMemorySandbox,
         "execute",
         lambda self, url: HttpObservation(
+            status_code=200,
             url=url,
             headers={
-                "Set-Cookie": [
-                    f"__hOsT-session={secret}; SameSite=None",
-                    f"__hOsT-session={secret}; Secure; Path=/",
-                    f"__hOsT-session={secret}; Secure; Path=/app",
-                ]
+                "Content-Type": ["text/html"],
+                **{
+                    "Set-Cookie": [
+                        f"__hOsT-session={secret}; SameSite=None",
+                        f"__hOsT-session={secret}; Secure; Path=/",
+                        f"__hOsT-session={secret}; Secure; Path=/app",
+                    ]
+                },
             },
         ),
     )
@@ -423,7 +557,7 @@ def test_repeated_cookies_and_multiple_rules_keep_their_exact_finding_links(
         (None, 422),
         ([], 422),
         (["unknown"], 400),
-        (["security-headers", "security-headers"], 400),
+        (["http-security-headers", "http-security-headers"], 400),
     ],
 )
 def test_invalid_plugin_selection_is_rejected(
@@ -507,7 +641,7 @@ def test_assessment_ordering_breaks_timestamp_ties(
                     target_id=graph.target.id,
                     url=graph.assessment.url,
                     status="completed",
-                    plugins=["security-headers"],
+                    plugins=["http-security-headers"],
                     created_at=current.created_at,
                 )
             )

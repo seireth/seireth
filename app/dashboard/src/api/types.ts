@@ -33,6 +33,11 @@ export interface Runtime {
 export interface TargetImages {
   items: { image: string; id: string }[];
 }
+export interface CheckOutcome {
+  rule_id: string;
+  status: "passed" | "failed" | "skipped" | "inconclusive";
+  reason: string;
+}
 export interface Result {
   sandbox_backend?: string;
   cleanup_verified?: boolean;
@@ -41,7 +46,8 @@ export interface Result {
   attempt?: number;
   error?: string;
   finding_count?: number;
-  plugins?: { id: string; finding_count: number }[];
+  response?: { status_code: number; media_type: string | null };
+  plugins?: { id: string; finding_count: number; checks?: CheckOutcome[] }[];
 }
 export interface Assessment {
   id: string;
@@ -75,6 +81,17 @@ type HeaderData = {
     | "x-content-type-options"
     | "content-security-policy"
     | "x-frame-options";
+  rule_id:
+    | "x-content-type-options"
+    | "content-security-policy"
+    | "framing-protection";
+  status_code: number;
+  media_type: string | null;
+  condition: "missing" | "blank" | "unrecognized" | "unrestricted";
+  expected:
+    | "nosniff"
+    | "nonblank enforced CSP"
+    | "recognized restrictive framing protection";
 };
 type CookieData = {
   url: string;

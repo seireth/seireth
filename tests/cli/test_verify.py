@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from app.cli import verify
+from tests.header_evidence import header_evidence
 
 
 @pytest.fixture
@@ -100,7 +101,7 @@ def test_direct_verification_rejects_invalid_timeout_before_http(monkeypatch, va
             "http://test",
             image="arbitrary:local",
             target_url="http://arbitrary:8080/",
-            plugins=["security-headers"],
+            plugins=["http-security-headers"],
             timeout_seconds=value,
         )
     client.assert_not_called()
@@ -133,7 +134,7 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
                 "project_id": "p",
                 "target_id": "t",
                 "url": "http://another:8080/",
-                "plugins": ["security-headers", "cookie-security"],
+                "plugins": ["http-security-headers", "cookie-security"],
             }
             return httpx.Response(202, json={"id": "a"})
         elif path.endswith("/results"):
@@ -165,7 +166,7 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
         "http://test",
         image="another:local",
         target_url="http://another:8080/",
-        plugins=["security-headers", "cookie-security"],
+        plugins=["http-security-headers", "cookie-security"],
         expected_backend="docker",
     )
     assert report["results"]["findings"] == []
@@ -223,10 +224,7 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
                 if failure == "evidence-finding"
                 else "finding-1",
                 "kind": "http-response",
-                "data": {
-                    "url": "http://demo-app:8080/",
-                    "header": "content-security-policy",
-                },
+                "data": header_evidence(),
             }
         ],
     }
@@ -275,7 +273,7 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
             "http://test",
             image="arbitrary:local",
             target_url="http://arbitrary:8080/",
-            plugins=["security-headers"],
+            plugins=["http-security-headers"],
             expected_backend="docker" if failure == "backend" else "inmemory",
         )
     assert "synthetic-private-cookie-value" not in str(error.value)

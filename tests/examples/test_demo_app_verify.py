@@ -10,6 +10,7 @@ import pytest
 from examples.demo_app import verify as demo_verify
 from examples.demo_app.scenarios import BY_PATH, IMAGE, ORIGIN
 from examples.demo_app.verify import validate_outcome
+from tests.header_evidence import header_evidence
 
 
 def outcome(path):
@@ -22,14 +23,36 @@ def outcome(path):
             "sandbox_backend": "docker",
             "cleanup_verified": True,
             "finding_count": len(scenario.expected),
+            "response": {
+                "status_code": scenario.status,
+                "media_type": scenario.media_type,
+            },
             "plugins": [
-                {"id": "security-headers", "finding_count": len(scenario.expected)}
+                {
+                    "id": "http-security-headers",
+                    "finding_count": len(scenario.expected),
+                    "checks": [
+                        {
+                            "rule_id": rule,
+                            "status": status,
+                            "reason": "Independent expected fixture outcome.",
+                        }
+                        for rule, status in zip(
+                            (
+                                "x-content-type-options",
+                                "content-security-policy",
+                                "framing-protection",
+                            ),
+                            scenario.expected_checks,
+                        )
+                    ],
+                }
             ],
         },
         "findings": [
             {
                 "id": f"finding-{index}",
-                "plugin": "security-headers",
+                "plugin": "http-security-headers",
                 "remediation": "Configure this response header.",
             }
             for index, _ in enumerate(scenario.expected)
@@ -44,7 +67,12 @@ def outcome(path):
                 "id": f"evidence-{index}",
                 "finding_id": f"finding-{index}",
                 "kind": "http-response",
-                "data": {"url": ORIGIN + path, "header": header},
+                "data": header_evidence(
+                    header,
+                    url=ORIGIN + path,
+                    status_code=scenario.status,
+                    media_type=scenario.media_type,
+                ),
             }
             for index, header in enumerate(scenario.expected)
         ],
@@ -64,7 +92,12 @@ def test_exact_expected_outcomes_are_accepted(path):
         "simulated",
         "pending",
         "cleanup",
-        "wrong-header",
+        "wrong-rule",
+        "wrong-status",
+        "wrong-media",
+        "wrong-evidence-status",
+        "wrong-evidence-media",
+        "wrong-check",
         "wrong-url",
         "wrong-finding",
         "wrong-count",
@@ -82,8 +115,18 @@ def test_invalid_live_outcome_is_rejected(failure):
         results["cleanup_pending"] = True
     elif failure == "cleanup":
         results["result"]["cleanup_verified"] = False
-    elif failure == "wrong-header":
-        evidence["evidence"][0]["data"]["header"] = "content-security-policy"
+    elif failure == "wrong-rule":
+        evidence["evidence"][0]["data"]["rule_id"] = "content-security-policy"
+    elif failure == "wrong-status":
+        results["result"]["response"]["status_code"] = 404
+    elif failure == "wrong-media":
+        results["result"]["response"]["media_type"] = "application/json"
+    elif failure == "wrong-evidence-status":
+        evidence["evidence"][0]["data"]["status_code"] = 404
+    elif failure == "wrong-evidence-media":
+        evidence["evidence"][0]["data"]["media_type"] = "application/json"
+    elif failure == "wrong-check":
+        results["result"]["plugins"][0]["checks"][0]["status"] = "passed"
     elif failure == "wrong-url":
         evidence["evidence"][0]["data"]["url"] = ORIGIN + "/account"
     elif failure == "wrong-finding":
@@ -127,7 +170,7 @@ def test_verifier_requires_completed_assessments_and_checks_resources(
             return httpx.Response(200, json={"id": "target-1"})
         if path == "/api/v1/assessments":
             payload = json.loads(request.content)
-            assert payload["plugins"] == ["security-headers"]
+            assert payload["plugins"] == ["http-security-headers"]
             current_path[0] = payload["url"].removeprefix(ORIGIN)
             actions.extend(
                 ("assessment.queued", "assessment.running", "assessment.completed")

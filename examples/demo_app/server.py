@@ -43,6 +43,27 @@ def page(title, content):
 <footer>Synthetic data. Tickets reset when this disposable instance stops.</footer></body></html>"""
 
 
+def scenario_body(scenario):
+    media_type = (scenario.content_type or "").split(";", 1)[0].strip().lower()
+    if media_type == "application/json":
+        return json.dumps(
+            {"scenario": scenario.name, "description": scenario.description}
+        )
+    if media_type == "text/css":
+        return "/* Header applicability demo. */\nbody { color: #253047; }\n"
+    fields = (
+        "\n".join(f"{name}: {value}" for name, value in scenario.headers)
+        or "No covered security headers"
+    )
+    expected = (
+        ", ".join(scenario.expected) or "None for the checks covered by this plugin"
+    )
+    return page(
+        scenario.name,
+        f'<p class="intro">{escape(scenario.description)}</p><section class="panel"><h2>Response configuration</h2><pre>{escape(fields)}</pre><p>Expected findings: <strong>{escape(expected)}</strong></p><p>HTTP status: {scenario.status}</p><a href="/lab">Back to all scenarios</a></section>',
+    )
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "NorthstarDemo/1.0"
 
@@ -55,9 +76,12 @@ class Handler(BaseHTTPRequestHandler):
         content_type="text/html; charset=utf-8",
         extra=(),
     ):
+        if status < 200 or status in {204, 205, 304}:
+            body = b""
         body = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(status)
-        self.send_header("Content-Type", content_type)
+        if content_type is not None:
+            self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         for name, value in (*headers, *extra):
@@ -65,6 +89,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+    def respond_scenario(self, scenario, body, *, extra=()):
+        self.respond(
+            body,
+            status=scenario.status,
+            headers=scenario.headers,
+            content_type=scenario.content_type,
+            extra=extra,
+        )
 
     def ticket_table(self):
         with self.server.ticket_lock:
@@ -83,32 +116,27 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/slow":
             sleep(1.5)
         scenario = BY_PATH.get(path)
-        headers = scenario.headers if scenario else PROTECTED
-        status = scenario.status if scenario else 200
         if path in {"/assets/app.css", "/assets/app.js"}:
-            content_type = "text/css" if path.endswith(".css") else "text/javascript"
-            self.respond(
+            self.respond_scenario(
+                scenario,
                 (STATIC / path.rsplit("/", 1)[1]).read_bytes(),
-                headers=headers,
-                content_type=content_type,
             )
             return
         if path == "/api/tickets":
             with self.server.ticket_lock:
                 body = json.dumps({"items": self.server.tickets})
-            self.respond(body, headers=headers, content_type="application/json")
+            self.respond_scenario(scenario, body)
             return
         if path == "/health":
             self.respond('{"status":"ok"}', content_type="application/json")
             return
         if path == "/login":
-            self.respond(
+            self.respond_scenario(
+                scenario,
                 page(
                     "Continue to your workspace",
                     '<p>This demo uses a synthetic operator account.</p><a href="/account">Continue</a>',
                 ),
-                status=status,
-                headers=headers,
                 extra=(("Location", "/account"),),
             )
             return
@@ -118,57 +146,44 @@ class Handler(BaseHTTPRequestHandler):
 <article><span>Release readiness</span><strong>92%</strong><small>Next review on Thursday</small></article>
 <article><span>Support queue</span><strong id="ticket-count">3</strong><small id="api-status" role="status">Loading live queue...</small></article></section>
 <section class="panel"><h2>Today's priorities</h2><p>Review your team's work and follow up on open support tickets.</p>"""
-            self.respond(
+            self.respond_scenario(
+                scenario,
                 page(
                     "Good morning, demo operator",
                     content
                     + self.ticket_table()
                     + '<a class="button" href="/tickets">Manage tickets</a></section>',
-                )
+                ),
             )
             return
         if path == "/tickets":
             content = f"""<p class="intro">Track the requests that keep your workspace moving.</p><section class="panel">{self.ticket_table()}</section>
 <section class="panel"><h2>Create a ticket</h2><form action="/tickets" method="post"><label>Ticket title<input name="title" required maxlength="120" placeholder="What needs attention?"></label><button type="submit">Create ticket</button></form></section>"""
-            self.respond(page("Support tickets", content))
+            self.respond_scenario(scenario, page("Support tickets", content))
             return
         if path == "/account":
-            self.respond(
+            self.respond_scenario(
+                scenario,
                 page(
                     "Account settings",
                     '<section class="panel"><h2>Demo operator</h2><dl><dt>Email</dt><dd>operator@northstar.example</dd><dt>Workspace</dt><dd>Release operations</dd><dt>Role</dt><dd>Workspace administrator</dd></dl><p>This profile contains synthetic data.</p></section>',
-                )
+                ),
             )
             return
         if path == "/lab":
             rows = "".join(
-                f'<tr><td><a href="{scenario.path}">{escape(scenario.name)}</a><small>{escape(scenario.description)}</small></td><td>{scenario.status}</td><td>{len(scenario.expected)}</td></tr>'
+                f'<tr><td><a href="{scenario.path}">{escape(scenario.name)}</a><small>{escape(scenario.description)}</small></td><td>{scenario.status}</td><td>{len(scenario.expected)}</td><td>{", ".join(scenario.expected_checks)}</td></tr>'
                 for scenario in (*SCENARIOS, *COOKIE_SCENARIOS)
             )
             self.respond(
                 page(
                     "Plugin lab",
-                    f'<p class="intro">Compare real HTTP responses with the findings expected from the security-headers plugin.</p><section class="panel"><table><caption>Response scenarios</caption><thead><tr><th>Response</th><th>HTTP</th><th>Expected findings</th></tr></thead><tbody>{rows}</tbody></table></section>',
+                    f'<p class="intro">Compare real HTTP responses with the findings and outcomes expected from the http-security-headers plugin. Outcomes are listed in order: MIME protection, CSP, framing.</p><section class="panel"><table><caption>Response scenarios</caption><thead><tr><th>Response</th><th>HTTP</th><th>Expected findings</th><th>Check outcomes</th></tr></thead><tbody>{rows}</tbody></table></section>',
                 )
             )
             return
         if scenario:
-            fields = (
-                "\n".join(f"{name}: {value}" for name, value in headers)
-                or "No covered security headers"
-            )
-            expected = (
-                ", ".join(scenario.expected)
-                or "None for the checks covered by this plugin"
-            )
-            self.respond(
-                page(
-                    scenario.name,
-                    f'<p class="intro">{escape(scenario.description)}</p><section class="panel"><h2>Response configuration</h2><pre>{escape(fields)}</pre><p>Expected findings: <strong>{escape(expected)}</strong></p><p>HTTP status: {status}</p><a href="/lab">Back to all scenarios</a></section>',
-                ),
-                status=status,
-                headers=headers,
-            )
+            self.respond_scenario(scenario, scenario_body(scenario))
             return
         self.respond(
             page(

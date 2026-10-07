@@ -6,7 +6,7 @@ IMAGE = "seireth/demo-app:local"
 ORIGIN = "http://demo-app:8080"
 NOSNIFF = "x-content-type-options"
 CSP = "content-security-policy"
-FRAMING = "x-frame-options"
+FRAMING = "framing-protection"
 APPLICATION_CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; "
     "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
@@ -31,6 +31,16 @@ class Scenario:
     expected: tuple[str, ...] = ()
     status: int = 200
     cookie_rules: tuple[str, ...] = ()
+    content_type: str | None = "text/html; charset=utf-8"
+    media_type: str | None = "text/html"
+    checks: tuple[str, str, str] | None = None
+
+    @property
+    def expected_checks(self):
+        return self.checks or tuple(
+            "failed" if rule in self.expected else "passed"
+            for rule in (NOSNIFF, CSP, FRAMING)
+        )
 
 
 def framing(path, name, value, expected=(), extra=()):
@@ -71,26 +81,36 @@ SCENARIOS = (
         "Tickets JSON API",
         "A JSON response using the same application middleware.",
         PROTECTED,
+        content_type="application/json; charset=utf-8",
+        media_type="application/json",
+        checks=("passed", "skipped", "skipped"),
     ),
     Scenario(
         "/assets/app.css",
         "Stylesheet",
         "Static resources also receive response protection.",
         PROTECTED,
+        content_type="text/css; charset=utf-8",
+        media_type="text/css",
+        checks=("passed", "skipped", "skipped"),
     ),
     Scenario(
         "/assets/app.js",
         "Application script",
         "External JavaScript allowed by the application CSP.",
         PROTECTED,
+        content_type="text/javascript; charset=utf-8",
+        media_type="text/javascript",
+        checks=("passed", "skipped", "skipped"),
     ),
     Scenario(
         "/login",
         "Login redirect",
-        "A 303 response missing CSP and framing protection; the scanner must not follow it.",
+        "A 303 response; checks are skipped and the scanner must not follow it.",
         (("X-Content-Type-Options", "nosniff"),),
-        (CSP, FRAMING),
+        (),
         303,
+        checks=("skipped", "skipped", "skipped"),
     ),
     Scenario(
         "/errors/not-found",
@@ -110,6 +130,64 @@ SCENARIOS = (
         ),
         (NOSNIFF,),
         503,
+    ),
+    Scenario(
+        "/lab/json-unprotected",
+        "JSON without document headers",
+        "Only MIME protection applies to declared JSON.",
+        (),
+        (NOSNIFF,),
+        content_type="application/json",
+        media_type="application/json",
+        checks=("failed", "skipped", "skipped"),
+    ),
+    Scenario(
+        "/lab/css-unprotected",
+        "CSS without document headers",
+        "Only MIME protection applies to a stylesheet.",
+        (),
+        (NOSNIFF,),
+        content_type="text/css",
+        media_type="text/css",
+        checks=("failed", "skipped", "skipped"),
+    ),
+    Scenario(
+        "/lab/no-content",
+        "No content",
+        "A 204 response has no representation to assess.",
+        (),
+        (),
+        204,
+        checks=("skipped", "skipped", "skipped"),
+    ),
+    Scenario(
+        "/lab/unknown-type",
+        "Missing content type",
+        "Document applicability is unknown.",
+        (),
+        (NOSNIFF,),
+        content_type=None,
+        media_type=None,
+        checks=("failed", "inconclusive", "inconclusive"),
+    ),
+    Scenario(
+        "/lab/malformed-type",
+        "Malformed content type",
+        "A malformed declared type must not be guessed.",
+        (),
+        (NOSNIFF,),
+        content_type="invalid",
+        media_type=None,
+        checks=("failed", "inconclusive", "inconclusive"),
+    ),
+    Scenario(
+        "/lab/conflicting-types",
+        "Conflicting content types",
+        "Different declared types leave document applicability unknown.",
+        (("Content-Type", "application/json"),),
+        (NOSNIFF,),
+        media_type=None,
+        checks=("failed", "inconclusive", "inconclusive"),
     ),
     Scenario(
         "/lab/missing-all",

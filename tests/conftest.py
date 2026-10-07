@@ -148,7 +148,7 @@ def assessment_graph(database):
                 project_id=project.id,
                 target_id=target.id,
                 url=target.url,
-                plugins=["security-headers"] if plugins is None else plugins,
+                plugins=["http-security-headers"] if plugins is None else plugins,
                 status=status,
             )
             db.add(assessment)

@@ -45,6 +45,7 @@ def test_restricted_owned_commands(sandbox, fake_docker, custom_limits):
     }
     observation = sandbox.execute("http://demo-app:8080/app?test=1")
     assert isinstance(observation, HttpObservation)
+    assert observation.status_code == 200
     assert str(observation.url) == "http://demo-app:8080/app?test=1"
     assert observation.headers == {
         "x-test": ["ok"],
@@ -113,10 +114,13 @@ def test_invalid_runner_response_still_allows_cleanup(
     "output",
     [
         "synthetic-cookie-secret invalid JSON",
-        '{"Set-Cookie": "synthetic-cookie-secret"}',
-        '{"Set-Cookie": ["synthetic-cookie-secret", 1]}',
-        '{"Set-Cookie": ["synthetic-cookie-secret"], "X-Test": []}',
-        '{"Set-Cookie": ["synthetic-cookie-secret"], "X-Test": null}',
+        '{"status_code":200,"headers":{"Set-Cookie":"synthetic-cookie-secret"}}',
+        '{"status_code":200,"headers":{"Set-Cookie":["synthetic-cookie-secret",1]}}',
+        '{"status_code":200,"headers":{"Set-Cookie":["synthetic-cookie-secret"],"X-Test":[]}}',
+        '{"status_code":200,"headers":{"Set-Cookie":["synthetic-cookie-secret"],"X-Test":null}}',
+        '{"status_code":"synthetic-cookie-secret","headers":{}}',
+        '{"status_code":600,"headers":{"Set-Cookie":["synthetic-cookie-secret"]}}',
+        '{"status_code":200,"headers":{},"body":"synthetic-cookie-secret"}',
         '[["Set-Cookie", "synthetic-cookie-secret"]]',
     ],
 )
@@ -151,6 +155,15 @@ def test_simulated_backend_preserves_values_and_returns_independent_observations
     assert sandbox.execute("http://demo-app:8080/app?test=1").headers == {
         "set-cookie": ["first=synthetic", "second=synthetic"]
     }
+
+
+def test_simulated_backend_supports_default_and_explicit_response_context():
+    default = InMemorySandbox().execute("http://demo-app:8080/")
+    assert (default.status_code, default.media_type) == (200, "text/html")
+    response = InMemorySandbox(
+        status_code=404, headers={"Content-Type": ["Application/JSON; charset=utf-8"]}
+    ).execute("http://demo-app:8080/missing")
+    assert (response.status_code, response.media_type) == (404, "application/json")
 
 
 @pytest.mark.parametrize(
@@ -258,7 +271,7 @@ def test_network_created_before_cli_timeout_is_reconciled(
         sandbox,
         "http://demo-app:8080",
         execution_context,
-        registry.select(["security-headers"]),
+        registry.select(["http-security-headers"]),
     )
     assert outcome.status == "failed"
     assert outcome.cleanup_verified
@@ -278,6 +291,8 @@ def test_runner_preserves_repeated_headers_without_following_redirects(status):
             paths.append(self.path)
             self.send_response(status)
             self.send_header("Location", "/outside-scope")
+            # A client reading the body would fail or wait for this missing data.
+            self.send_header("Content-Length", "1000000")
             self.send_header(
                 "Set-Cookie", "first=synthetic; Expires=Wed, 21 Oct 2037 07:28:00 GMT"
             )
@@ -304,11 +319,13 @@ def test_runner_preserves_repeated_headers_without_following_redirects(status):
             timeout=5,
         )
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout)["location"] == ["/outside-scope"]
-        assert json.loads(result.stdout)["set-cookie"] == [
+        assert set(json.loads(result.stdout)) == {"status_code", "headers"}
+        assert json.loads(result.stdout)["headers"]["location"] == ["/outside-scope"]
+        assert json.loads(result.stdout)["headers"]["set-cookie"] == [
             "first=synthetic; Expires=Wed, 21 Oct 2037 07:28:00 GMT",
             "second=synthetic; SameSite=None",
         ]
+        assert json.loads(result.stdout)["status_code"] == status
         assert paths == ["/allowed"]
     finally:
         server.shutdown()
@@ -333,7 +350,7 @@ def test_late_creation_is_not_certified_absent(
         sandbox,
         "http://demo-app:8080",
         execution_context,
-        registry.select(["security-headers"]),
+        registry.select(["http-security-headers"]),
     )
     assert outcome.status == "failed"
     assert outcome.error == "assessment execution timed out"

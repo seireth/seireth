@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router";
@@ -31,6 +31,33 @@ const finding = {
 };
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status });
+
+it.each(["skipped", "inconclusive"] as const)(
+  "shows %s checks distinctly from passed checks with zero findings", async (outcome) => {
+    const item: Assessment = {
+      ...assessment("completed"), plugins: ["http-security-headers"],
+      result: {
+        cleanup_verified: true, sandbox_backend: "docker", finding_count: 0,
+        response: {status_code: 200, media_type: outcome === "skipped" ? "application/json" : null},
+        plugins: [{id: "http-security-headers", finding_count: 0, checks: [
+          {rule_id: "x-content-type-options", status: "passed", reason: "MIME protection is enabled."},
+          {rule_id: "content-security-policy", status: outcome, reason: "Document applicability explains this outcome."},
+          {rule_id: "framing-protection", status: outcome, reason: "Framing applicability explains this outcome."},
+        ]}],
+      },
+    };
+    show(vi.fn(async (path: string) => json(
+      path.endsWith("/results") ? {findings: []} : path.endsWith("/evidence") ? {evidence: []} : path.endsWith("/assessments/a") ? item : metadata(path),
+    )));
+    const context = within(await screen.findByRole("region", {name: "Response and check outcomes"}));
+    expect(context.getByText("200")).toBeVisible();
+    expect(context.getByText(outcome === "skipped" ? "application/json" : "Unknown")).toBeVisible();
+    expect(context.getByText("passed")).toBeVisible();
+    expect(context.getAllByText(outcome)).toHaveLength(2);
+    expect(context.getByText("Framing applicability explains this outcome.")).toBeVisible();
+    expect(await screen.findByText("No covered violations were identified. This does not certify security.")).toBeVisible();
+  },
+);
 
 function show(fetcher: ReturnType<typeof vi.fn>) {
   vi.stubGlobal("fetch", fetcher);
