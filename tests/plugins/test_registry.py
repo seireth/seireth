@@ -72,6 +72,14 @@ def test_observation_status_is_required():
         (["text/html", "application/json"], None),
         (["text/html; garbage"], None),
         (["text/html\r\nSet-Cookie: synthetic-secret"], None),
+        (["a" * 127 + "/" + "b" * 127], "a" * 127 + "/" + "b" * 127),
+        (["a" * 128 + "/b"], None),
+        (["a/" + "b" * 128], None),
+        (['TEXT/HTML; Charset="utf-8"; version=1'], "text/html"),
+        (["text/\u212a"], None),
+        (["text/\u0130"], None),
+        (["text/\u0131"], None),
+        (["text/\u017f"], None),
     ],
 )
 def test_observation_normalizes_only_unambiguous_content_types(fields, expected):

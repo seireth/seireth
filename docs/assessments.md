@@ -87,7 +87,9 @@ The array is empty unless the assessment is completed with findings.
 Header evidence identifies the response URL, header, stable `rule_id`, HTTP
 `status_code`, normalized `media_type`, safe observed `condition` (missing,
 blank, unrecognized, or unrestricted), and expected requirement. Raw CSP policies
-and arbitrary header values are excluded. Cookie evidence identifies
+and arbitrary header values are excluded. The rule, header, condition, and
+requirement must be consistent; `unrestricted` applies only to framing evidence
+backed by CSP. Cookie evidence identifies
 the cookie name, rule, and normalized requirement values or flags. Cookie values
 and complete fields are excluded. See `/docs` for the accepted payload models;
 unlisted fields are rejected. Invalid stored evidence fails the entire response

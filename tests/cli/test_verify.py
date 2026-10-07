@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from app.cli import verify
+from tests.header_evidence import header_evidence
 
 
 @pytest.fixture
@@ -223,15 +224,7 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
                 if failure == "evidence-finding"
                 else "finding-1",
                 "kind": "http-response",
-                "data": {
-                    "rule_id": "content-security-policy",
-                    "status_code": 200,
-                    "media_type": "text/html",
-                    "condition": "missing",
-                    "expected": "nonblank enforced CSP",
-                    "url": "http://demo-app:8080/",
-                    "header": "content-security-policy",
-                },
+                "data": header_evidence(),
             }
         ],
     }

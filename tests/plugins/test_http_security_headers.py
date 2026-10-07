@@ -2,10 +2,32 @@
 
 import pytest
 
+from app.api.schemas import HeaderEvidenceData
 from app.plugins.base import HttpObservation
 from app.plugins.http_security_headers import analyze
+from examples.demo_app.scenarios import SCENARIOS
 
 URL = "http://demo-app:8080/"
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda scenario: scenario.path)
+def test_demo_scenarios_keep_independent_outcomes_and_valid_evidence(scenario):
+    headers = {}
+    if scenario.content_type is not None:
+        headers["Content-Type"] = [scenario.content_type]
+    for name, value in scenario.headers:
+        headers.setdefault(name, []).append(value)
+    result = response(headers, status_code=scenario.status, media_type=None)
+    assert tuple(check.status for check in result.checks) == scenario.expected_checks
+    assert (
+        tuple(finding.evidence["rule_id"] for finding in result.findings)
+        == scenario.expected
+    )
+    for finding in result.findings:
+        assert (
+            HeaderEvidenceData.model_validate(finding.evidence).model_dump(mode="json")
+            == finding.evidence
+        )
 
 
 @pytest.mark.parametrize(
@@ -40,7 +62,7 @@ def test_response_applicability_is_visible_without_false_findings(
     status, media, outcomes
 ):
     headers = {} if media is None else {"Content-Type": [media]}
-    result = analyze(HttpObservation(url=URL, status_code=status, headers=headers))
+    result = response(headers, status_code=status, media_type=None)
     assert [check.rule_id for check in result.checks] == [
         "x-content-type-options",
         "content-security-policy",
@@ -55,15 +77,13 @@ def test_response_applicability_is_visible_without_false_findings(
 
 
 def test_conflicting_content_types_do_not_guess_document_applicability():
-    result = analyze(
-        HttpObservation(
-            url=URL,
-            status_code=200,
-            headers={
-                "Content-Type": ["text/html", "application/json"],
-                "X-Content-Type-Options": ["nosniff"],
-            },
-        )
+    result = response(
+        {
+            "Content-Type": ["text/html", "application/json"],
+            "X-Content-Type-Options": ["nosniff"],
+        },
+        status_code=200,
+        media_type=None,
     )
     assert [check.status for check in result.checks] == [
         "passed",
@@ -74,19 +94,17 @@ def test_conflicting_content_types_do_not_guess_document_applicability():
 
 
 def test_header_evidence_uses_safe_conditions_not_raw_values():
-    result = analyze(
-        HttpObservation(
-            url=URL,
-            status_code=404,
-            headers={
-                "Content-Type": ["TEXT/HTML; charset=UTF-8"],
-                "X-Content-Type-Options": ["synthetic-secret-nosniff"],
-                "Content-Security-Policy": [
-                    "script-src 'nonce-synthetic-secret'; frame-ancestors *"
-                ],
-                "Set-Cookie": ["session=synthetic-secret-cookie"],
-            },
-        )
+    result = response(
+        {
+            "Content-Type": ["TEXT/HTML; charset=UTF-8"],
+            "X-Content-Type-Options": ["synthetic-secret-nosniff"],
+            "Content-Security-Policy": [
+                "script-src 'nonce-synthetic-secret'; frame-ancestors *"
+            ],
+            "Set-Cookie": ["session=synthetic-secret-cookie"],
+        },
+        status_code=404,
+        media_type=None,
     )
     assert "synthetic-secret" not in result.model_dump_json()
     assert [finding.evidence["condition"] for finding in result.findings] == [
@@ -101,15 +119,20 @@ def test_header_evidence_uses_safe_conditions_not_raw_values():
     )
 
 
-def response(headers):
+def response(headers, *, status_code=200, media_type="text/html"):
+    fields = {
+        name: [value] if isinstance(value, str) else value
+        for name, value in headers.items()
+    }
+    if media_type is not None and not any(
+        name.lower() == "content-type" for name in fields
+    ):
+        fields["Content-Type"] = [media_type]
     return analyze(
         HttpObservation(
-            status_code=200,
+            status_code=status_code,
             url=URL,
-            headers={
-                "Content-Type": ["text/html"],
-                **{name: [value] for name, value in headers.items()},
-            },
+            headers=fields,
         )
     )
 
@@ -228,19 +251,10 @@ def test_protected_response_with_mixed_case_header_names_has_no_findings():
     ],
 )
 def test_nosniff_uses_first_parsed_value(values, reported):
-    response = analyze(
-        HttpObservation(
-            status_code=200,
-            url=URL,
-            headers={
-                "Content-Type": ["text/html"],
-                **{"X-Content-Type-Options": values},
-            },
-        )
-    )
+    result = response({"X-Content-Type-Options": values})
     assert (
         "x-content-type-options"
-        in {item.evidence["rule_id"] for item in response.findings}
+        in {item.evidence["rule_id"] for item in result.findings}
     ) is reported
 
 
@@ -257,16 +271,7 @@ def test_nosniff_uses_first_parsed_value(values, reported):
     ],
 )
 def test_restrictive_enforced_policy_provides_framing_protection(policies):
-    result = analyze(
-        HttpObservation(
-            status_code=200,
-            url=URL,
-            headers={
-                "Content-Type": ["text/html"],
-                **{"Content-Security-Policy": policies},
-            },
-        )
-    )
+    result = response({"Content-Security-Policy": policies})
     assert "framing-protection" not in {
         item.evidence["rule_id"] for item in result.findings
     }
@@ -283,18 +288,8 @@ def test_restrictive_enforced_policy_provides_framing_protection(policies):
 def test_enforced_frame_ancestors_overrides_deny_even_without_recognized_protection(
     policy,
 ):
-    result = analyze(
-        HttpObservation(
-            status_code=200,
-            url=URL,
-            headers={
-                "Content-Type": ["text/html"],
-                **{
-                    "Content-Security-Policy": [policy],
-                    "X-Frame-Options": ["DENY"],
-                },
-            },
-        )
+    result = response(
+        {"Content-Security-Policy": [policy], "X-Frame-Options": ["DENY"]}
     )
     assert "framing-protection" in {
         item.evidence["rule_id"] for item in result.findings
@@ -302,18 +297,11 @@ def test_enforced_frame_ancestors_overrides_deny_even_without_recognized_protect
 
 
 def test_report_only_frame_ancestors_does_not_override_deny():
-    result = analyze(
-        HttpObservation(
-            status_code=200,
-            url=URL,
-            headers={
-                "Content-Type": ["text/html"],
-                **{
-                    "Content-Security-Policy-Report-Only": ["frame-ancestors *"],
-                    "X-Frame-Options": ["DENY"],
-                },
-            },
-        )
+    result = response(
+        {
+            "Content-Security-Policy-Report-Only": ["frame-ancestors *"],
+            "X-Frame-Options": ["DENY"],
+        }
     )
     assert {item.evidence["rule_id"] for item in result.findings} == {
         "x-content-type-options",
@@ -341,13 +329,7 @@ def test_report_only_frame_ancestors_does_not_override_deny():
 def test_repeated_frame_options_and_quoted_values_follow_browser_rules(
     values, reported
 ):
-    result = analyze(
-        HttpObservation(
-            status_code=200,
-            url=URL,
-            headers={"Content-Type": ["text/html"], **{"X-Frame-Options": values}},
-        )
-    )
+    result = response({"X-Frame-Options": values})
     assert (
         "framing-protection" in {item.evidence["rule_id"] for item in result.findings}
     ) is reported

@@ -4,10 +4,12 @@ from pydantic import ValidationError
 from app.api.schemas import (
     AssessmentCreate,
     EvidenceOut,
+    HeaderEvidenceData,
     ProjectCreate,
     TargetCreate,
 )
 from app.persistence.models import Evidence
+from tests.header_evidence import header_evidence
 
 
 @pytest.mark.parametrize("image", [None, "", "a" * 300, "a" * 301])
@@ -149,18 +151,11 @@ def test_names_respect_storage_limit(schema, base, length):
 def public_evidence(request):
     data = {"url": "https://example.test/app", **request.param}
     if data["header"] != "set-cookie":
-        data.update(
-            rule_id="framing-protection"
+        data = header_evidence(
+            "framing-protection"
             if data["header"] == "x-frame-options"
             else data["header"],
-            status_code=200,
-            media_type="text/html",
-            condition="missing",
-            expected={
-                "x-content-type-options": "nosniff",
-                "content-security-policy": "nonblank enforced CSP",
-                "x-frame-options": "recognized restrictive framing protection",
-            }[data["header"]],
+            url=data["url"],
         )
     return {
         "id": "evidence-id",
@@ -194,18 +189,117 @@ def test_public_evidence_payloads_round_trip_without_changing_fields(public_evid
 )
 def test_header_evidence_rejects_unvalidated_metadata(changes):
     data = {
-        "url": "https://example.test/",
-        "header": "x-content-type-options",
-        "rule_id": "x-content-type-options",
-        "status_code": 200,
-        "media_type": "text/html",
-        "condition": "missing",
-        "expected": "nosniff",
+        **header_evidence("x-content-type-options", url="https://example.test/"),
         **changes,
     }
     with pytest.raises(ValidationError) as error:
         EvidenceOut(id="e", finding_id="f", kind="http-response", data=data)
     assert "raw-secret" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "rule,header,condition,expected",
+    [
+        (rule, header, condition, expected)
+        for rule, header, conditions, expected in [
+            (
+                "x-content-type-options",
+                "x-content-type-options",
+                ("missing", "blank", "unrecognized"),
+                "nosniff",
+            ),
+            (
+                "content-security-policy",
+                "content-security-policy",
+                ("missing", "blank", "unrecognized"),
+                "nonblank enforced CSP",
+            ),
+            (
+                "framing-protection",
+                "x-frame-options",
+                ("missing", "blank", "unrecognized"),
+                "recognized restrictive framing protection",
+            ),
+            (
+                "framing-protection",
+                "content-security-policy",
+                ("unrecognized", "unrestricted"),
+                "recognized restrictive framing protection",
+            ),
+        ]
+        for condition in conditions
+    ],
+)
+def test_consistent_header_evidence_preserves_its_wire_fields(
+    rule, header, condition, expected
+):
+    data = {
+        "url": "http://demo-app:8080/",
+        "rule_id": rule,
+        "header": header,
+        "condition": condition,
+        "expected": expected,
+        "status_code": 404,
+        "media_type": "text/html",
+    }
+    evidence = HeaderEvidenceData.model_validate(data)
+    assert evidence.model_dump(mode="json") == data
+    assert (
+        HeaderEvidenceData.model_validate_json(evidence.model_dump_json()) == evidence
+    )
+
+
+@pytest.mark.parametrize(
+    "rule,changes",
+    [
+        ("x-content-type-options", {"header": "content-security-policy"}),
+        ("x-content-type-options", {"header": "x-frame-options"}),
+        ("content-security-policy", {"header": "x-content-type-options"}),
+        ("content-security-policy", {"header": "x-frame-options"}),
+        ("framing-protection", {"header": "x-content-type-options"}),
+        ("x-content-type-options", {"expected": "nonblank enforced CSP"}),
+        (
+            "content-security-policy",
+            {"expected": "recognized restrictive framing protection"},
+        ),
+        ("framing-protection", {"expected": "nosniff"}),
+        ("x-content-type-options", {"condition": "unrestricted"}),
+        ("content-security-policy", {"condition": "unrestricted"}),
+        ("framing-protection", {"condition": "unrestricted"}),
+        (
+            "framing-protection",
+            {"header": "content-security-policy", "condition": "missing"},
+        ),
+        (
+            "framing-protection",
+            {"header": "content-security-policy", "condition": "blank"},
+        ),
+    ],
+)
+def test_header_evidence_rejects_contradictory_rule_metadata(rule, changes):
+    with pytest.raises(ValidationError, match="contradicts its rule"):
+        HeaderEvidenceData.model_validate({**header_evidence(rule), **changes})
+
+
+@pytest.mark.parametrize(
+    "media,accepted",
+    [
+        ("a" * 127 + "/" + "b" * 127, True),
+        ("a" * 128 + "/b", False),
+        ("a/" + "b" * 128, False),
+        ("application/problem+json", True),
+        ("text/html; charset=utf-8", False),
+        ("TEXT/HTML", False),
+        ("text/\u212a", False),
+    ],
+)
+def test_public_media_type_limits_and_normalization(media, accepted):
+    data = header_evidence(media_type=media)
+    if accepted:
+        assert HeaderEvidenceData.model_validate(data).media_type == media
+    else:
+        with pytest.raises(ValidationError):
+            HeaderEvidenceData.model_validate(data)
 
 
 @pytest.mark.parametrize("field", ["cookie_value", "raw_header", "unexpected"])

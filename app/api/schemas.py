@@ -1,11 +1,24 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..assessments.policy import bounded_url
-from ..core.constraints import NAME_MAX_LENGTH, StoredHttpUrl, TargetImage
+from ..core.constraints import (
+    NAME_MAX_LENGTH,
+    NormalizedMediaType,
+    StoredHttpUrl,
+    TargetImage,
+)
 from ..persistence.models import AssessmentStatus
+from ..plugins.http_security_headers_contract import (
+    EVIDENCE_CONDITIONS,
+    RULE_REQUIREMENTS,
+    HeaderCondition,
+    HeaderName,
+    HeaderRequirement,
+    HeaderRuleId,
+)
 
 
 class ProjectCreate(BaseModel):
@@ -112,21 +125,22 @@ class ResponseEvidenceData(BaseModel):
 
 
 class HeaderEvidenceData(ResponseEvidenceData):
-    header: Literal[
-        "x-content-type-options", "content-security-policy", "x-frame-options"
-    ]
-    rule_id: Literal[
-        "x-content-type-options", "content-security-policy", "framing-protection"
-    ]
+    header: HeaderName
+    rule_id: HeaderRuleId
     status_code: int = Field(ge=100, le=599)
-    media_type: str | None = Field(
-        max_length=255,
-        pattern=r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
-    )
-    condition: Literal["missing", "blank", "unrecognized", "unrestricted"]
-    expected: Literal[
-        "nosniff", "nonblank enforced CSP", "recognized restrictive framing protection"
-    ]
+    media_type: NormalizedMediaType | None
+    condition: HeaderCondition
+    expected: HeaderRequirement
+
+    @model_validator(mode="after")
+    def consistent_rule_evidence(self):
+        conditions = EVIDENCE_CONDITIONS.get((self.rule_id, self.header), ())
+        if (
+            self.expected != RULE_REQUIREMENTS[self.rule_id]
+            or self.condition not in conditions
+        ):
+            raise ValueError("header evidence contradicts its rule")
+        return self
 
 
 class CookieEvidenceData(ResponseEvidenceData):

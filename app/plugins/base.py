@@ -17,6 +17,7 @@ from pydantic import (
 from ..core.constraints import (
     FINDING_SEVERITY_MAX_LENGTH,
     FINDING_TITLE_MAX_LENGTH,
+    MEDIA_TYPE_PATTERN,
     PLUGIN_ID_MAX_LENGTH,
     StoredHttpUrl,
 )
@@ -24,8 +25,7 @@ from ..core.constraints import (
 _PLUGIN_ID_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 _TOKEN = r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
 _MEDIA_TYPE = re.compile(
-    r"[ \t]*(?P<media>[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/"
-    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126})[ \t]*"
+    rf"[ \t]*(?P<media>(?ai:{MEDIA_TYPE_PATTERN}))[ \t]*"
     rf'(?:;[ \t]*{_TOKEN}[ \t]*=[ \t]*(?:{_TOKEN}|"(?:[^"\\\x00-\x1f\x7f]|\\[\x20-\x7e])*")[ \t]*)*'
 )
 

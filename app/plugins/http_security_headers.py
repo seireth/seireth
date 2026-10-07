@@ -1,6 +1,7 @@
 """Conservative checks for three browser response headers."""
 
 import re
+from dataclasses import dataclass
 
 from .base import (
     CheckOutcome,
@@ -9,6 +10,11 @@ from .base import (
     PluginFinding,
     PluginManifest,
     PluginResponse,
+)
+from .http_security_headers_contract import (
+    RULE_REQUIREMENTS,
+    HeaderCondition,
+    HeaderName,
 )
 
 _FRAME_HOST = re.compile(r"https?://(?:\*\.)?[a-zA-Z0-9.-]+(?::\d+)?")
@@ -59,17 +65,37 @@ def _restricts_framing(sources: list[str]) -> bool:
     )
 
 
-def _framing_protected(
+@dataclass(frozen=True)
+class FramingEvaluation:
+    protected: bool
+    header: HeaderName
+    condition: HeaderCondition | None = None
+
+
+def _evaluate_framing(
     headers: dict[str, list[str]],
     policies: list[str],
-) -> bool:
+) -> FramingEvaluation:
     ancestors = [_frame_ancestors(policy) for policy in policies]
 
     if any(sources is not None for sources in ancestors):
         # Any enforced frame-ancestors directive overrides X-Frame-Options.
         # Every policy is enforced, so one restrictive policy provides protection.
-        return any(
+        protected = any(
             _restricts_framing(sources) for sources in ancestors if sources is not None
+        )
+        if protected:
+            return FramingEvaluation(True, "content-security-policy")
+        unrestricted = any(
+            source in {"*", "http:", "https:"}
+            for sources in ancestors
+            if sources is not None
+            for source in sources
+        )
+        return FramingEvaluation(
+            False,
+            "content-security-policy",
+            "unrestricted" if unrestricted else "unrecognized",
         )
 
     options = {
@@ -77,8 +103,13 @@ def _framing_protected(
     }
 
     # Conflicting values involving DENY, SAMEORIGIN, or legacy ALLOWALL fail closed.
-    return bool(options & {"deny", "sameorigin"}) or (
+    protected = bool(options & {"deny", "sameorigin"}) or (
         len(options) > 1 and "allowall" in options
+    )
+    return FramingEvaluation(
+        protected,
+        "x-frame-options",
+        None if protected else _absent_condition(headers.get("x-frame-options", [])),
     )
 
 
@@ -87,21 +118,18 @@ _RULES = (
         "x-content-type-options",
         "Missing or ineffective X-Content-Type-Options",
         "The response does not enable nosniff MIME type protection.",
-        "nosniff",
         "Set X-Content-Type-Options: nosniff on the response.",
     ),
     (
         "content-security-policy",
         "Missing Content-Security-Policy",
         "The response has no nonblank enforced Content-Security-Policy header.",
-        "nonblank enforced CSP",
         "Define and test an enforced Content-Security-Policy appropriate for this application.",
     ),
     (
         "framing-protection",
         "Missing or ineffective framing protection",
         "The response has no restrictive enforced CSP frame-ancestors value recognized by this check, or an effective X-Frame-Options fallback.",
-        "recognized restrictive framing protection",
         "Use a restrictive enforced CSP frame-ancestors directive, or set X-Frame-Options to DENY or SAMEORIGIN when that directive is absent.",
     ),
 )
@@ -126,7 +154,7 @@ _NON_DOCUMENT_TYPES = {
 }
 
 
-def _absent_condition(fields: list[str]) -> str:
+def _absent_condition(fields: list[str]) -> HeaderCondition:
     if not fields:
         return "missing"
     return "blank" if not any(field.strip() for field in fields) else "unrecognized"
@@ -154,24 +182,6 @@ def _unevaluated_check(
     return CheckOutcome(rule_id=rule_id, status=status, reason=reason)
 
 
-def _framing_evidence(
-    headers: dict[str, list[str]], policies: list[str]
-) -> tuple[str, str]:
-    ancestors = [_frame_ancestors(policy) for policy in policies]
-    if any(sources is not None for sources in ancestors):
-        unrestricted = any(
-            source in {"*", "http:", "https:"}
-            for sources in ancestors
-            if sources is not None
-            for source in sources
-        )
-        return (
-            "content-security-policy",
-            "unrestricted" if unrestricted else "unrecognized",
-        )
-    return "x-frame-options", _absent_condition(headers.get("x-frame-options", []))
-
-
 def analyze(observation: HttpObservation) -> PluginResponse:
     """Evaluate declared response context; never retain arbitrary header values."""
     headers, media_type = observation.headers, observation.media_type
@@ -182,25 +192,32 @@ def analyze(observation: HttpObservation) -> PluginResponse:
         for policy in field.split(",")
         if policy.strip()
     ]
-    for rule_id, title, description, expected, remediation in _RULES:
+    for rule_id, title, description, remediation in _RULES:
+        expected = RULE_REQUIREMENTS[rule_id]
         unevaluated = _unevaluated_check(rule_id, observation.status_code, media_type)
         if unevaluated is not None:
             checks.append(unevaluated)
             continue
-        header = rule_id if rule_id != "framing-protection" else "x-frame-options"
-        condition = _absent_condition(headers.get(header, []))
         if rule_id == "x-content-type-options":
+            header = rule_id
+            condition = _absent_condition(headers.get(header, []))
             values = _header_values(headers.get(header, []))
             passed = bool(values) and values[0].lower() == "nosniff"
             passed_reason = "The first parsed value enables nosniff MIME protection."
         elif rule_id == "content-security-policy":
+            header = rule_id
+            condition = _absent_condition(headers.get(header, []))
             passed = bool(policies)
             passed_reason = (
                 "A nonblank enforced CSP is present; the full policy is not validated."
             )
         else:
-            header, condition = _framing_evidence(headers, policies)
-            passed = _framing_protected(headers, policies)
+            framing = _evaluate_framing(headers, policies)
+            passed, header, condition = (
+                framing.protected,
+                framing.header,
+                framing.condition,
+            )
             passed_reason = "Recognized restrictive framing protection is present."
         checks.append(
             CheckOutcome(

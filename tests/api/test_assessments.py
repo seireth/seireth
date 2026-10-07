@@ -3,6 +3,7 @@ from sqlalchemy import select
 
 from app.persistence import models
 from tests.api.helpers import snapshot, submission
+from tests.header_evidence import header_evidence
 
 
 def test_assessment_url_must_stay_within_target(client, project, target):
@@ -323,17 +324,7 @@ def evidence_row(database):
         with database.SessionLocal() as db:
             evidence = models.Evidence(
                 kind=kind,
-                data=data
-                if data is not None
-                else {
-                    "rule_id": "content-security-policy",
-                    "status_code": 200,
-                    "media_type": "text/html",
-                    "condition": "missing",
-                    "expected": "nonblank enforced CSP",
-                    "url": "http://demo-app:8080/",
-                    "header": "content-security-policy",
-                },
+                data=data if data is not None else header_evidence(),
             )
             if identity is not None:
                 evidence.id = identity
@@ -461,6 +452,26 @@ def test_unknown_assessment_evidence_returns_not_found(client):
             },
         ),
         ("http-response", ["synthetic-evidence-secret"]),
+        (
+            "http-response",
+            {
+                **header_evidence("x-content-type-options"),
+                "header": "content-security-policy",
+            },
+        ),
+        ("http-response", {**header_evidence(), "expected": "nosniff"}),
+        (
+            "http-response",
+            header_evidence("framing-protection", condition="unrestricted"),
+        ),
+        (
+            "http-response",
+            header_evidence(
+                "framing-protection",
+                header="content-security-policy",
+                condition="blank",
+            ),
+        ),
     ],
 )
 def test_invalid_stored_evidence_fails_without_partial_response_or_secret_diagnostics(

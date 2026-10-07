@@ -10,6 +10,7 @@ import pytest
 from examples.demo_app import verify as demo_verify
 from examples.demo_app.scenarios import BY_PATH, IMAGE, ORIGIN
 from examples.demo_app.verify import validate_outcome
+from tests.header_evidence import header_evidence
 
 
 def outcome(path):
@@ -66,21 +67,12 @@ def outcome(path):
                 "id": f"evidence-{index}",
                 "finding_id": f"finding-{index}",
                 "kind": "http-response",
-                "data": {
-                    "url": ORIGIN + path,
-                    "header": "x-frame-options"
-                    if header == "framing-protection"
-                    else header,
-                    "rule_id": header,
-                    "status_code": scenario.status,
-                    "media_type": scenario.media_type,
-                    "condition": "missing",
-                    "expected": {
-                        "x-content-type-options": "nosniff",
-                        "content-security-policy": "nonblank enforced CSP",
-                        "framing-protection": "recognized restrictive framing protection",
-                    }[header],
-                },
+                "data": header_evidence(
+                    header,
+                    url=ORIGIN + path,
+                    status_code=scenario.status,
+                    media_type=scenario.media_type,
+                ),
             }
             for index, header in enumerate(scenario.expected)
         ],

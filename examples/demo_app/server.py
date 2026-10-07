@@ -44,11 +44,12 @@ def page(title, content):
 
 
 def scenario_body(scenario):
-    if scenario.content_type == "application/json":
+    media_type = (scenario.content_type or "").split(";", 1)[0].strip().lower()
+    if media_type == "application/json":
         return json.dumps(
             {"scenario": scenario.name, "description": scenario.description}
         )
-    if scenario.content_type == "text/css":
+    if media_type == "text/css":
         return "/* Header applicability demo. */\nbody { color: #253047; }\n"
     fields = (
         "\n".join(f"{name}: {value}" for name, value in scenario.headers)
@@ -89,6 +90,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def respond_scenario(self, scenario, body, *, extra=()):
+        self.respond(
+            body,
+            status=scenario.status,
+            headers=scenario.headers,
+            content_type=scenario.content_type,
+            extra=extra,
+        )
+
     def ticket_table(self):
         with self.server.ticket_lock:
             tickets = list(self.server.tickets)
@@ -106,32 +116,27 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/slow":
             sleep(1.5)
         scenario = BY_PATH.get(path)
-        headers = scenario.headers if scenario else PROTECTED
-        status = scenario.status if scenario else 200
         if path in {"/assets/app.css", "/assets/app.js"}:
-            content_type = "text/css" if path.endswith(".css") else "text/javascript"
-            self.respond(
+            self.respond_scenario(
+                scenario,
                 (STATIC / path.rsplit("/", 1)[1]).read_bytes(),
-                headers=headers,
-                content_type=content_type,
             )
             return
         if path == "/api/tickets":
             with self.server.ticket_lock:
                 body = json.dumps({"items": self.server.tickets})
-            self.respond(body, headers=headers, content_type="application/json")
+            self.respond_scenario(scenario, body)
             return
         if path == "/health":
             self.respond('{"status":"ok"}', content_type="application/json")
             return
         if path == "/login":
-            self.respond(
+            self.respond_scenario(
+                scenario,
                 page(
                     "Continue to your workspace",
                     '<p>This demo uses a synthetic operator account.</p><a href="/account">Continue</a>',
                 ),
-                status=status,
-                headers=headers,
                 extra=(("Location", "/account"),),
             )
             return
@@ -141,26 +146,28 @@ class Handler(BaseHTTPRequestHandler):
 <article><span>Release readiness</span><strong>92%</strong><small>Next review on Thursday</small></article>
 <article><span>Support queue</span><strong id="ticket-count">3</strong><small id="api-status" role="status">Loading live queue...</small></article></section>
 <section class="panel"><h2>Today's priorities</h2><p>Review your team's work and follow up on open support tickets.</p>"""
-            self.respond(
+            self.respond_scenario(
+                scenario,
                 page(
                     "Good morning, demo operator",
                     content
                     + self.ticket_table()
                     + '<a class="button" href="/tickets">Manage tickets</a></section>',
-                )
+                ),
             )
             return
         if path == "/tickets":
             content = f"""<p class="intro">Track the requests that keep your workspace moving.</p><section class="panel">{self.ticket_table()}</section>
 <section class="panel"><h2>Create a ticket</h2><form action="/tickets" method="post"><label>Ticket title<input name="title" required maxlength="120" placeholder="What needs attention?"></label><button type="submit">Create ticket</button></form></section>"""
-            self.respond(page("Support tickets", content))
+            self.respond_scenario(scenario, page("Support tickets", content))
             return
         if path == "/account":
-            self.respond(
+            self.respond_scenario(
+                scenario,
                 page(
                     "Account settings",
                     '<section class="panel"><h2>Demo operator</h2><dl><dt>Email</dt><dd>operator@northstar.example</dd><dt>Workspace</dt><dd>Release operations</dd><dt>Role</dt><dd>Workspace administrator</dd></dl><p>This profile contains synthetic data.</p></section>',
-                )
+                ),
             )
             return
         if path == "/lab":
@@ -176,12 +183,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             return
         if scenario:
-            self.respond(
-                scenario_body(scenario),
-                status=status,
-                headers=headers,
-                content_type=scenario.content_type,
-            )
+            self.respond_scenario(scenario, scenario_body(scenario))
             return
         self.respond(
             page(
