@@ -185,15 +185,6 @@ Successful bundling does not imply valid types; keep `Frontend quality` required
 See [Dependency security](#dependency-security) for the repository settings and
 rollout checks. Workflow YAML alone does not enforce merge requirements.
 
-SonarQube configuration lives in the build action arguments. Keep automatic
-analysis disabled and configure the repository Actions secret `SONAR_TOKEN`.
-After both test suites and report checks pass, the scanner waits up to 300 seconds
-for the existing quality gate; scan errors, processing timeouts, or a failed gate
-fail the build job. Fork pull requests and Dependabot runs execute tests but skip
-SonarQube; other runs fail clearly if the token is missing. Diagnostics and
-database cleanup run on failure, including analysis failures. Coverage generation
-and scanning share a job and require no report transfer between workflows.
-
 Build frontend assets before packaging. Clear setuptools' staging directory so
 hashed assets from earlier builds cannot enter the wheel:
 
