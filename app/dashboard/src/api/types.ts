@@ -121,6 +121,15 @@ export interface EvidenceResponse {
   cleanup_pending: boolean;
   evidence: Evidence[];
 }
+export interface AssessmentReport {
+  schema_version: 1;
+  generated_at: string;
+  project: Project;
+  target: Target;
+  assessment: Assessment;
+  findings: Finding[];
+  evidence: Evidence[];
+}
 export interface Audit {
   id: string;
   action: string;

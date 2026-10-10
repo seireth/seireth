@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router";
 import { expect, it, vi } from "vitest";
 import type { Assessment, Status } from "../api/types";
 import AssessmentPage from "./AssessmentPage";
+import { blobText, multiFindingReport, reportFixture } from "../test/report";
 
 const assessment = (status: Status, cleanup_pending = false): Assessment => ({
   id: "a",
@@ -99,25 +100,9 @@ it("keeps findings when evidence fails and retries evidence independently", asyn
       evidenceCalls++;
       return evidenceCalls === 1
         ? json({ detail: "stored evidence is invalid" }, 500)
-        : json({
-            evidence: [
-              {
-                id: "e",
-                finding_id: "f",
-                kind: "http-response",
-                data: {
-                  url: "http://demo.test/",
-                  header: "set-cookie",
-                  cookie_name: "original",
-                  rule: "samesite-none-without-secure",
-                  samesite: "none",
-                  secure: false,
-                },
-              },
-            ],
-          });
+        : json({ evidence: multiFindingReport.evidence });
     }
-    if (path.endsWith("/results")) return json({ findings: [finding] });
+    if (path.endsWith("/results")) return json({ findings: multiFindingReport.findings });
     return json(
       path.endsWith("/assessments/a")
         ? assessment("completed")
@@ -131,15 +116,47 @@ it("keeps findings when evidence fails and retries evidence independently", asyn
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "stored evidence is invalid",
   );
-  expect(screen.getByText(finding.description)).toBeVisible();
+  expect(screen.getAllByText(multiFindingReport.findings[0].description)[0]).toBeVisible();
   expect(document.querySelector("script")).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Try again" }));
-  await userEvent.click(screen.getByText("Evidence", { selector: "summary" }));
+  for (const summary of screen.getAllByText("Evidence", { selector: "summary" }))
+    await userEvent.click(summary);
   expect(await screen.findByText("original")).toBeVisible();
+  const articles = multiFindingReport.findings.map((item) =>
+    screen.getByRole("heading", { name: item.title }).closest("article")!,
+  );
+  expect(within(articles[0]).getAllByRole("region", { name: "Finding evidence" }).map((region) => region.textContent))
+    .toEqual([expect.stringContaining("original"), expect.stringContaining("second")]);
+  expect(within(articles[1]).getAllByRole("region", { name: "Finding evidence" }))
+    .toHaveLength(1);
+  expect(within(articles[1]).getByText("other")).toBeVisible();
+  expect(within(articles[2]).queryByRole("region", { name: "Finding evidence" })).toBeNull();
   expect(evidenceCalls).toBe(2);
   expect(
     fetcher.mock.calls.filter(([path]) => path.endsWith("/results")),
   ).toHaveLength(1);
+});
+
+it("keeps request fields and plugin counts while target metadata loads", async () => {
+  const item = { ...multiFindingReport.assessment, url: "http://demo.test/?text=<script>synthetic</script>" };
+  const targetUrl = "http://demo.test/?text=<img src=x onerror=alert(1)>";
+  let resolveTarget!: (response: Response) => void;
+  show(vi.fn(async (path: string) => {
+    if (path.includes("/targets/")) return new Promise<Response>((resolve) => { resolveTarget = resolve; });
+    if (path.endsWith("/results")) return json({ findings: [] });
+    if (path.endsWith("/evidence")) return json({ evidence: [] });
+    return json(path.endsWith("/assessments/a") ? item : metadata(path));
+  }));
+  const request = within((await screen.findByRole("heading", { name: "Assessment request" })).closest("section")!);
+  expect(request.getByText("Loading…")).toBeVisible();
+  expect(request.getByText(item.url)).toBeVisible();
+  expect(request.getByText("http-security-headers, cookie-security")).toBeVisible();
+  expect(request.getByText("http-security-headers: 0 · cookie-security: 3")).toBeVisible();
+  await waitFor(() => expect(resolveTarget).toBeDefined());
+  resolveTarget(json({ ...metadata("/targets/t"), url: targetUrl }));
+  expect(await request.findByText(targetUrl)).toBeVisible();
+  expect(request.queryByText("Loading…")).toBeNull();
+  expect(document.querySelector("script, img")).toBeNull();
 });
 
 it("refreshes after a cancellation race without retrying the write", async () => {
@@ -214,4 +231,107 @@ it("aborts an in-flight assessment read when the page is disposed", async () => 
   await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
   unmount();
   expect(signal?.aborted).toBe(true);
+});
+
+function exportFetcher(reportResponse: (options: RequestInit) => Promise<Response>) {
+  return vi.fn(async (path: string, options: RequestInit) => {
+    if (path.endsWith("/report")) return reportResponse(options);
+    if (path.endsWith("/results")) return json({ findings: [finding] });
+    if (path.endsWith("/evidence")) return json({ evidence: [] });
+    return json(path.endsWith("/assessments/a") ? assessment("completed") : metadata(path));
+  });
+}
+
+it.each(["JSON", "HTML"])("downloads %s from a fresh report without changing page reads", async (format) => {
+  const createObjectURL = vi.fn((blob: Blob) => {
+    expect(blob).toBeInstanceOf(Blob);
+    return "blob:report";
+  });
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = revokeObjectURL; });
+  let filename = "";
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { filename = this.download; });
+  try {
+    const fetcher = exportFetcher(async () => json(reportFixture));
+    show(fetcher);
+    const button = await screen.findByRole("button", { name: `Download ${format}` });
+    await userEvent.click(button);
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    const blob = createObjectURL.mock.calls[0][0] as Blob;
+    const text = await blobText(blob);
+    expect(filename).toBe(`seireth-assessment-a.${format.toLowerCase()}`);
+    if (format === "JSON") expect(JSON.parse(text)).toEqual(reportFixture);
+    else expect(new DOMParser().parseFromString(text, "text/html").querySelector("script, img")).toBeNull();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"));
+    await userEvent.click(button);
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(2));
+    expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/report"))).toHaveLength(2);
+    expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/results"))).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: finding.title })).toBeVisible();
+  } finally { click.mockRestore(); }
+});
+
+it("disables both exports during a request and allows retry after failure", async () => {
+  let resolve!: (response: Response) => void;
+  const fetcher = exportFetcher(() => new Promise((done) => { resolve = done; }));
+  show(fetcher);
+  const button = await screen.findByRole("button", { name: "Download JSON" });
+  await userEvent.click(button);
+  expect(button).toBeDisabled();
+  const html = screen.getByRole("button", { name: "Download HTML" });
+  expect(html).toBeDisabled();
+  await userEvent.click(html);
+  expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/report"))).toHaveLength(1);
+  resolve(json({ detail: "stored report data is invalid" }, 500));
+  expect(await screen.findByRole("alert")).toHaveTextContent("stored report data is invalid");
+  expect(button).toBeEnabled();
+  expect(screen.getByRole("heading", { name: finding.title })).toBeVisible();
+  await userEvent.click(html);
+  expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/report"))).toHaveLength(2);
+  resolve(json({ detail: "assessment is not finished" }, 409));
+  await screen.findByText("assessment is not finished");
+});
+
+it("shows HTML rendering failures without downloading and allows a successful retry", async () => {
+  const createObjectURL = vi.fn(() => "blob:report");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = revokeObjectURL; });
+  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  let reportCalls = 0;
+  try {
+    const fetcher = exportFetcher(async () => json(reportCalls++ === 0 ? {
+      ...reportFixture, assessment: { ...reportFixture.assessment,
+        result: { ...reportFixture.assessment.result, completed_at: "20261007T120000+0000" },
+      },
+    } : reportFixture));
+    show(fetcher);
+    const html = await screen.findByRole("button", { name: "Download HTML" });
+    await userEvent.click(html);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not generate the HTML report.");
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+    expect(html).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Download JSON" })).toBeEnabled();
+    expect(screen.getByRole("heading", { name: finding.title })).toBeVisible();
+    await userEvent.click(html);
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect(reportCalls).toBe(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"));
+  } finally { click.mockRestore(); }
+});
+
+it("aborts a pending export and suppresses downloads after navigation", async () => {
+  let signal: AbortSignal | undefined;
+  const createObjectURL = vi.fn();
+  vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; });
+  const fetcher = exportFetcher((options) => {
+    signal = options.signal as AbortSignal;
+    return new Promise((_resolve, reject) => signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError"))));
+  });
+  const { unmount } = show(fetcher);
+  await userEvent.click(await screen.findByRole("button", { name: "Download HTML" }));
+  unmount();
+  expect(signal?.aborted).toBe(true);
+  expect(createObjectURL).not.toHaveBeenCalled();
 });

@@ -17,14 +17,48 @@ from .schemas import (
     AssessmentCreate,
     AssessmentEvidenceOut,
     AssessmentOut,
+    AssessmentReportOut,
     AssessmentResultsOut,
     EvidenceOut,
     PageOut,
+    ReportAssessmentOut,
 )
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _ASSESSMENT_NOT_FOUND_RESPONSE = {"description": "Assessment not found"}
+
+
+def load_assessment(
+    db: Session, assessment_id: str
+) -> tuple[models.Assessment, models.Project]:
+    item = db.get(models.Assessment, assessment_id)
+    if not item:
+        raise HTTPException(404, "assessment not found")
+    project = authorize_project(db, item.project_id)
+    return item, project
+
+
+def load_evidence(db: Session, item: models.Assessment) -> list[EvidenceOut]:
+    evidence = []
+    if item.status == models.AssessmentStatus.completed:
+        rows = db.scalars(
+            select(models.Evidence)
+            .join(models.Finding)
+            .where(models.Finding.assessment_id == item.id)
+            .order_by(models.Evidence.id)
+        )
+        for row in rows:
+            try:
+                evidence.append(EvidenceOut.model_validate(row, from_attributes=True))
+            except ValidationError:
+                logger.error(
+                    "Invalid stored evidence for assessment %s, evidence %s",
+                    item.id,
+                    row.id,
+                )
+                raise HTTPException(500, "stored evidence is invalid") from None
+    return evidence
 
 
 @router.get("/projects/{project_id}/assessments", response_model=PageOut[AssessmentOut])
@@ -101,10 +135,7 @@ def create_assessment(
 def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
     """Return the persisted state of one assessment."""
 
-    item = db.get(models.Assessment, assessment_id)
-    if not item:
-        raise HTTPException(404, "assessment not found")
-    authorize_project(db, item.project_id)
+    item, _ = load_assessment(db, assessment_id)
     return item
 
 
@@ -116,7 +147,7 @@ def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
 def get_results(assessment_id: str, db: Session = Depends(get_db)):
     """Return the assessment status, JSON result, and normalized findings."""
 
-    item = get_assessment(assessment_id, db)
+    item, _ = load_assessment(db, assessment_id)
     return {
         "assessment_id": item.id,
         "status": item.status,
@@ -136,31 +167,47 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
 )
 def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
     """Return validated evidence for an authorized, completed assessment."""
-    item = get_assessment(assessment_id, db)
-    evidence = []
-    if item.status == models.AssessmentStatus.completed:
-        rows = db.scalars(
-            select(models.Evidence)
-            .join(models.Finding)
-            .where(models.Finding.assessment_id == item.id)
-            .order_by(models.Evidence.id)
-        )
-        for row in rows:
-            try:
-                evidence.append(EvidenceOut.model_validate(row, from_attributes=True))
-            except ValidationError:
-                logger.error(
-                    "Invalid stored evidence for assessment %s, evidence %s",
-                    item.id,
-                    row.id,
-                )
-                raise HTTPException(500, "stored evidence is invalid") from None
+    item, _ = load_assessment(db, assessment_id)
     return AssessmentEvidenceOut(
         assessment_id=item.id,
         status=item.status,
         cleanup_pending=item.cleanup_pending,
-        evidence=evidence,
+        evidence=load_evidence(db, item),
     )
+
+
+@router.get(
+    "/assessments/{assessment_id}/report",
+    response_model=AssessmentReportOut,
+    response_model_exclude_unset=True,
+    responses={
+        404: _ASSESSMENT_NOT_FOUND_RESPONSE,
+        409: {"description": "Assessment is not finished"},
+        500: {"description": "Stored report data or evidence is invalid"},
+    },
+)
+def get_report(assessment_id: str, response: Response, db: Session = Depends(get_db)):
+    """Assemble a current, read-only snapshot from documented public fields."""
+    item, project = load_assessment(db, assessment_id)
+    if item.status not in {"completed", "failed", "cancelled"}:
+        raise HTTPException(409, "assessment is not finished")
+    # Capture scalar state once; cleanup reconciliation can update future reports.
+    try:
+        assessment = ReportAssessmentOut.model_validate(item)
+        report = AssessmentReportOut(
+            schema_version=1,
+            generated_at=models.now(),
+            project=project,
+            target=db.get(models.Target, item.target_id),
+            assessment=assessment,
+            findings=sorted(item.findings, key=lambda finding: finding.id),
+            evidence=load_evidence(db, item),
+        )
+    except ValidationError:
+        logger.error("Invalid stored report data for assessment %s", item.id)
+        raise HTTPException(500, "stored report data is invalid") from None
+    response.headers["Cache-Control"] = "no-store"
+    return report
 
 
 @router.post(

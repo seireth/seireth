@@ -1,7 +1,7 @@
 """Typed, JSON-compatible contract for response-analysis plugins."""
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -106,15 +106,18 @@ class CheckOutcome(ContractModel):
         return value
 
 
+def require_unique_check_ids(checks: Sequence[CheckOutcome]) -> None:
+    if len({check.rule_id for check in checks}) != len(checks):
+        raise ValueError("check rule IDs must be unique")
+
+
 class PluginResponse(ContractModel):
     findings: tuple[PluginFinding, ...]
     checks: tuple[CheckOutcome, ...] = ()
 
     @model_validator(mode="after")
     def unique_checks(self):
-        ids = [check.rule_id for check in self.checks]
-        if len(ids) != len(set(ids)):
-            raise ValueError("check rule IDs must be unique")
+        require_unique_check_ids(self.checks)
         return self
 
 

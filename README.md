@@ -22,6 +22,8 @@ SEIRETH is a local, single-operator GUI and API for passive HTTP header and cook
 security checks. Docker assessments inspect disposable instances of locally available
 images. Findings, evidence, and audit events are stored in PostgreSQL 18, and
 SEIRETH verifies cleanup after execution.
+Finished assessments can be downloaded as versioned JSON or self-contained HTML
+with findings, remediation, validated evidence, and cleanup status.
 
 ## How it works
 
