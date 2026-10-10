@@ -185,27 +185,6 @@ Successful bundling does not imply valid types; keep `Frontend quality` required
 See [Dependency security](#dependency-security) for the repository settings and
 rollout checks. Workflow YAML alone does not enforce merge requirements.
 
-SonarQube configuration lives in the build action arguments. Keep automatic
-analysis disabled and configure a valid project analysis token named `SONAR_TOKEN`
-in both repository Actions secrets and Dependabot secrets. Add the latter under
-**Settings > Secrets and variables > Dependabot > New repository secret**.
-Dependabot-triggered workflows use Dependabot secrets through the same
-`${{ secrets.SONAR_TOKEN }}` reference; ordinary runs use Actions secrets. See
-[GitHub's secret access documentation](https://docs.github.com/en/code-security/reference/supply-chain-security/troubleshoot-dependabot/dependabot-on-actions#accessing-secrets).
-
-After both test suites and report checks pass, the scanner submits the analysis.
-Keep `SonarCloud Code Analysis` required in `Protect main`, with SonarCloud as its
-source, so its quality gate also blocks merging. Missing tokens or scanner errors
-fail the build job. Same-repository pull requests, including Dependabot, run
-SonarQube; fork pull requests execute tests but skip the token check and scan.
-Diagnostics and database cleanup run on failure, including analysis failures.
-Coverage generation and scanning share a job and require no report transfer
-between workflows.
-
-After merging changes to these workflow conditions, rebase existing Dependabot
-pull requests by commenting `@dependabot rebase` on each PR. Verify all six job
-checks and `SonarCloud Code Analysis` pass on the new head before merging.
-
 Build frontend assets before packaging. Clear setuptools' staging directory so
 hashed assets from earlier builds cannot enter the wheel:
 
