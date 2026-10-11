@@ -195,7 +195,7 @@ def get_report(assessment_id: str, response: Response, db: Session = Depends(get
     try:
         assessment = ReportAssessmentOut.model_validate(item)
         report = AssessmentReportOut(
-            schema_version=1,
+            schema_version=2,
             generated_at=models.now(),
             project=project,
             target=db.get(models.Target, item.target_id),

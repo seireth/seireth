@@ -92,7 +92,7 @@ def test_report_matches_existing_reads_and_is_ordered_read_only(
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     report = response.json()
-    assert report["schema_version"] == 1
+    assert report["schema_version"] == 2
     assert datetime.fromisoformat(
         report["generated_at"]
     ).utcoffset() == timezone.utc.utcoffset(None)

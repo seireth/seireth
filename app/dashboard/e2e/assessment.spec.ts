@@ -97,7 +97,7 @@ test("creates, refreshes, and retrieves a real cookie assessment with verified c
   }
   const jsonDownload = await downloadReport("JSON");
   const report = JSON.parse(jsonDownload.content) as AssessmentReport;
-  expect(report.schema_version).toBe(1);
+  expect(report.schema_version).toBe(2);
   expect(report.assessment.result).toEqual(results.result);
   expect(report.findings).toEqual([...results.findings].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   expect(report.evidence).toEqual(evidence.evidence);

@@ -5,6 +5,7 @@ def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monke
     assert [item["id"] for item in catalog] == [
         "http-security-headers",
         "cookie-security",
+        "csp-policy",
     ]
     assert all(set(item) == {"id", "name", "description"} for item in catalog)
     assert all(item["name"].strip() and item["description"].strip() for item in catalog)

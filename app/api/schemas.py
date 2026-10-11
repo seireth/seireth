@@ -12,6 +12,16 @@ from ..core.constraints import (
 )
 from ..persistence.models import AssessmentStatus
 from ..plugins.base import CheckOutcome, require_unique_check_ids
+from ..plugins.csp_policy_contract import (
+    CONTEXT_CONDITIONS,
+    CONTEXT_DIRECTIVES,
+    MAX_CSP_POLICIES,
+    RULE_CONTEXTS,
+    CspCondition,
+    CspContext,
+    CspDirective,
+    CspRuleId,
+)
 from ..plugins.http_security_headers_contract import (
     EVIDENCE_CONDITIONS,
     RULE_REQUIREMENTS,
@@ -20,6 +30,7 @@ from ..plugins.http_security_headers_contract import (
     HeaderRequirement,
     HeaderRuleId,
 )
+from ..plugins.response_context import unevaluated_check
 
 
 class ProjectCreate(BaseModel):
@@ -144,6 +155,60 @@ class HeaderEvidenceData(ResponseEvidenceData):
         return self
 
 
+class CspPolicyObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
+
+    policy_index: int = Field(ge=1, le=MAX_CSP_POLICIES)
+    context: CspContext
+    directive: CspDirective | None
+    condition: CspCondition
+
+    @model_validator(mode="after")
+    def consistent_observation(self):
+        if (
+            self.condition not in CONTEXT_CONDITIONS[self.context]
+            or (self.condition == "missing-directive") != (self.directive is None)
+            or (
+                self.directive is not None
+                and self.directive not in CONTEXT_DIRECTIVES[self.context]
+            )
+        ):
+            raise ValueError("CSP observation contradicts its execution context")
+        return self
+
+
+class CspEvidenceData(ResponseEvidenceData):
+    header: Literal["content-security-policy"]
+    rule_id: CspRuleId
+    status_code: int = Field(ge=100, le=599)
+    media_type: NormalizedMediaType
+    policy_count: int = Field(ge=1, le=MAX_CSP_POLICIES)
+    observations: list[CspPolicyObservation] = Field(
+        min_length=1, max_length=2 * MAX_CSP_POLICIES
+    )
+
+    @model_validator(mode="after")
+    def consistent_policy_coverage(self):
+        covered = {}
+        for item in self.observations:
+            if item.context not in RULE_CONTEXTS[self.rule_id]:
+                raise ValueError("CSP evidence contradicts its rule")
+            indexes = covered.setdefault(item.context, set())
+            if item.policy_index in indexes:
+                raise ValueError(
+                    "CSP observations must be unique per policy and context"
+                )
+            indexes.add(item.policy_index)
+        expected = set(range(1, self.policy_count + 1))
+        if unevaluated_check(
+            self.rule_id, self.status_code, self.media_type
+        ) is not None or any(indexes != expected for indexes in covered.values()):
+            raise ValueError(
+                "CSP evidence requires document context and complete policy coverage"
+            )
+        return self
+
+
 class CookieEvidenceData(ResponseEvidenceData):
     header: Literal["set-cookie"]
     cookie_name: str = Field(min_length=1)
@@ -175,6 +240,7 @@ class EvidenceOut(BaseModel):
     kind: Literal["http-response"]
     data: (
         HeaderEvidenceData
+        | CspEvidenceData
         | SameSiteEvidenceData
         | SecurePrefixEvidenceData
         | HostPrefixEvidenceData
@@ -266,7 +332,7 @@ class ReportAssessmentOut(AssessmentOut):
 
 
 class AssessmentReportOut(BaseModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     generated_at: datetime
     project: ProjectOut
     target: TargetOut

@@ -23,8 +23,8 @@ child paths. Ownership, URL boundaries, plugins, and local image availability ar
 rechecked during submission, execution, and recovery retries. Requests use one
 development actor; there is no login flow.
 
-Get selectable IDs from `GET /api/v1/plugins`. The built-ins are `http-security-headers`
-and `cookie-security`; select either or both. Selection must be explicit, nonempty,
+Get selectable IDs from `GET /api/v1/plugins`. The built-ins are `http-security-headers`,
+`cookie-security`, and `csp-policy`; select any combination. Selection must be explicit, nonempty,
 and contain unique active IDs. Registering a plugin never automatically selects it.
 See [Plugin development](plugins.md) to add checks.
 
@@ -103,12 +103,17 @@ for a `completed`, `failed`, or `cancelled` assessment. Other states return 409
 after project authorization. The dashboard's **Download JSON** and **Download HTML**
 buttons each fetch a fresh snapshot; HTML generation happens in the browser.
 
-The report contains `schema_version` (currently 1), UTC `generated_at`, the public
+The report contains `schema_version` (currently 2), UTC `generated_at`, the public
 `project` and `target`, `assessment`, ID-ordered `findings`, and ID-ordered
 `evidence`. Request and plugin-selection metadata are preserved. The assessment's
 result projects only documented execution, cleanup, response, and check-outcome
 fields; unknown stored result fields are excluded. Missing outcomes remain missing.
-The existing results and evidence endpoints retain their response shapes.
+The existing results and evidence endpoints retain their envelopes, with a new
+strict CSP evidence variant. Version 2 signals that expanded evidence vocabulary:
+clients validating reports or live evidence must accept the CSP variant. Every
+new snapshot uses version 2, including reports of older assessments. Existing
+exported version 1 files are not changed, and historical records receive no
+invented CSP checks or findings.
 
 Reports do not rerun checks or change saved records. Cleanup can remain pending
 in a terminal assessment; the report states that uncertainty. Regenerating it
@@ -184,6 +189,66 @@ When no such directive exists, the plugin uses `X-Frame-Options`, including
 repeated/comma-separated values and conflicts that block framing.
 See the [implementation](../app/plugins/http_security_headers.py) for exact matching.
 These checks do not fully validate CSP, prove security, or assess every response.
+
+## CSP policy checks
+
+Select `csp-policy` (**CSP policy** in the catalog) independently or alongside the
+baseline header checks. It analyzes the same fetched response without additional
+requests. A nonblank header can pass the baseline presence check while the CSP
+policy plugin identifies overly broad script permissions.
+
+| Rule | Covered permission | Severity |
+| --- | --- | --- |
+| `csp-script-sources` | Arbitrary HTTP(S) origins for parser-inserted scripts without nonce/integrity authorization | Medium |
+| `csp-inline-scripts` | Arbitrary inline script elements or inline event handlers | Medium |
+| `csp-eval` | Unrestricted JavaScript string evaluation | Low |
+
+For example, `script-src https: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'`
+passes CSP presence and framing, but fails all three policy checks. A policy using
+`script-src 'self'` has no covered policy finding; that does not certify its
+allowlist or application as secure.
+
+The plugin applies the same document-response eligibility as baseline CSP checks,
+including HTML error pages. Missing or blank enforced CSP yields three skipped
+checks; report-only headers do not enforce protection. Multiple policies combine
+restrictively. Fallbacks, first duplicate directives, syntactic nonces/hashes,
+`strict-dynamic`, and a script-blocking CSP sandbox are accounted for. Nonce
+recognition does not measure randomness, reuse, or correspondence with document
+elements. Nonces alone do not suppress broad network sources.
+
+Network-source coverage recognizes `*`, `http:`, `https:`, and global HTTP(S)
+wildcard hosts without path or port constraints. Specific hosts are outside the
+broad-source finding. Unsupported permissions such as `data:`, `blob:`, constrained
+global wildcards, and relevant Trusted Types interactions remain inconclusive
+when no supported restriction or permission settles the covered capability.
+`wasm-unsafe-eval` does not permit JavaScript string evaluation.
+
+Trusted Types requirements and evaluation keyword interactions are assessed across
+the enforced policy set. When enabled, `trusted-types-eval` keeps evaluation
+inconclusive even with other source-list restrictions; a script-blocking sandbox
+remains conclusive. Directives containing non-ASCII text are discarded as browsers
+discard them, while still counting toward the analysis limits.
+
+Analysis is limited to 64 KiB of UTF-8 CSP text, 32 fields, 32 nonblank policies,
+128 directives per policy, and 256 source tokens per directive. Duplicate and
+ignored directives count toward limits. Exceeding any limit returns three
+inconclusive checks and no findings; partial input never certifies a policy.
+
+CSP evidence uses the existing `http-response` kind. It contains the response URL,
+status, document media type, `header: "content-security-policy"`, rule ID,
+`policy_count`, and `observations`. Each observation identifies its one-based
+`policy_index`, `context` (`network-script`, `inline-script`, `script-attribute`,
+or `eval`), effective `directive` (or null), and a closed `condition`:
+`missing-directive`, `wildcard-source`, `http-scheme-source`,
+`https-scheme-source`, `global-host-source`, `unsafe-inline`, or `unsafe-eval`.
+Every reported context has complete policy coverage. Raw policies, nonces, hashes,
+allowlist hostnames, and report destinations are excluded.
+
+Findings describe header permissions. Response bodies and meta-delivered CSP are
+not inspected, and findings do not establish exploitable XSS. Browser probes test
+the supported semantics independently of analyzer expectations. See the
+[CSP3 algorithms](https://www.w3.org/TR/2026/WD-CSP3-20260916/) and
+[script-src reference](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/script-src).
 
 ## Cookie checks
 

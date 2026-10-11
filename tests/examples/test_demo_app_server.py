@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from examples.demo_app import server as demo_server
-from examples.demo_app.scenarios import SCENARIOS, Scenario
+from examples.demo_app.scenarios import CSP_SCENARIOS, SCENARIOS, Scenario
 
 
 def assert_declared_metadata(response, scenario):
@@ -138,3 +138,31 @@ def test_specialized_route_bodies_and_redirect_destination_are_preserved(server)
 def test_scenarios_emit_declared_metadata(server, scenario):
     response = server.get(scenario.path)
     assert_declared_metadata(response, scenario)
+
+
+@pytest.mark.parametrize("scenario", CSP_SCENARIOS, ids=lambda scenario: scenario.path)
+def test_csp_scenarios_emit_separate_policy_fields(server, scenario):
+    response = server.get(scenario.path)
+    assert_declared_metadata(response, scenario)
+    assert response.headers.get_list("content-security-policy") == [
+        value
+        for name, value in scenario.headers
+        if name.lower() == "content-security-policy"
+    ]
+    assert "CSP policy findings:" in response.text
+
+
+def test_baseline_scenario_does_not_invent_csp_expectations(server):
+    response = server.get("/lab/csp-comma")
+    assert "CSP policy findings:" not in response.text
+    assert response.headers["content-security-policy"] == (
+        "frame-ancestors *, frame-ancestors 'none'"
+    )
+
+
+def test_csp_lab_preserves_the_original_baseline_matrix(server):
+    assert server.get("/lab").text.count("<tr><td>") == 44
+    response = server.get("/csp")
+    assert response.text.count("<tr><td>") == 7
+    assert "CSP response scenarios" in response.text
+    assert "inconclusive" in response.text

@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from .base import Plugin, PluginManifest
 from .cookie_security import PLUGIN as COOKIE_SECURITY_PLUGIN
+from .csp_policy import PLUGIN as CSP_POLICY_PLUGIN
 from .http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 
 
@@ -55,4 +56,6 @@ class PluginRegistry:
         ]
 
 
-registry = PluginRegistry(plugins=(SECURITY_HEADERS_PLUGIN, COOKIE_SECURITY_PLUGIN))
+registry = PluginRegistry(
+    plugins=(SECURITY_HEADERS_PLUGIN, COOKIE_SECURITY_PLUGIN, CSP_POLICY_PLUGIN)
+)

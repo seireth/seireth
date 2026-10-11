@@ -34,6 +34,18 @@ class Scenario:
     content_type: str | None = "text/html; charset=utf-8"
     media_type: str | None = "text/html"
     checks: tuple[str, str, str] | None = None
+    csp_checks: tuple[str, str, str] | None = None
+
+    @property
+    def csp_rules(self):
+        return tuple(
+            rule
+            for rule, status in zip(
+                ("csp-script-sources", "csp-inline-scripts", "csp-eval"),
+                self.csp_checks or (),
+            )
+            if status == "failed"
+        )
 
     @property
     def expected_checks(self):
@@ -382,6 +394,79 @@ COOKIE_SCENARIOS = (
         (*PROTECTED, ("Set-Cookie", "theme=synthetic-theme; SameSite=Lax")),
     ),
 )
+
+
+def csp_case(path, name, description, policies, checks):
+    return Scenario(
+        "/csp/" + path,
+        name,
+        description,
+        (
+            ("X-Content-Type-Options", "nosniff"),
+            *((("Content-Security-Policy", policy) for policy in policies)),
+        ),
+        csp_checks=checks,
+    )
+
+
+CSP_SCENARIOS = (
+    csp_case(
+        "permissive",
+        "Permissive script permissions",
+        "CSP presence passes, while HTTPS sources, inline scripts, and eval remain permitted.",
+        ("script-src https: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'",),
+        ("failed", "failed", "failed"),
+    ),
+    csp_case(
+        "protected",
+        "Restricted scripts",
+        "An application-specific script policy has none of the covered weaknesses.",
+        (APPLICATION_CSP,),
+        ("passed", "passed", "passed"),
+    ),
+    csp_case(
+        "nonce",
+        "Nonce with broad HTTPS sources",
+        "A syntactically recognized nonce suppresses unsafe-inline but leaves HTTPS sources broad.",
+        ("script-src https: 'nonce-YWJj' 'unsafe-inline'; frame-ancestors 'none'",),
+        ("failed", "passed", "passed"),
+    ),
+    csp_case(
+        "strict-dynamic",
+        "Nonce and strict dynamic",
+        "Strict dynamic suppresses broad parser-inserted sources; trusted loaders are outside this check.",
+        (
+            "script-src https: 'nonce-YWJj' 'strict-dynamic' 'unsafe-inline'; frame-ancestors 'none'",
+        ),
+        ("passed", "passed", "passed"),
+    ),
+    csp_case(
+        "multiple-policies",
+        "Policies combine restrictively",
+        "A restrictive second policy prevents permissive first-policy findings.",
+        (
+            "script-src https: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'",
+            APPLICATION_CSP,
+        ),
+        ("passed", "passed", "passed"),
+    ),
+    csp_case(
+        "unsupported",
+        "Unsupported data source",
+        "Network source analysis is inconclusive; inline and eval permissions remain restricted.",
+        ("script-src 'self' data:; frame-ancestors 'none'",),
+        ("inconclusive", "passed", "passed"),
+    ),
+    Scenario(
+        "/csp/absent",
+        "Missing enforced CSP",
+        "The baseline plugin reports absence; CSP policy checks skip.",
+        FALLBACK,
+        (CSP,),
+        csp_checks=("skipped", "skipped", "skipped"),
+    ),
+)
+
 SLOW = Scenario(
     "/slow",
     "Slow response",
@@ -390,5 +475,6 @@ SLOW = Scenario(
     (NOSNIFF, CSP, FRAMING),
 )
 BY_PATH = {
-    scenario.path: scenario for scenario in (*SCENARIOS, *COOKIE_SCENARIOS, SLOW)
+    scenario.path: scenario
+    for scenario in (*SCENARIOS, *COOKIE_SCENARIOS, *CSP_SCENARIOS, SLOW)
 }

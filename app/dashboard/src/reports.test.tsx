@@ -1,7 +1,7 @@
 import { act, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { downloadBlob, htmlReport } from "./reports";
-import { multiFindingReport, reportFixture } from "./test/report";
+import { cspReportFixture, multiFindingReport, reportFixture } from "./test/report";
 
 function documentFor(report = reportFixture) {
   let html = "";
@@ -119,4 +119,16 @@ it("removes the download anchor and releases its URL even if clicking fails", as
     expect(document.querySelector("a[download]")).toBeNull();
     await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"));
   } finally { click.mockRestore(); }
+});
+
+it("exports CSP version 2 evidence through the shared offline renderer", () => {
+  const document = documentFor(cspReportFixture);
+  expect(cspReportFixture.schema_version).toBe(2);
+  expect(document.body.textContent).toContain("Unrestricted CSP inline script execution");
+  expect(document.body.textContent).toContain("Remove effective unsafe-inline permissions.");
+  expect(document.body.textContent).toContain("Policy 1: Inline script elements");
+  expect(document.body.textContent).toContain("Policy 2: Inline event handlers");
+  expect(document.body.textContent).toContain("No applicable script directive");
+  expect(document.querySelectorAll(".evidence li")).toHaveLength(4);
+  expect(document.querySelector("script, img, link, [src]")).toBeNull();
 });

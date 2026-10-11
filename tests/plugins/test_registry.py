@@ -239,3 +239,24 @@ def test_registry_rejects_noncallable_analyzer():
     plugin = Plugin(SECURITY_HEADERS_PLUGIN.manifest, None)
     with pytest.raises(ValueError, match="must satisfy the plugin contract"):
         PluginRegistry((plugin,))
+
+
+def test_csp_policy_is_catalogued_and_independently_selectable():
+    assert [entry["id"] for entry in registry.catalog()] == [
+        "http-security-headers",
+        "cookie-security",
+        "csp-policy",
+    ]
+    assert [plugin.manifest.id for plugin in registry.select(["csp-policy"])] == [
+        "csp-policy"
+    ]
+    assert [
+        plugin.manifest.id
+        for plugin in registry.select(
+            [
+                "csp-policy",
+                "http-security-headers",
+                "cookie-security",
+            ]
+        )
+    ] == ["csp-policy", "http-security-headers", "cookie-security"]

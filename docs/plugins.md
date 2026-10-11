@@ -46,20 +46,22 @@ Redirects are not followed, and response bodies are not read or retained. The
 simulated backend defaults to HTTP 200 with `text/html`.
 
 See the [header checks](assessments.md#header-checks) and
-[cookie checks](assessments.md#cookie-checks) for built-in behavior. Their
+[cookie checks](assessments.md#cookie-checks) and
+[CSP policy checks](assessments.md#csp-policy-checks) for built-in behavior. Their
 [implementations](../app/plugins/) and [tests](../tests/plugins/) cover exact parsing
 and boundary cases.
 
 Each analyzer receives an independent copy of the shared HTTP observation and
 returns `PluginResponse`. Its optional `checks` tuple contains unique stable
 `rule_id` values, a `passed`, `failed`, `skipped`, or `inconclusive` status, and a
-short nonblank reason. The header plugin reports every check, including those
+short nonblank reason. The header and CSP policy plugins report every check, including those
 that produce no finding; cookie output remains unchanged. Titles and severities have length limits; descriptions
 and remediation must contain non-whitespace text, and evidence must be
 JSON-compatible. Accepted text retains its formatting. Invalid output fails the
 affected assessment without partial persistence.
 
-Never put cookie values, complete cookie fields, or arbitrary attribute values in
+Never put cookie values, complete cookie fields, raw CSP policies, nonces,
+hashes, allowlist hosts, reporting destinations, or arbitrary attribute values in
 output or diagnostics. Observation validation errors omit input values; sandbox
 validation suppresses raw exception chains.
 

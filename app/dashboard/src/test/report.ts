@@ -6,7 +6,7 @@ const cookieEvidence = {
 } satisfies Evidence;
 
 export const reportFixture: AssessmentReport = {
-  schema_version: 1,
+  schema_version: 2,
   generated_at: "2026-10-07T12:01:00Z",
   project: { id: "p", name: "<script>window.syntheticInjected=true</script>", created_at: "2026-10-07T12:00:00Z" },
   target: { id: "t", project_id: "p", name: "Demo", image: "seireth/demo-app:local", url: "http://demo.test/" },
@@ -55,3 +55,39 @@ export function blobText(blob: Blob): Promise<string> {
     reader.readAsText(blob);
   });
 }
+
+export const cspEvidenceFixture = {
+  id: "csp-evidence", finding_id: "csp-inline", kind: "http-response",
+  data: {
+    url: "https://example.test/", header: "content-security-policy",
+    rule_id: "csp-inline-scripts", status_code: 200, media_type: "text/html",
+    policy_count: 2,
+    observations: [
+      { policy_index: 1, context: "inline-script", directive: "script-src-elem", condition: "unsafe-inline" },
+      { policy_index: 2, context: "inline-script", directive: null, condition: "missing-directive" },
+      { policy_index: 1, context: "script-attribute", directive: "script-src-attr", condition: "unsafe-inline" },
+      { policy_index: 2, context: "script-attribute", directive: null, condition: "missing-directive" },
+    ],
+  },
+} satisfies Evidence;
+
+export const cspReportFixture: AssessmentReport = {
+  ...reportFixture,
+  assessment: {
+    ...reportFixture.assessment, plugins: ["csp-policy"],
+    result: {
+      ...reportFixture.assessment.result, finding_count: 1,
+      plugins: [{ id: "csp-policy", finding_count: 1, checks: [
+        { rule_id: "csp-script-sources", status: "passed", reason: "No covered weakness identified." },
+        { rule_id: "csp-inline-scripts", status: "failed", reason: "Observed headers permit arbitrary inline scripts." },
+        { rule_id: "csp-eval", status: "passed", reason: "No covered weakness identified." },
+      ] }],
+    },
+  },
+  findings: [{
+    id: "csp-inline", plugin: "csp-policy", title: "Unrestricted CSP inline script execution",
+    severity: "medium", description: "Observed headers permit inline scripts; document content was not inspected.",
+    remediation: "Remove effective unsafe-inline permissions.",
+  }],
+  evidence: [cspEvidenceFixture],
+};

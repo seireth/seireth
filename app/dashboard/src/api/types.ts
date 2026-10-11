@@ -93,6 +93,24 @@ type HeaderData = {
     | "nonblank enforced CSP"
     | "recognized restrictive framing protection";
 };
+export type CspContext = "network-script" | "inline-script" | "script-attribute" | "eval";
+export type CspCondition =
+  | "missing-directive" | "wildcard-source" | "http-scheme-source"
+  | "https-scheme-source" | "global-host-source" | "unsafe-inline" | "unsafe-eval";
+export type CspData = {
+  url: string;
+  header: "content-security-policy";
+  rule_id: "csp-script-sources" | "csp-inline-scripts" | "csp-eval";
+  status_code: number;
+  media_type: string;
+  policy_count: number;
+  observations: {
+    policy_index: number;
+    context: CspContext;
+    directive: "script-src-elem" | "script-src-attr" | "script-src" | "default-src" | null;
+    condition: CspCondition;
+  }[];
+};
 type CookieData = {
   url: string;
   header: "set-cookie";
@@ -101,6 +119,7 @@ type CookieData = {
 };
 export type EvidenceData =
   | HeaderData
+  | CspData
   | (CookieData & { rule: "samesite-none-without-secure"; samesite: "none" })
   | (CookieData & { rule: "secure-prefix"; https: boolean })
   | (CookieData & {
@@ -122,7 +141,7 @@ export interface EvidenceResponse {
   evidence: Evidence[];
 }
 export interface AssessmentReport {
-  schema_version: 1;
+  schema_version: 2;
   generated_at: string;
   project: Project;
   target: Target;

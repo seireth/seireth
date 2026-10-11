@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from app.api.schemas import AssessmentEvidenceOut
 from app.cli.verify import positive_timeout, require, wait_for_results
 
-from .scenarios import COOKIE_SCENARIOS, IMAGE, ORIGIN, SCENARIOS
+from .scenarios import COOKIE_SCENARIOS, CSP_SCENARIOS, IMAGE, ORIGIN, SCENARIOS
 
 
 def validate_outcome(
@@ -44,6 +44,7 @@ def validate_outcome(
     expected = {
         "http-security-headers": scenario.expected,
         "cookie-security": scenario.cookie_rules,
+        "csp-policy": scenario.csp_rules,
     }
     expected_count = sum(len(expected[plugin]) for plugin in plugins)
     findings = results["findings"]
@@ -68,17 +69,22 @@ def validate_outcome(
     }:
         raise RuntimeError(f"{scenario.path}: unexpected response context")
     for summary in result["plugins"]:
-        if summary["id"] == "http-security-headers":
+        if summary["id"] in {"http-security-headers", "csp-policy"}:
+            csp = summary["id"] == "csp-policy"
             checks = summary.get("checks", [])
             if (
                 [check.get("rule_id") for check in checks]
-                != [
-                    "x-content-type-options",
-                    "content-security-policy",
-                    "framing-protection",
-                ]
+                != (
+                    ["csp-script-sources", "csp-inline-scripts", "csp-eval"]
+                    if csp
+                    else [
+                        "x-content-type-options",
+                        "content-security-policy",
+                        "framing-protection",
+                    ]
+                )
                 or tuple(check.get("status") for check in checks)
-                != scenario.expected_checks
+                != (scenario.csp_checks if csp else scenario.expected_checks)
                 or any(
                     not isinstance(check.get("reason"), str)
                     or not check["reason"].strip()
@@ -107,7 +113,7 @@ def validate_outcome(
         )
     by_id = {finding["id"]: finding for finding in findings}
     if any(
-        by_id[entry.finding_id]["plugin"] == "http-security-headers"
+        by_id[entry.finding_id]["plugin"] in {"http-security-headers", "csp-policy"}
         and (
             entry.data.status_code != scenario.status
             or entry.data.media_type != scenario.media_type
@@ -117,7 +123,7 @@ def validate_outcome(
         raise RuntimeError(f"{scenario.path}: evidence response context does not match")
     for plugin in plugins:
         observed = Counter(
-            entry.data.rule_id if plugin == "http-security-headers" else entry.data.rule
+            entry.data.rule if plugin == "cookie-security" else entry.data.rule_id
             for entry in evidence.evidence
             if by_id[entry.finding_id]["plugin"] == plugin
         )
@@ -145,7 +151,7 @@ def verify_resource_removal(assessment_id):
 def verify(
     base_url,
     *,
-    scenarios=(*SCENARIOS, *COOKIE_SCENARIOS),
+    scenarios=(*SCENARIOS, *COOKIE_SCENARIOS, *CSP_SCENARIOS),
     timeout_seconds=120,
     project_name="Northstar Workspace | Plugin demo",
     register_only=False,
@@ -190,6 +196,8 @@ def verify(
                     ("http-security-headers", "cookie-security"),
                 )
                 if scenario in COOKIE_SCENARIOS
+                else (("csp-policy",), ("http-security-headers", "csp-policy"))
+                if scenario in CSP_SCENARIOS
                 else (("http-security-headers",),)
             )
         ]
@@ -198,6 +206,7 @@ def verify(
                 "path": scenario.path,
                 "name": scenario.name,
                 "expected_headers": list(scenario.expected),
+                "expected_csp": list(scenario.csp_rules),
                 "target_id": target["id"],
                 "url": ORIGIN + scenario.path,
                 "plugins": list(plugins),
@@ -267,7 +276,10 @@ def main():
     parser.add_argument(
         "--case",
         action="append",
-        choices=[scenario.path for scenario in (*SCENARIOS, *COOKIE_SCENARIOS)],
+        choices=[
+            scenario.path
+            for scenario in (*SCENARIOS, *COOKIE_SCENARIOS, *CSP_SCENARIOS)
+        ],
         help="Assess only the selected paths; repeat for multiple cases",
     )
     parser.add_argument(
@@ -289,7 +301,7 @@ def main():
     try:
         selected = tuple(
             scenario
-            for scenario in (*SCENARIOS, *COOKIE_SCENARIOS)
+            for scenario in (*SCENARIOS, *COOKIE_SCENARIOS, *CSP_SCENARIOS)
             if args.case is None or scenario.path in args.case
         )
         report = verify(
