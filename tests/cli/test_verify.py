@@ -167,7 +167,6 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
         image="another:local",
         target_url="http://another:8080/",
         plugins=["http-security-headers", "cookie-security"],
-        expected_backend="docker",
     )
     assert report["results"]["findings"] == []
     assert report["evidence"]["evidence"] == []
@@ -178,7 +177,7 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
     [
         ("failed", "assessment did not complete"),
         ("cleanup", "sandbox cleanup was not verified"),
-        ("backend", "expected docker backend"),
+        ("backend", "verification requires a real Docker execution"),
         ("audit", "unexpected audit trail"),
         ("evidence-http", "500:.*stored evidence is invalid"),
         ("evidence-payload", "API returned invalid evidence"),
@@ -197,7 +196,7 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
         else [{"id": "finding-1", "title": "example"}],
         "result": {
             "cleanup_verified": failure != "cleanup",
-            "sandbox_backend": "inmemory",
+            "sandbox_backend": "http" if failure == "backend" else "docker",
         },
     }
     actions = [
@@ -274,7 +273,6 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
             image="arbitrary:local",
             target_url="http://arbitrary:8080/",
             plugins=["http-security-headers"],
-            expected_backend="docker" if failure == "backend" else "inmemory",
         )
     assert "synthetic-private-cookie-value" not in str(error.value)
     assert ("GET", "/api/v1/assessments/assessment-1/results") in observed

@@ -89,7 +89,7 @@ cases; it does not enable them. Set `SEIRETH_DOCKER_TESTS=1` as shown below.
 
 For sandbox changes, run the [Docker walkthrough](docs/getting-started.md#real-docker-assessment),
 check that no assessment containers/networks remain, then run lifecycle tests.
-They require the built demo and pulled runner images; the demo's `/slow` path
+They require the built demo and bundle runner images; the demo's `/slow` path
 briefly delays responses for cancellation/crash-recovery tests.
 
 ```powershell
@@ -105,7 +105,7 @@ SEIRETH_DOCKER_TESTS=1 python -m pytest -m docker tests/integration/test_api_pro
 
 The integration workflow uses a disposable Docker daemon and uploads verification
 output and diagnostic logs. It selects only Docker-marked Python cases; the
-in-memory API lifecycle case runs once in the build workflow.
+native website lifecycle cases run in the build workflow.
 
 ## Frontend checks
 

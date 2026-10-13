@@ -20,7 +20,7 @@ def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monke
     assert stored["plugins"] == ["http-security-headers"]
 
 
-def test_legacy_plugin_id_is_rejected_without_records(
+def test_unregistered_plugin_id_is_rejected_without_records(
     client, assessment_payload, database
 ):
     from tests.api.helpers import snapshot
@@ -28,7 +28,7 @@ def test_legacy_plugin_id_is_rejected_without_records(
     before = snapshot(database)
     response = client.post(
         "/api/v1/assessments",
-        json={**assessment_payload, "plugins": ["security-headers"]},
+        json={**assessment_payload, "plugins": ["unregistered-plugin"]},
     )
     assert response.status_code == 400
     assert snapshot(database) == before

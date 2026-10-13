@@ -52,7 +52,7 @@ def validate_outcome(
         result.get("finding_count") != expected_count
         or [
             {key: item.get(key) for key in ("id", "finding_count")}
-            for item in result.get("plugins", [])
+            for item in result["routes"][0]["plugins"]
         ]
         != [
             {"id": plugin, "finding_count": len(expected[plugin])} for plugin in plugins
@@ -63,12 +63,15 @@ def validate_outcome(
         )
     ):
         raise RuntimeError(f"{scenario.path}: unexpected plugin summary or remediation")
-    if result.get("response") != {
+    if {
+        key: result["routes"][0]["response"][key]
+        for key in ("status_code", "media_type")
+    } != {
         "status_code": scenario.status,
         "media_type": scenario.media_type,
     }:
         raise RuntimeError(f"{scenario.path}: unexpected response context")
-    for summary in result["plugins"]:
+    for summary in result["routes"][0]["plugins"]:
         if summary["id"] in {"http-security-headers", "csp-policy"}:
             csp = summary["id"] == "csp-policy"
             checks = summary.get("checks", [])
@@ -160,9 +163,6 @@ def verify(
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise ValueError("timeout must be finite and greater than zero")
     with httpx.Client(base_url=base_url, timeout=10) as client:
-        runtime = require(client.get("/api/v1/runtime"), 200)
-        if runtime["sandbox_backend"] != "docker":
-            raise RuntimeError("Enable the Docker backend before registering the demo")
         project = require(
             client.post("/api/v1/projects", json={"name": project_name}), 200
         )

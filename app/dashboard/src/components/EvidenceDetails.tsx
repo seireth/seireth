@@ -61,6 +61,7 @@ export function EvidenceDetails({ evidence }: { evidence: Evidence[] }) {
                 <dt>Cookie name</dt><dd>{data.cookie_name}</dd>
                 <dt>Rule</dt><dd>{data.rule}</dd>
                 <dt>Secure present</dt><dd>{data.secure ? "Yes" : "No"}</dd>
+                {"httponly" in data && <><dt>HttpOnly present</dt><dd>{data.httponly ? "Yes" : "No"}</dd></>}
                 {"samesite" in data && (
                   <><dt>SameSite</dt><dd>{data.samesite}</dd></>
                 )}

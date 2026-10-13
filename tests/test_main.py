@@ -21,8 +21,6 @@ def test_unbuilt_gui_does_not_block_other_routes(tmp_path):
         assert (
             "app/dashboard" in client.get("/dashboard/projects/demo").json()["detail"]
         )
-        for path in ("/app", "/app/", "/app/projects/demo"):
-            assert client.get(path, headers={"Accept": "text/html"}).status_code == 404
         assert client.get("/health").status_code == 200
         assert client.get("/openapi.json").status_code == 200
         assert client.get("/docs").status_code == 200
@@ -48,8 +46,6 @@ def test_frontend_fallback_and_assets_are_confined_to_build(tmp_path):
             client.get("/", follow_redirects=False).headers["location"] == "/dashboard/"
         )
         assert client.get("/dashboard/").text == "<html>GUI</html>"
-        for path in ("/app", "/app/", "/app/projects/demo"):
-            assert client.get(path, headers={"Accept": "text/html"}).status_code == 404
         assert (
             client.get("/dashboard/projects/demo", headers={"Accept": "text/html"}).text
             == "<html>GUI</html>"

@@ -9,13 +9,8 @@ class FakeDocker:
     def __init__(self):
         self.live = {}
         self.calls = []
-        self.create_hook = None
         self.available = True
-        self.headers = {"content-type": ["text/html"]}
-        self.status_code = 200
         self.kept = set()
-        self.remove_error = False
-        self.runner_status = 0
         self.runner_output = None
         self.unsupported_calls = []
 
@@ -31,7 +26,16 @@ class FakeDocker:
         }
         return identity
 
-    def run(self, sandbox, args, timeout, *, interruptible=True):
+    def run(
+        self,
+        sandbox,
+        args,
+        timeout,
+        *,
+        interruptible=True,
+        input_data=None,
+        extra_env=None,
+    ):
         sandbox._guard(advancing=interruptible)
         self.calls.append(args)
         if not self.available:
@@ -41,8 +45,6 @@ class FakeDocker:
             kind = next(
                 kind for kind, value in sandbox.resources.items() if value == name
             )
-            if self.create_hook:
-                self.create_hook(sandbox, kind)
             labels = dict(
                 args[index + 1].split("=", 1)
                 for index, arg in enumerate(args)
@@ -64,8 +66,6 @@ class FakeDocker:
                 return subprocess.CompletedProcess(args, 1, "", "resource not found")
             output = json.dumps([record])
         elif args[0] == "rm" or args[:2] == ["network", "rm"]:
-            if self.remove_error:
-                return subprocess.CompletedProcess(args, 1, "", "removal failed")
             for name, resource in list(self.live.items()):
                 if resource["Id"] == args[-1] and name not in self.kept:
                     if (resource["kind"] == "network") is not (args[0] == "network"):
@@ -74,6 +74,25 @@ class FakeDocker:
                         )
                     del self.live[name]
             output = args[-1]
+        elif args[0] == "exec":
+            payload = json.loads(input_data)
+            output = (
+                json.dumps(
+                    {"ready": True}
+                    if payload["op"] == "probe"
+                    else {
+                        "observation": {
+                            "url": payload["url"],
+                            "status_code": 200,
+                            "headers": {"content-type": ["text/html"]},
+                        },
+                        "redirects": [],
+                    }
+                )
+                if self.runner_output is None
+                else self.runner_output
+            )
+            return subprocess.CompletedProcess(args, 0, output, "")
         elif args[0] == "start":
             record = next(
                 (record for record in self.live.values() if record["Id"] == args[-1]),
@@ -81,21 +100,6 @@ class FakeDocker:
             )
             if not record or record["kind"] == "network":
                 return subprocess.CompletedProcess(args, 1, "", "container not found")
-            if "--attach" in args:
-                assert record["kind"] == "runner"
-                output = (
-                    json.dumps(
-                        {"status_code": self.status_code, "headers": self.headers}
-                    )
-                    if self.runner_output is None
-                    else self.runner_output
-                )
-                return subprocess.CompletedProcess(
-                    args,
-                    self.runner_status,
-                    output,
-                    "runner error" if self.runner_status else "",
-                )
             output = args[-1]
         else:
             self.unsupported_calls.append(args)
@@ -103,10 +107,10 @@ class FakeDocker:
         return subprocess.CompletedProcess(args, 0, output, "")
 
     def install(self, monkeypatch):
-        from app.assessments.sandbox import DockerSandbox
+        from app.assessments.sandbox import DockerCommands
 
         monkeypatch.setattr(
-            DockerSandbox,
+            DockerCommands,
             "_run",
             lambda sandbox, *args, **kwargs: self.run(sandbox, *args, **kwargs),
         )

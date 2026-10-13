@@ -48,7 +48,7 @@ and plugins in the GUI. For a smaller run:
 
 ```bash
 python -m examples.demo_app.verify --case / --case /cookies --case /cookies/protected
-python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies/protected --plugins http-security-headers cookie-security --expected-backend docker
+python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies/protected --plugins http-security-headers cookie-security
 ```
 
 `--base-url` chooses the API address. `--skip-resource-check` supports an API using

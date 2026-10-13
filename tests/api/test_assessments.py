@@ -41,16 +41,19 @@ def test_passive_assessment_returns_json_and_cleanup(
     assert "plugin" not in report["result"]
     assert [
         {key: plugin[key] for key in ("id", "finding_count")}
-        for plugin in report["result"]["plugins"]
+        for plugin in report["result"]["routes"][0]["plugins"]
     ] == [{"id": "http-security-headers", "finding_count": 3}]
     assert report["result"]["finding_count"] == 3
-    assert report["result"]["response"] == {
+    assert {
+        key: report["result"]["routes"][0]["response"][key]
+        for key in ("status_code", "media_type")
+    } == {
         "status_code": 200,
         "media_type": "text/html",
     }
     assert [
         (check["rule_id"], check["status"])
-        for check in report["result"]["plugins"][0]["checks"]
+        for check in report["result"]["routes"][0]["plugins"][0]["checks"]
     ] == [
         ("x-content-type-options", "failed"),
         ("content-security-policy", "failed"),
@@ -86,7 +89,8 @@ def test_passive_assessment_returns_json_and_cleanup(
                 item for item in report["findings"] if item["id"] == stored.id
             )
             fields = ("plugin", "title", "severity", "description", "remediation")
-            assert set(returned) == {"id", *fields}
+            assert set(returned) == {"id", "route_result_id", *fields}
+            assert returned["route_result_id"]
             assert {field: getattr(stored, field) for field in fields} == {
                 field: returned[field] for field in fields
             }
@@ -113,6 +117,7 @@ def test_passive_assessment_returns_json_and_cleanup(
         "target.registered",
         "assessment.queued",
         "assessment.running",
+        "assessment.route_finished",
         "assessment.completed",
     ]
 
@@ -150,13 +155,18 @@ def test_zero_findings_persist_context_and_outcomes_in_selection_order(
     media_type,
     outcomes,
 ):
-    from app.assessments.sandbox import InMemorySandbox
     from app.plugins.base import HttpObservation
+    from tests.sessions import FakeSession
 
     monkeypatch.setattr(
-        InMemorySandbox,
-        "execute",
-        lambda self, url: HttpObservation(url=url, status_code=status, headers=headers),
+        FakeSession,
+        "fetch",
+        lambda self, url: {
+            "observation": HttpObservation(
+                url=url["url"], status_code=status, headers=headers
+            ),
+            "redirects": [],
+        },
     )
     selection = ["cookie-security", "http-security-headers"]
     submitted = client.post(
@@ -170,18 +180,25 @@ def test_zero_findings_persist_context_and_outcomes_in_selection_order(
         description="response applicability assessment",
     )
     assert report["status"] == "completed"
-    assert report["result"]["response"] == {
+    assert {
+        key: report["result"]["routes"][0]["response"][key]
+        for key in ("status_code", "media_type")
+    } == {
         "status_code": status,
         "media_type": media_type,
     }
     assert report["findings"] == []
     assert report["result"]["finding_count"] == 0
-    assert [plugin["id"] for plugin in report["result"]["plugins"]] == selection
-    assert report["result"]["plugins"][0] == {
-        "id": "cookie-security",
-        "finding_count": 0,
-    }
-    checks = report["result"]["plugins"][1]["checks"]
+    assert [
+        plugin["id"] for plugin in report["result"]["routes"][0]["plugins"]
+    ] == selection
+    cookie_plugin = report["result"]["routes"][0]["plugins"][0]
+    assert (
+        cookie_plugin["id"] == "cookie-security" and cookie_plugin["finding_count"] == 0
+    )
+    assert len(cookie_plugin["checks"]) == 3
+    assert all(check["status"] == "skipped" for check in cookie_plugin["checks"])
+    checks = report["result"]["routes"][0]["plugins"][1]["checks"]
     assert [check["rule_id"] for check in checks] == [
         "x-content-type-options",
         "content-security-policy",
@@ -219,7 +236,10 @@ def test_queued_and_cancelled_before_execution_have_no_result(
     assert (client.post(location + "/cancel")).status_code == 200
     cancelled = (client.get(location + "/results")).json()
     assert cancelled["status"] == "cancelled"
-    assert cancelled["result"] is None
+    assert cancelled["result"]["execution_outcome"] == "not_started"
+    assert cancelled["result"]["cleanup_verified"]
+    assert cancelled["result"]["verdict"]["status"] == "blocked"
+    assert cancelled["result"]["routes"][0]["status"] == "unattempted"
 
 
 @pytest.mark.parametrize(
@@ -234,31 +254,35 @@ def test_queued_and_cancelled_before_execution_have_no_result(
 def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
     client, assessment_payload, monkeypatch, database, wait_until, caplog, plugins
 ):
-    from app.assessments.sandbox import InMemorySandbox
     from app.plugins.base import HttpObservation
+    from tests.sessions import FakeSession
 
     secret = "cookie-secret-not-for-storage"
     calls = []
 
     def response(self, url):
+        url = url["url"]
         calls.append(url)
-        return HttpObservation(
-            status_code=200,
-            url=url,
-            headers={
-                "Content-Type": ["text/html"],
-                **{
-                    "Set-Cookie": [
-                        f"theme={secret}; SameSite=Lax",
-                        f"cross={secret}; SameSite=None",
-                        f"__Secure-session={secret}",
-                        f"__Host-session={secret}; Secure; Domain={secret}; Path=/{secret}",
-                    ]
+        return {
+            "observation": HttpObservation(
+                status_code=200,
+                url=url,
+                headers={
+                    "Content-Type": ["text/html"],
+                    **{
+                        "Set-Cookie": [
+                            f"theme={secret}; SameSite=Lax",
+                            f"cross={secret}; SameSite=None",
+                            f"__Secure-session={secret}",
+                            f"__Host-session={secret}; Secure; Domain={secret}; Path=/{secret}",
+                        ]
+                    },
                 },
-            },
-        )
+            ),
+            "redirects": [],
+        }
 
-    monkeypatch.setattr(InMemorySandbox, "execute", response)
+    monkeypatch.setattr(FakeSession, "fetch", response)
     submitted = client.post(
         "/api/v1/assessments", json={**assessment_payload, "plugins": plugins}
     )
@@ -273,7 +297,7 @@ def test_cookie_assessments_preserve_selection_counts_and_redacted_evidence(
     assert report["status"] == "completed", report
     assert [
         {key: plugin[key] for key in ("id", "finding_count")}
-        for plugin in report["result"]["plugins"]
+        for plugin in report["result"]["routes"][0]["plugins"]
     ] == [{"id": plugin, "finding_count": 3} for plugin in plugins]
     assert (
         report["result"]["finding_count"] == len(report["findings"]) == 3 * len(plugins)
@@ -362,7 +386,7 @@ def test_evidence_empty_states(
     client, database, assessment_graph, evidence_row, status
 ):
     graph = assessment_graph(status=status)
-    if status != "completed":
+    if status not in {"completed", "cancelled"}:
         # Even a stray stored row must not be published before successful finalization.
         evidence_row(graph.assessment.id)
     with database.SessionLocal() as db:
@@ -470,27 +494,30 @@ def test_invalid_stored_evidence_fails_without_partial_response_or_secret_diagno
 def test_repeated_cookies_and_multiple_rules_keep_their_exact_finding_links(
     client, assessment_payload, monkeypatch, wait_until, database
 ):
-    from app.assessments.sandbox import InMemorySandbox
     from app.plugins.base import HttpObservation
+    from tests.sessions import FakeSession
 
     secret = "synthetic-repeated-cookie-secret"
     monkeypatch.setattr(
-        InMemorySandbox,
-        "execute",
-        lambda self, url: HttpObservation(
-            status_code=200,
-            url=url,
-            headers={
-                "Content-Type": ["text/html"],
-                **{
-                    "Set-Cookie": [
-                        f"__hOsT-session={secret}; SameSite=None",
-                        f"__hOsT-session={secret}; Secure; Path=/",
-                        f"__hOsT-session={secret}; Secure; Path=/app",
-                    ]
+        FakeSession,
+        "fetch",
+        lambda self, url: {
+            "observation": HttpObservation(
+                status_code=200,
+                url=url["url"],
+                headers={
+                    "Content-Type": ["text/html"],
+                    **{
+                        "Set-Cookie": [
+                            f"__hOsT-session={secret}; SameSite=None",
+                            f"__hOsT-session={secret}; Secure; Path=/",
+                            f"__hOsT-session={secret}; Secure; Path=/app",
+                        ]
+                    },
                 },
-            },
-        ),
+            ),
+            "redirects": [],
+        },
     )
     submitted = client.post(
         "/api/v1/assessments",
@@ -613,9 +640,8 @@ def test_assessment_ordering_breaks_timestamp_ties(
                     id=identity,
                     project_id=graph.project.id,
                     target_id=graph.target.id,
-                    url=graph.assessment.url,
+                    plan_snapshot=graph.assessment.plan_snapshot,
                     status="completed",
-                    plugins=["http-security-headers"],
                     created_at=current.created_at,
                 )
             )

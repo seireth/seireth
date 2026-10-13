@@ -10,3 +10,14 @@ def list_plugins():
     """List built-in plugins that callers may select for assessments."""
 
     return plugin_registry.catalog()
+
+
+@router.get("/plugin-rules")
+def plugin_rules():
+    return {
+        plugin.manifest.id: {
+            "version": plugin.manifest.version,
+            "rules": dict(plugin.rules),
+        }
+        for plugin in plugin_registry.plugins
+    }

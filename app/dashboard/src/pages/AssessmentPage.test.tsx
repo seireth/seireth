@@ -16,14 +16,15 @@ const assessment = (status: Status, cleanup_pending = false): Assessment => ({
   plugins: ["cookie-security"],
   status,
   cleanup_pending,
+  plan_snapshot: reportFixture.assessment.plan_snapshot,
   result: {
+    ...reportFixture.assessment.result!,
     cleanup_verified: !cleanup_pending,
     sandbox_backend: "docker",
-    plugins: [{ id: "cookie-security", finding_count: 1 }],
   },
 });
 const finding = {
-  id: "f",
+  id: "f", route_result_id: "route-id",
   plugin: "cookie-security",
   title: "SameSite configuration",
   severity: "low",
@@ -38,13 +39,16 @@ it.each(["skipped", "inconclusive"] as const)(
     const item: Assessment = {
       ...assessment("completed"), plugins: ["http-security-headers"],
       result: {
+        ...reportFixture.assessment.result!,
         cleanup_verified: true, sandbox_backend: "docker", finding_count: 0,
-        response: {status_code: 200, media_type: outcome === "skipped" ? "application/json" : null},
-        plugins: [{id: "http-security-headers", finding_count: 0, checks: [
-          {rule_id: "x-content-type-options", status: "passed", reason: "MIME protection is enabled."},
-          {rule_id: "content-security-policy", status: outcome, reason: "Document applicability explains this outcome."},
-          {rule_id: "framing-protection", status: outcome, reason: "Framing applicability explains this outcome."},
-        ]}],
+        routes: [{ ...reportFixture.assessment.result!.routes[0], finding_count: 0,
+          response: {status_code: 200, media_type: outcome === "skipped" ? "application/json" : null, url: "http://demo.test/", redirects: []},
+          plugins: [{id: "http-security-headers", finding_count: 0, checks: [
+            {rule_id: "x-content-type-options", status: "passed", reason: "MIME protection is enabled."},
+            {rule_id: "content-security-policy", status: outcome, reason: "Document applicability explains this outcome."},
+            {rule_id: "framing-protection", status: outcome, reason: "Framing applicability explains this outcome."},
+          ]}],
+        }],
       },
     };
     show(vi.fn(async (path: string) => json(
@@ -82,16 +86,37 @@ function show(fetcher: ReturnType<typeof vi.fn>) {
 function metadata(path: string) {
   if (path.includes("/projects/"))
     return { id: "p", name: "Project", created_at: new Date().toISOString() };
-  if (path.includes("/targets/"))
-    return {
-      id: "t",
-      name: "Demo",
-      url: "http://demo.test/",
-      project_id: "p",
-      image: "demo",
-    };
   throw new Error(`Unexpected metadata request: ${path}`);
 }
+
+it.each(["plugin_error", "timeout"] as const)(
+  "shows persisted provenance and an incomplete %s result after refresh", async (kind) => {
+    const item = assessment("failed");
+    item.result = {
+      ...reportFixture.assessment.result!, execution_outcome: "failed",
+      cleanup_verified: true, sandbox_backend: "docker", error_kind: kind,
+      error: kind === "timeout" ? "assessment execution timed out" : "plugin cookie-security execution failed",
+      execution: {
+        started_at: "2026-10-12T10:00:00+00:00", deadline_at: "2026-10-12T10:01:00+00:00",
+        target: {id: "t", project_id: "p", name: "Original target", kind: "docker", image: "demo", url: "http://demo.test/"},
+        plugins: [{id: "cookie-security", version: "1.0.0"}],
+      },
+    };
+    const fetcher = vi.fn(async (path: string) => json(
+      path.endsWith("/results") ? {findings: []} : path.endsWith("/assessments/a") ? item : metadata(path),
+    ));
+    const view = show(fetcher);
+    expect(await screen.findByText(item.result!.error!)).toBeVisible();
+    expect(screen.getByText("cookie-security 1.0.0")).toBeVisible();
+    expect(screen.getByText("2026-10-12T10:01:00.000Z")).toBeVisible();
+    expect(screen.getByText("Execution was incomplete. No clean assessment can be inferred from this result.")).toBeVisible();
+    expect(screen.getByRole("button", {name: "Download JSON"})).toBeEnabled();
+    view.unmount();
+    show(fetcher);
+    expect(await screen.findByText(item.result!.error!)).toBeVisible();
+    expect(screen.queryByText("No covered violations were identified. This does not certify security.")).not.toBeInTheDocument();
+  },
+);
 
 it("keeps findings when evidence fails and retries evidence independently", async () => {
   let evidenceCalls = 0;
@@ -137,26 +162,19 @@ it("keeps findings when evidence fails and retries evidence independently", asyn
   ).toHaveLength(1);
 });
 
-it("keeps request fields and plugin counts while target metadata loads", async () => {
-  const item = { ...multiFindingReport.assessment, url: "http://demo.test/?text=<script>synthetic</script>" };
-  const targetUrl = "http://demo.test/?text=<img src=x onerror=alert(1)>";
-  let resolveTarget!: (response: Response) => void;
-  show(vi.fn(async (path: string) => {
-    if (path.includes("/targets/")) return new Promise<Response>((resolve) => { resolveTarget = resolve; });
+it("shows frozen request metadata without refetching the registered target", async () => {
+  const item = multiFindingReport.assessment;
+  const fetcher = vi.fn(async (path: string) => {
+    if (path.includes("/targets/")) throw new Error("target must come from the frozen plan");
     if (path.endsWith("/results")) return json({ findings: [] });
     if (path.endsWith("/evidence")) return json({ evidence: [] });
     return json(path.endsWith("/assessments/a") ? item : metadata(path));
-  }));
+  });
+  show(fetcher);
   const request = within((await screen.findByRole("heading", { name: "Assessment request" })).closest("section")!);
-  expect(request.getByText("Loading…")).toBeVisible();
-  expect(request.getByText(item.url)).toBeVisible();
+  expect(request.getAllByText(item.plan_snapshot.target.url)).toHaveLength(2);
   expect(request.getByText("http-security-headers, cookie-security")).toBeVisible();
-  expect(request.getByText("http-security-headers: 0 · cookie-security: 3")).toBeVisible();
-  await waitFor(() => expect(resolveTarget).toBeDefined());
-  resolveTarget(json({ ...metadata("/targets/t"), url: targetUrl }));
-  expect(await request.findByText(targetUrl)).toBeVisible();
-  expect(request.queryByText("Loading…")).toBeNull();
-  expect(document.querySelector("script, img")).toBeNull();
+  expect(fetcher.mock.calls.some(([path]) => path.includes("/targets/"))).toBe(false);
 });
 
 it("refreshes after a cancellation race without retrying the write", async () => {

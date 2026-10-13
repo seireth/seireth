@@ -1,9 +1,78 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { expect, it, vi } from "vitest";
 import NewAssessmentPage from "./NewAssessmentPage";
+
+function renderPage() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/projects/p/assessments/new"]}>
+    <Routes><Route path="/projects/:projectId/assessments/new" element={<NewAssessmentPage />} />
+      <Route path="/assessments/:id" element={<p>Assessment submitted</p>} /></Routes>
+  </MemoryRouter></QueryClientProvider>);
+}
+
+function show() {
+  const targets = {
+    t: { id: "t", project_id: "p", name: "Original", kind: "website", image: null, url: "https://original.test/" },
+    created: { id: "created", project_id: "p", name: "New", kind: "website", image: null, url: "https://new.test/" },
+  };
+  const fetcher = vi.fn(async (path: string, options?: RequestInit) => {
+    let data: unknown;
+    if (options?.method === "POST") data = { id: path.endsWith("/targets") ? "created" : "assessment" };
+    else if (path.endsWith("/runtime/profiles")) data = { requests: {}, launches: {}, networks: {}, trusts: [] };
+    else if (path.endsWith("/plugins")) data = [{ id: "http-security-headers", name: "HTTP security headers", description: "Inspect response protections." }];
+    else if (path.endsWith("/plugin-rules")) data = {};
+    else if (path.endsWith("/projects/p")) data = { id: "p", name: "Project" };
+    else if (path.includes("/projects/p/targets?")) data = { items: [targets.t], has_more: false };
+    else if (path.includes("/assessments?")) data = { items: [], has_more: false };
+    else if (path.endsWith("/targets/t")) data = targets.t;
+    else if (path.endsWith("/targets/created")) data = targets.created;
+    else if (path.endsWith("/target-images")) data = { items: [] };
+    else throw new Error("Unexpected request: " + path);
+    return new Response(JSON.stringify(data));
+  });
+  vi.stubGlobal("fetch", fetcher);
+  renderPage();
+  return fetcher;
+}
+
+it("submits route-specific plugins without requiring a global selection", async () => {
+  const fetcher = show();
+  const user = userEvent.setup();
+  await screen.findByRole("option", { name: /Original/ });
+  await user.selectOptions(screen.getByLabelText("Registered target"), "t");
+  await waitFor(() => expect(screen.getByLabelText("Assessment URL")).toHaveValue("https://original.test/"));
+  await user.click(screen.getByRole("checkbox", { name: /Use a route plan/ }));
+  const route = within(screen.getByRole("group", { name: "Route 1" }));
+  await user.click(route.getByText("Route checks"));
+  await user.click(route.getByRole("checkbox", { name: "HTTP security headers" }));
+  const submit = screen.getByRole("button", { name: "Run assessment" });
+  expect(submit).toBeEnabled();
+  await user.click(submit);
+  await screen.findByText("Assessment submitted");
+  const request = fetcher.mock.calls.find(([path, options]) => path.endsWith("/assessments") && options?.method === "POST");
+  const body = JSON.parse(String(request?.[1]?.body));
+  expect(body.routes[0].plugins).toEqual(["http-security-headers"]);
+  expect(body).not.toHaveProperty("plugins");
+});
+
+it("clears the previous route plan when a new target is registered", async () => {
+  show();
+  const user = userEvent.setup();
+  await screen.findByRole("option", { name: /Original/ });
+  await user.selectOptions(screen.getByLabelText("Registered target"), "t");
+  await user.click(screen.getByRole("checkbox", { name: /Use a route plan/ }));
+  await user.click(screen.getByRole("button", { name: "Register a new target" }));
+  await user.selectOptions(screen.getByLabelText("Assessment source"), "website");
+  await user.type(screen.getByLabelText("Target name"), "New");
+  await user.type(screen.getByLabelText("Registered URL"), "https://new.test/");
+  await user.click(screen.getByRole("button", { name: "Register target" }));
+  await waitFor(() => expect(screen.getByLabelText("Assessment URL")).toHaveValue("https://new.test/"));
+  expect(screen.getByRole("checkbox", { name: /Use a route plan/ })).not.toBeChecked();
+  expect(screen.queryByRole("group", { name: "Route 1" })).not.toBeInTheDocument();
+});
 
 it("uses the catalog and target URL, blocks duplicate submissions, and preserves selection on failure", async () => {
   let rejectWrite: ((response: Response) => void) | undefined;
@@ -20,12 +89,6 @@ it("uses the catalog and target URL, blocks duplicate submissions, and preserves
       return new Promise<Response>((resolve) => {
         rejectWrite = resolve;
       });
-    if (path.endsWith("/runtime"))
-      return Promise.resolve(
-        json({
-          sandbox_backend: "inmemory",
-        }),
-      );
     if (path.endsWith("/plugins"))
       return Promise.resolve(
         json([
@@ -44,21 +107,7 @@ it("uses the catalog and target URL, blocks duplicate submissions, and preserves
     );
   });
   vi.stubGlobal("fetch", fetcher);
-  const client = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-  });
-  render(
-    <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/projects/p/new"]}>
-        <Routes>
-          <Route
-            path="/projects/:projectId/new"
-            element={<NewAssessmentPage />}
-          />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+  renderPage();
   const user = userEvent.setup();
   expect(screen.getByRole("button", { name: "Run assessment" })).toBeDisabled();
   await screen.findByRole("option", { name: /Demo/ });

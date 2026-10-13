@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from app.plugins.base import HttpObservation
+from app.plugins.base import AnalysisContext, HttpObservation
 from app.plugins.cookie_security import _parse, analyze
 
 URL = "https://example.test/app"
@@ -17,7 +17,8 @@ def findings(*cookies, url=URL):
             status_code=200,
             url=url,
             headers={"Set-Cookie": list(cookies)} if cookies else {},
-        )
+        ),
+        AnalysisContext(),
     ).findings
 
 
@@ -186,12 +187,12 @@ def test_parser_retains_only_used_attributes_and_leaves_shared_headers_intact():
     )
     assert _parse(field) == (
         "__Host-session",
-        {"secure": "", "samesite": "Lax", "domain": "", "path": "/"},
+        {"httponly": "", "secure": "", "samesite": "Lax", "domain": "", "path": "/"},
     )
     observation = HttpObservation(
         status_code=200, url=URL, headers={"Set-Cookie": [field]}
     )
-    assert not analyze(observation).findings
+    assert not analyze(observation, AnalysisContext()).findings
     assert observation.headers == {"set-cookie": [field]}
 
 
@@ -336,7 +337,7 @@ def test_no_cookie_values_or_raw_attribute_values_in_findings(caplog):
             ]
         },
     )
-    response = analyze(observation)
+    response = analyze(observation, AnalysisContext())
     assert len(response.findings) == 2
     assert SECRET not in response.model_dump_json()
     assert SECRET not in caplog.text

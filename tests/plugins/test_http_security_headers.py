@@ -3,7 +3,7 @@
 import pytest
 
 from app.api.schemas import HeaderEvidenceData
-from app.plugins.base import HttpObservation
+from app.plugins.base import AnalysisContext, HttpObservation
 from app.plugins.http_security_headers import analyze
 from examples.demo_app.scenarios import SCENARIOS
 
@@ -133,7 +133,8 @@ def response(headers, *, status_code=200, media_type="text/html"):
             status_code=status_code,
             url=URL,
             headers=fields,
-        )
+        ),
+        AnalysisContext(),
     )
 
 

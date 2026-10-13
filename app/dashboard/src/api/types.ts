@@ -19,16 +19,17 @@ export interface Target {
   id: string;
   project_id: string;
   name: string;
-  image: string;
+  image: string | null;
   url: string;
+  kind: "docker" | "website";
+  launch_profile?: string | null;
+  network_profile?: string | null;
+  trust_profile?: string | null;
 }
 export interface Plugin {
   id: string;
   name: string;
   description: string;
-}
-export interface Runtime {
-  sandbox_backend: "inmemory" | "docker";
 }
 export interface TargetImages {
   items: { image: string; id: string }[];
@@ -39,15 +40,42 @@ export interface CheckOutcome {
   reason: string;
 }
 export interface Result {
-  sandbox_backend?: string;
-  cleanup_verified?: boolean;
+  execution_outcome: "completed" | "failed" | "cancelled" | "interrupted" | "not_started";
+  sandbox_backend?: "docker" | "http";
+  cleanup_verified: boolean;
   cleanup_reason?: string | null;
   completed_at?: string;
   attempt?: number;
   error?: string;
-  finding_count?: number;
-  response?: { status_code: number; media_type: string | null };
-  plugins?: { id: string; finding_count: number; checks?: CheckOutcome[] }[];
+  error_kind?: "timeout" | "plugin_error" | "execution_error";
+  failed_plugin?: string;
+  execution?: {
+    started_at: string;
+    deadline_at: string;
+    target: Target;
+    plugins: { id: string; version: string }[];
+  };
+  finding_count: number;
+  routes: RouteResult[];
+  coverage: { complete: boolean };
+  verdict: { policy: string; status: "pass" | "blocked"; reasons: string[] };
+  partial: boolean;
+  comparison: { status: "not_requested" | "unavailable" | "available"; reason?: string;
+    baseline?: string; new?: string[][]; resolved?: string[][]; unchanged?: string[][] };
+}
+export interface RouteResult {
+  id?: string | null;
+  key: string; url: string; status: "completed" | "failed" | "unattempted";
+  error?: string;
+  response?: { status_code: number; media_type: string | null; url: string;
+    redirects: { url: string; status_code: number }[] };
+  finding_count: number;
+  plugins: { id: string; finding_count: number; checks: CheckOutcome[] }[];
+  coverage: { complete: boolean; expected_response: boolean; missing_checks: string[]; failed_checks: string[] };
+}
+export interface Profiles {
+  requests: Record<string, { headers: Record<string, string>; secret_headers: Record<string, string>; follow_redirects: boolean }>;
+  launches: Record<string, unknown>; networks: Record<string, unknown>; trusts: string[];
 }
 export interface Assessment {
   id: string;
@@ -59,6 +87,7 @@ export interface Assessment {
   plugins: string[];
   cleanup_pending: boolean;
   result: Result | null;
+  plan_snapshot: { target: Target; images: Record<string, string>; timeout_seconds: number };
 }
 export interface Finding {
   id: string;
@@ -67,6 +96,7 @@ export interface Finding {
   severity: string;
   description: string;
   remediation: string;
+  route_result_id: string;
 }
 export interface Results {
   assessment_id: string;
@@ -127,7 +157,8 @@ export type EvidenceData =
       https: boolean;
       domain_present: boolean;
       root_path: boolean;
-    });
+    })
+  | (CookieData & { rule: "session-cookie-secure" | "session-cookie-httponly"; httponly: boolean });
 export interface Evidence {
   id: string;
   finding_id: string;
@@ -141,11 +172,11 @@ export interface EvidenceResponse {
   evidence: Evidence[];
 }
 export interface AssessmentReport {
-  schema_version: 2;
+  schema_version: 1;
   generated_at: string;
   project: Project;
   target: Target;
-  assessment: Assessment;
+  assessment: Assessment & { result: Result };
   findings: Finding[];
   evidence: Evidence[];
 }

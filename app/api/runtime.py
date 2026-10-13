@@ -1,13 +1,10 @@
 from fastapi import APIRouter
 
-from ..core.config import settings
-from .schemas import RuntimeOut
+from ..assessments.profiles import public_catalog
 
 router = APIRouter()
 
 
-@router.get("/runtime", response_model=RuntimeOut)
-def runtime():
-    return {
-        "sandbox_backend": settings.sandbox_backend,
-    }
+@router.get("/runtime/profiles")
+def profiles():
+    return public_catalog()

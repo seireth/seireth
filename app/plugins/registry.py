@@ -25,7 +25,13 @@ class PluginRegistry:
                 manifest = PluginManifest.model_validate(plugin.manifest, strict=True)
             except (TypeError, ValidationError) as exc:
                 raise ValueError("registered plugin has an invalid manifest") from exc
-            validated_plugins.append(Plugin(manifest=manifest, analyze=plugin.analyze))
+            validated_plugins.append(
+                Plugin(
+                    manifest=manifest,
+                    analyze=plugin.analyze,
+                    rules=MappingProxyType(dict(plugin.rules)),
+                )
+            )
         plugins = tuple(validated_plugins)
         ids = [plugin.manifest.id for plugin in plugins]
         if len(ids) != len(set(ids)):
@@ -46,7 +52,7 @@ class PluginRegistry:
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate plugins are not allowed")
         if any(plugin_id not in self._by_id for plugin_id in ids):
-            raise ValueError("unknown or inactive plugin")
+            raise ValueError("unknown plugin")
         return [self._by_id[plugin_id] for plugin_id in ids]
 
     def catalog(self) -> list[dict]:

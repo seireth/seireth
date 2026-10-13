@@ -50,5 +50,9 @@ it("requires an explicit target URL and registers only the operator's input", as
     name: "Owned target",
     url: "https://owned.test/",
     image: "arbitrary:local",
+    kind: "docker",
+    launch_profile: null,
+    network_profile: null,
+    trust_profile: null,
   });
 });

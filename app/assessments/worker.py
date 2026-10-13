@@ -3,38 +3,38 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from datetime import timedelta
 from threading import Event, Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
-from sqlalchemy import select, text
+from pydantic import ValidationError
+from sqlalchemy import select, text, update
 
-from ..core.config import settings
 from ..core.constraints import MAX_ASSESSMENT_ATTEMPTS
 from ..persistence import db as database
 from ..persistence import models
-from ..plugins.registry import registry as plugin_registry
 from .execution import Cancelled, ExecutionContext, Interrupted
 from .images import DockerUnavailable, ImageUnavailable, require_local_image
-from .lifecycle import audit, finish, transition
-from .orchestrator import Outcome, execute, sandbox_for
+from .lifecycle import (
+    attempt_result,
+    audit,
+    finding_record,
+    finish,
+    latest_attempt,
+    transition,
+)
+from .orchestrator import Outcome, sandbox_for
+from .plans import verify_snapshot
 from .policy import PolicyError, validate
-from .sandbox import new_journal, validate_journal
+from .sandbox import validate_journal
+from .workflows import execute_plan, refresh_result
 
 logger = logging.getLogger(__name__)
 OWNER_LOCK = 7342101
 RECONCILE_INTERVAL_SECONDS = 30
 _OWNERSHIP_LOST = "dispatcher ownership lost"
 _ASSESSMENT_CANCELLED = "assessment cancelled"
-
-
-def latest_attempt(db, assessment_id):
-    return db.scalar(
-        select(models.Attempt)
-        .where(models.Attempt.assessment_id == assessment_id)
-        .order_by(models.Attempt.number.desc())
-        .limit(1)
-    )
 
 
 class AssessmentDispatcher:
@@ -149,13 +149,16 @@ class AssessmentDispatcher:
     def _policy(self, db, assessment):
         project = db.get(models.Project, assessment.project_id)
         target = db.get(models.Target, assessment.target_id)
-        validate(project, target, assessment.url)
-        require_local_image(target.image)
-        try:
-            plugins = plugin_registry.select(assessment.plugins)
-        except ValueError as exc:
-            raise PolicyError(str(exc)) from exc
-        return target, plugins
+        snapshot = assessment.plan_snapshot
+        verify_snapshot(snapshot)
+        if not target or target.kind != snapshot["target"]["kind"]:
+            raise PolicyError("target kind differs from the queued plan")
+        for route in snapshot["routes"]:
+            validate(project, target, route["url"])
+        if target.kind == "docker":
+            for image in snapshot["images"].values():
+                require_local_image(image)
+        return target
 
     def _assert_owner(self, db):
         if self._lost.is_set():
@@ -202,6 +205,62 @@ class AssessmentDispatcher:
 
         return persist
 
+    def _route_writer(self, assessment_id, attempt_id, token):
+        def persist(data):
+
+            with database.SessionLocal() as db:
+                item = db.get(models.Assessment, assessment_id, with_for_update=True)
+                self._assert_owner(db)
+                attempt = latest_attempt(db, assessment_id)
+                if (
+                    not attempt
+                    or attempt.id != attempt_id
+                    or attempt.operation_journal["owner"] != token
+                    or item.status not in {"running", "cancelling"}
+                ):
+                    raise Interrupted("route execution no longer owns its attempt")
+                existing = db.scalar(
+                    select(models.RouteResult).where(
+                        models.RouteResult.attempt_id == attempt_id,
+                        models.RouteResult.route_key == data["key"],
+                    )
+                )
+                if existing:
+                    raise Interrupted("route result was already recorded")
+                row = models.RouteResult(
+                    assessment_id=assessment_id,
+                    attempt_id=attempt_id,
+                    route_key=data["key"],
+                    status=data["status"],
+                    data=data,
+                )
+                db.add(row)
+                db.flush()
+                for plugin in data.get("plugins", []):
+                    for finding in plugin["findings"]:
+                        db.add(
+                            finding_record(
+                                assessment_id,
+                                plugin["id"],
+                                finding,
+                                route_result_id=row.id,
+                            )
+                        )
+                audit(
+                    db,
+                    item.project_id,
+                    "assessment.route_finished",
+                    item.id,
+                    {
+                        "attempt": attempt.number,
+                        "route": data["key"],
+                        "status": data["status"],
+                    },
+                )
+                db.commit()
+
+        return persist
+
     def _watch_cleanup(self):
         while not self._shutdown.is_set():
             if self._lost.is_set():
@@ -223,51 +282,125 @@ class AssessmentDispatcher:
                 if not item or item.status != "queued":
                     return
                 try:
-                    target, plugins = self._policy(db, item)
+                    target = self._policy(db, item)
                     previous = latest_attempt(db, item.id)
                     number = previous.number + 1 if previous else 1
                     if number > MAX_ASSESSMENT_ATTEMPTS:
                         raise PolicyError("crash recovery retry limit reached")
-                except (PolicyError, ImageUnavailable, DockerUnavailable) as exc:
+                except (
+                    PolicyError,
+                    ImageUnavailable,
+                    DockerUnavailable,
+                    ValidationError,
+                ) as exc:
                     item.result = {
-                        "error": str(exc),
+                        "error": "queued plan is invalid"
+                        if isinstance(exc, ValidationError)
+                        else str(exc),
+                        "execution_outcome": "not_started",
                         "cleanup_verified": True,
                         "cleanup_reason": None,
-                        "sandbox_backend": settings.sandbox_backend,
                         "completed_at": models.now().isoformat(),
                     }
                     transition(db, item, "failed")
+                    previous = latest_attempt(db, item.id)
+                    if previous:
+                        item.result = {
+                            **item.result,
+                            **attempt_result(previous),
+                            "cleanup_verified": previous.cleanup_verified,
+                            "execution_outcome": "interrupted",
+                        }
+                        item.cleanup_pending = not previous.cleanup_verified
+                    if isinstance(exc, ValidationError):
+                        item.result = dict(
+                            item.result,
+                            routes=[],
+                            finding_count=0,
+                            coverage={"complete": False},
+                            verdict={
+                                "policy": "strict-v1",
+                                "status": "blocked",
+                                "reasons": ["queued plan is invalid"],
+                            },
+                            comparison={
+                                "status": "unavailable",
+                                "reason": "queued plan is invalid",
+                            },
+                            partial=False,
+                        )
+                    else:
+                        refresh_result(db, item, previous)
                     db.commit()
                     return
+                started_at = models.now()
+                snapshot = item.plan_snapshot
+                timeout = snapshot["timeout_seconds"]
+                deadline = monotonic() + timeout
                 attempt = models.Attempt(
                     id=str(uuid4()),
                     assessment_id=item.id,
                     number=number,
-                    backend=settings.sandbox_backend,
-                    resources={},
-                    operation_journal=new_journal(),
+                    backend="http" if target.kind == "website" else "docker",
+                    started_at=started_at,
+                    execution_metadata={
+                        "started_at": started_at.isoformat(),
+                        "deadline_at": (
+                            started_at + timedelta(seconds=timeout)
+                        ).isoformat(),
+                        "target": snapshot["target"],
+                        "plugins": snapshot["plugins"],
+                    },
                 )
+                from .bundle import new_bundle_journal
+
+                attempt.operation_journal = (
+                    new_bundle_journal(snapshot, attempt.id)
+                    if attempt.backend == "docker"
+                    else {"version": 1, "owner": str(uuid4()), "resources": {}}
+                )
+                if attempt.backend == "http":
+                    from .processes import capture_identity
+
+                    attempt.http_closed = False
+                    attempt.execution_metadata["process_identity"] = capture_identity()
                 context = ExecutionContext(
                     cancel_event,
                     self._shutdown,
-                    monotonic() + settings.assessment_timeout_seconds,
+                    deadline,
                     lambda: not self._lost.is_set(),
                 )
                 sandbox = sandbox_for(
                     attempt,
-                    target,
-                    context,
-                    self._journal_writer(
+                    context=context,
+                    persist_journal=self._journal_writer(
                         item.id, attempt.id, attempt.operation_journal["owner"]
                     ),
+                    snapshot=snapshot,
                 )
-                attempt.resources = getattr(sandbox, "resources", {})
                 db.add(attempt)
                 item.cleanup_pending = True
                 transition(db, item, "running", {"attempt": number})
                 db.commit()
-                attempt_id, url = attempt.id, item.url
-            outcome = execute(sandbox, url, context, plugins)
+                attempt_id = attempt.id
+            outcome = execute_plan(
+                sandbox,
+                snapshot,
+                context,
+                self._route_writer(
+                    assessment_id, attempt_id, attempt.operation_journal["owner"]
+                ),
+            )
+            if attempt.backend == "http" and outcome.cleanup_verified:
+                # This acknowledgement only proves that this attempt's sockets
+                # closed. It cannot advance lifecycle or overwrite a new owner.
+                with database.SessionLocal() as db:
+                    db.execute(
+                        update(models.Attempt)
+                        .where(models.Attempt.id == attempt_id)
+                        .values(http_closed=True)
+                    )
+                    db.commit()
             if self._lost.is_set():
                 return  # A new owner must reconcile; never overwrite its decisions.
             # The cancellation row lock serializes cancellation against completion.
@@ -290,6 +423,7 @@ class AssessmentDispatcher:
                 if item.status == "cancelling" and outcome.cleanup_verified:
                     outcome.status, outcome.error = "cancelled", _ASSESSMENT_CANCELLED
                 finish(db, item, attempt, outcome)
+                refresh_result(db, item, attempt)
                 db.commit()
         except Exception:
             # A later dispatcher startup revisits any nonterminal record left here.
@@ -346,15 +480,38 @@ class AssessmentDispatcher:
             if not attempt:
                 raise ValueError("execution attempt missing")
             validate_journal(attempt.operation_journal)
+            if attempt.backend == "docker":
+                from .bundle import new_bundle_journal
+
+                expected = new_bundle_journal(item.plan_snapshot, attempt.id)[
+                    "resources"
+                ]
+                actual = attempt.operation_journal["resources"]
+                if expected.keys() != actual.keys() or any(
+                    expected[key]["kind"] != actual[key]["kind"]
+                    or expected[key]["name"] != actual[key]["name"]
+                    for key in expected
+                ):
+                    raise ValueError("invalid operation journal")
         except ValueError as exc:
             if item.status != "failed":
                 transition(db, item, "failed", {"error": str(exc)})
             item.cleanup_pending = True
+            result = item.result or {}
+            if attempt:
+                attempt.cleanup_verified = False
+                attempt.finished_at = attempt.finished_at or models.now()
+                attempt.error = result.get("error") or attempt.error or str(exc)
+                result = {**attempt_result(attempt), **result}
             item.result = {
-                **(item.result or {}),
+                **result,
+                "error": result.get("error")
+                or (attempt.error if attempt else str(exc)),
                 "cleanup_verified": False,
                 "cleanup_reason": str(exc),
+                "execution_outcome": result.get("execution_outcome", "failed"),
             }
+            refresh_result(db, item, attempt)
             db.commit()
             return None
         if item.status == "running":
@@ -379,8 +536,26 @@ class AssessmentDispatcher:
                 persist_journal=self._journal_writer(
                     item.id, attempt.id, token, recovery=True
                 ),
+                snapshot=item.plan_snapshot,
             )
-        cleanup = sandbox.cleanup()
+            if attempt.backend == "http":
+                from .processes import identity_exited
+                from .sandbox import CleanupOutcome
+
+                cleanup = CleanupOutcome(
+                    bool(
+                        attempt.http_closed
+                        or identity_exited(
+                            attempt.execution_metadata["process_identity"]
+                        )
+                    ),
+                    "interrupted HTTP process has not acknowledged closure",
+                )
+                if cleanup.verified:
+                    cleanup = CleanupOutcome(True)
+            else:
+                cleanup = None
+        cleanup = cleanup or sandbox.cleanup()
         with database.SessionLocal() as db:
             item = db.get(models.Assessment, assessment_id, with_for_update=True)
             self._assert_owner(db)
@@ -392,6 +567,8 @@ class AssessmentDispatcher:
             }:
                 return
             self._finish_recovery(db, item, attempt, cleanup, original_status)
+            if item.status in {"completed", "failed", "cancelled"}:
+                refresh_result(db, item, attempt)
             db.commit()
 
     def _finish_recovery(self, db, item, attempt, cleanup, original_status):
@@ -422,6 +599,19 @@ class AssessmentDispatcher:
             )
         elif item.status == "cancelling":
             finish(db, item, attempt, Outcome("cancelled", _ASSESSMENT_CANCELLED, True))
+        elif attempt.backend == "http":
+            finish(
+                db,
+                item,
+                attempt,
+                Outcome(
+                    "failed",
+                    "website execution interrupted; submit a new assessment to retry",
+                    True,
+                    error_kind="execution_error",
+                    execution_status="interrupted",
+                ),
+            )
         else:
             self._retry_recovered(db, item, attempt)
 
@@ -430,7 +620,12 @@ class AssessmentDispatcher:
             self._policy(db, item)
             if attempt.number >= MAX_ASSESSMENT_ATTEMPTS:
                 raise PolicyError("crash recovery retry limit reached")
-        except (PolicyError, ImageUnavailable, DockerUnavailable) as exc:
+        except (
+            PolicyError,
+            ImageUnavailable,
+            DockerUnavailable,
+            ValidationError,
+        ) as exc:
             finish(db, item, attempt, Outcome("failed", str(exc), True))
         else:
             attempt.error = "execution interrupted"

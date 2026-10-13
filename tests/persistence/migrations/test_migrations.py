@@ -8,8 +8,8 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import Column, Integer, MetaData, Table, inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from app.assessments.sandbox import new_journal
 from app.persistence import models
+from tests.sessions import attempt_record, completed_route
 
 
 def _assert_schema_matches_models(database):
@@ -63,7 +63,7 @@ def test_status_constraint(database):
         with pytest.raises(IntegrityError) as error:
             connection.execute(
                 text(
-                    "INSERT INTO assessments (id, project_id, target_id, url, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', '[\"http-security-headers\"]'::json, 'unknown', now())"
+                    "INSERT INTO assessments (id, project_id, target_id, plan_snapshot, status, created_at) VALUES ('bad', 'bad', 'bad', '{}'::json, 'unknown', now())"
                 )
             )
     assert error.value.orig.diag.constraint_name == "assessment_status_valid"
@@ -114,7 +114,7 @@ def test_missing_journal_is_rejected_by_database(database):
         with pytest.raises(IntegrityError) as error:
             connection.execute(
                 text(
-                    "INSERT INTO attempts (id, assessment_id, number, backend, resources, started_at, cleanup_verified) VALUES ('bad', 'bad', 1, 'docker', '{}', now(), false)"
+                    "INSERT INTO attempts (id, assessment_id, number, backend, execution_metadata, started_at, cleanup_verified) VALUES ('bad', 'bad', 1, 'docker', '{}', now(), false)"
                 )
             )
     assert error.value.orig.diag.column_name == "operation_journal"
@@ -125,12 +125,9 @@ def test_attempt_number_bounds_are_enforced(database, assessment_graph, number):
     graph = assessment_graph()
     with database.SessionLocal() as db:
         db.add(
-            models.Attempt(
+            attempt_record(
                 assessment_id=graph.assessment.id,
                 number=number,
-                backend="inmemory",
-                resources={},
-                operation_journal=new_journal(),
             )
         )
         with pytest.raises(IntegrityError) as error:
@@ -142,12 +139,9 @@ def test_attempt_number_bounds_are_enforced(database, assessment_graph, number):
 def test_valid_attempt_numbers_are_persisted(database, assessment_graph, number):
     graph = assessment_graph()
     with database.SessionLocal() as db:
-        attempt = models.Attempt(
+        attempt = attempt_record(
             assessment_id=graph.assessment.id,
             number=number,
-            backend="inmemory",
-            resources={},
-            operation_journal=new_journal(),
         )
         db.add(attempt)
         db.commit()
@@ -163,12 +157,9 @@ def test_attempt_number_must_be_unique_per_assessment(database, assessment_graph
     with database.SessionLocal() as db:
         for _ in range(2):
             db.add(
-                models.Attempt(
+                attempt_record(
                     assessment_id=graph.assessment.id,
                     number=1,
-                    backend="inmemory",
-                    resources={},
-                    operation_journal=new_journal(),
                 )
             )
         with pytest.raises(IntegrityError) as error:
@@ -195,6 +186,7 @@ def test_finding_requires_remediation(database, assessment_graph, remediation):
         db.add(
             models.Finding(
                 assessment_id=graph.assessment.id,
+                route_result_id=completed_route(db, graph.assessment).id,
                 plugin="http-security-headers",
                 title="test",
                 severity="low",
@@ -213,6 +205,7 @@ def test_deleting_finding_removes_its_evidence(database, assessment_graph):
         evidence = models.Evidence(kind="http-response", data={})
         finding = models.Finding(
             assessment_id=graph.assessment.id,
+            route_result_id=completed_route(db, graph.assessment).id,
             plugin="http-security-headers",
             title="test",
             severity="low",

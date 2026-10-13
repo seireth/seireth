@@ -33,14 +33,14 @@ for (const combined of [false, true]) {
     const reportResponse = await page.request.get(`/api/v1/assessments/${id}/report`);
     expect(reportResponse.ok()).toBe(true);
     const report = await reportResponse.json();
-    expect(report.schema_version).toBe(2);
+    expect(report.schema_version).toBe(1);
     expect(report.assessment.plugins).toEqual(combined ? ["http-security-headers", "csp-policy"] : ["csp-policy"]);
     expect(report.assessment.result.sandbox_backend).toBe("docker");
     expect(report.assessment.result.cleanup_verified).toBe(true);
-    const csp = report.assessment.result.plugins.find((item: {id: string}) => item.id === "csp-policy");
+    const csp = report.assessment.result.routes[0].plugins.find((item: {id: string}) => item.id === "csp-policy");
     expect(csp.checks.map((item: {status: string}) => item.status)).toEqual(["failed", "failed", "failed"]);
     if (combined) {
-      const baseline = report.assessment.result.plugins.find((item: {id: string}) => item.id === "http-security-headers");
+      const baseline = report.assessment.result.routes[0].plugins.find((item: {id: string}) => item.id === "http-security-headers");
       expect(baseline.checks.map((item: {status: string}) => item.status)).toEqual(["passed", "passed", "passed"]);
     }
 

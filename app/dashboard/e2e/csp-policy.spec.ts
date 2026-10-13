@@ -65,11 +65,11 @@ const python = process.env.SEIRETH_TEST_PYTHON ??
   join(root, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
 const analyze = [
   "import json,sys",
-  "from app.plugins.base import HttpObservation",
+  "from app.plugins.base import AnalysisContext, HttpObservation",
   "from app.plugins.csp_policy import analyze",
   "fields=json.load(sys.stdin)",
   "observation=HttpObservation(url='https://csp-fixture.test/page',status_code=200,headers={'content-type':['text/html'],'content-security-policy':fields})",
-  "print(json.dumps([check.status for check in analyze(observation).checks]))",
+  "print(json.dumps([check.status for check in analyze(observation, AnalysisContext()).checks]))",
 ].join("\n");
 
 for (const fixture of fixtures) {

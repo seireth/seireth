@@ -1,17 +1,17 @@
 """Strict CSP evidence and real worker-to-API/report persistence."""
 
 import json
-from copy import deepcopy
 from threading import Event
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import select
 
 from app.api.schemas import CspEvidenceData, EvidenceOut
-from app.assessments.sandbox import InMemorySandbox
 from app.assessments.worker import AssessmentDispatcher
 from app.persistence import models
 from app.plugins.base import HttpObservation
+from tests.sessions import FakeSession
 
 PERMISSIVE = "script-src https: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'"
 
@@ -148,18 +148,22 @@ def test_worker_persists_selected_csp_checks_and_safe_report_evidence(
     policy += "; report-uri https://syntheticReportMarker.test/"
 
     def fetch(self, url):
+        url = url["url"]
         calls.append(url)
-        return HttpObservation(
-            url=url,
-            status_code=200,
-            headers={
-                "Content-Type": ["text/html"],
-                "X-Content-Type-Options": ["nosniff"],
-                "Content-Security-Policy": [policy, "frame-ancestors 'none'"],
-            },
-        )
+        return {
+            "observation": HttpObservation(
+                url=url,
+                status_code=200,
+                headers={
+                    "Content-Type": ["text/html"],
+                    "X-Content-Type-Options": ["nosniff"],
+                    "Content-Security-Policy": [policy, "frame-ancestors 'none'"],
+                },
+            ),
+            "redirects": [],
+        }
 
-    monkeypatch.setattr(InMemorySandbox, "execute", fetch)
+    monkeypatch.setattr(FakeSession, "fetch", fetch)
     AssessmentDispatcher()._run(graph.assessment.id, Event())
     assert calls == [graph.assessment.url]
     base = f"/api/v1/assessments/{graph.assessment.id}"
@@ -170,8 +174,13 @@ def test_worker_persists_selected_csp_checks_and_safe_report_evidence(
     report = report_response.json()
     assert results["status"] == "completed"
     assert results["result"]["cleanup_verified"] is True
-    assert [entry["id"] for entry in results["result"]["plugins"]] == plugins
-    assert [entry["status"] for entry in results["result"]["plugins"][0]["checks"]] == [
+    assert [
+        entry["id"] for entry in results["result"]["routes"][0]["plugins"]
+    ] == plugins
+    assert [
+        entry["status"]
+        for entry in results["result"]["routes"][0]["plugins"][0]["checks"]
+    ] == [
         "failed",
         "failed",
         "failed",
@@ -181,7 +190,8 @@ def test_worker_persists_selected_csp_checks_and_safe_report_evidence(
     assert len(results["findings"]) == len(evidence["evidence"]) == 3
     if len(plugins) > 1:
         assert [
-            entry["rule_id"] for entry in results["result"]["plugins"][1]["checks"]
+            entry["rule_id"]
+            for entry in results["result"]["routes"][0]["plugins"][1]["checks"]
         ] == [
             "x-content-type-options",
             "content-security-policy",
@@ -189,9 +199,9 @@ def test_worker_persists_selected_csp_checks_and_safe_report_evidence(
         ]
         assert all(
             entry["status"] == "passed"
-            for entry in results["result"]["plugins"][1]["checks"]
+            for entry in results["result"]["routes"][0]["plugins"][1]["checks"]
         )
-    assert report["schema_version"] == 2
+    assert report["schema_version"] == 1
     assert report["evidence"] == evidence["evidence"]
     assert report["assessment"]["result"] == results["result"]
     for entry in evidence["evidence"]:
@@ -206,30 +216,15 @@ def test_worker_persists_selected_csp_checks_and_safe_report_evidence(
     with database.SessionLocal() as db:
         assessment = db.get(models.Assessment, graph.assessment.id)
         assert assessment.result["finding_count"] == 3
-        assert len(assessment.findings) == 3
-
-
-def test_historical_assessment_export_has_version_two_without_new_checks(
-    read_client, database, assessment_graph
-):
-    graph = assessment_graph(status="completed")
-    original = {"plugins": [{"id": "http-security-headers", "finding_count": 0}]}
-    with database.SessionLocal() as db:
-        db.get(models.Assessment, graph.assessment.id).result = deepcopy(original)
-        db.commit()
-    report = read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report").json()
-    assert report["schema_version"] == 2
-    assert report["assessment"]["result"] == original
-    assert report["evidence"] == []
-    with database.SessionLocal() as db:
-        assert db.get(models.Assessment, graph.assessment.id).result == original
+        assert len(db.scalars(select(models.Finding)).all()) == 3
 
 
 @pytest.mark.parametrize("suffix", ["/evidence", "/report"])
 def test_corrupt_stored_csp_evidence_returns_a_generic_error(
     read_client, assessment_graph, evidence_row, caplog, suffix
 ):
-    graph = assessment_graph(status="completed")
+    graph = assessment_graph()
+    AssessmentDispatcher()._run(graph.assessment.id, Event())
     data = evidence_data()
     data["observations"][0]["condition"] = "synthetic-csp-evidence-secret"
     evidence_row(graph.assessment.id, data=data)

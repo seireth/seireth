@@ -80,26 +80,23 @@ def test_migrate_upgrades_to_head_and_preserves_exit_status(monkeypatch, status)
 
 
 @pytest.mark.parametrize(
-    "arguments,base_url,timeout,backend",
+    "arguments,base_url,timeout",
     [
-        ([], "http://127.0.0.2:9001", 120, None),
+        ([], "http://127.0.0.2:9001", 120),
         (
             [
                 "--base-url",
                 "https://example.test",
                 "--timeout-seconds",
                 "7.2",
-                "--expected-backend",
-                "docker",
             ],
             "https://example.test",
             7.2,
-            "docker",
         ),
     ],
 )
 def test_verify_forwards_options_and_prints_json(
-    monkeypatch, capsys, arguments, base_url, timeout, backend
+    monkeypatch, capsys, arguments, base_url, timeout
 ):
     from app.cli import commands
     from app.core.config import settings
@@ -129,7 +126,6 @@ def test_verify_forwards_options_and_prints_json(
     check.assert_called_once_with(
         base_url,
         timeout_seconds=timeout,
-        expected_backend=backend,
         image="arbitrary:local",
         target_url="http://arbitrary:8080/",
         plugins=["http-security-headers"],

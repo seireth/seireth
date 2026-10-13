@@ -14,7 +14,7 @@ def test_test_bootstrap_isolates_operator_settings_and_preserves_test_switches(
     tmp_path,
 ):
     (tmp_path / ".env").write_text(
-        "SEIRETH_DOCKER_PIDS_LIMIT=0\nSEIRETH_DOCKER_RUNNER_IMAGE=operator:custom\n"
+        "SEIRETH_DOCKER_PIDS_LIMIT=0\nSEIRETH_BUNDLE_RUNNER_IMAGE=operator:custom\n"
     )
     admin_url = "postgresql+psycopg://unused:unused@127.0.0.1/test-admin"
     env = {
@@ -73,8 +73,8 @@ def test_invalid_api_port_is_rejected(port):
 
 
 def test_runner_image_uses_environment_override(monkeypatch):
-    monkeypatch.setenv("SEIRETH_DOCKER_RUNNER_IMAGE", "python:custom")
-    assert Settings(_env_file=None).docker_runner_image == "python:custom"
+    monkeypatch.setenv("SEIRETH_BUNDLE_RUNNER_IMAGE", "python:custom")
+    assert Settings(_env_file=None).bundle_runner_image == "python:custom"
 
 
 @pytest.mark.parametrize(
@@ -82,7 +82,6 @@ def test_runner_image_uses_environment_override(monkeypatch):
     [
         ("database_url", "sqlite:///test.db"),
         ("database_url", "postgresql://user:pass@localhost/test"),
-        ("sandbox_backend", "unknown"),
     ],
 )
 def test_unsupported_runtime_configuration_is_rejected(field, value):

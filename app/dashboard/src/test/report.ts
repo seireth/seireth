@@ -6,22 +6,28 @@ const cookieEvidence = {
 } satisfies Evidence;
 
 export const reportFixture: AssessmentReport = {
-  schema_version: 2,
+  schema_version: 1,
   generated_at: "2026-10-07T12:01:00Z",
   project: { id: "p", name: "<script>window.syntheticInjected=true</script>", created_at: "2026-10-07T12:00:00Z" },
-  target: { id: "t", project_id: "p", name: "Demo", image: "seireth/demo-app:local", url: "http://demo.test/" },
+  target: { id: "t", project_id: "p", name: "Demo", image: "seireth/demo-app:local", kind: "docker", url: "http://demo.test/" },
   assessment: {
     id: "a", project_id: "p", target_id: "t", url: "http://demo.test/",
     created_at: "2026-10-07T12:00:00Z", plugins: ["cookie-security"],
     status: "completed", cleanup_pending: false,
+    plan_snapshot: { target: { id: "t", project_id: "p", name: "Demo", kind: "docker", image: "seireth/demo-app:local", url: "http://demo.test/" }, images: {}, timeout_seconds: 60 },
     result: {
-      sandbox_backend: "inmemory", cleanup_verified: true, cleanup_reason: null,
+      execution_outcome: "completed", coverage: { complete: true }, partial: false,
+      verdict: { policy: "strict-v1", status: "blocked", reasons: ["finding observed"] },
+      comparison: { status: "not_requested" },
+      sandbox_backend: "docker", cleanup_verified: true, cleanup_reason: null,
       completed_at: "2026-10-07T12:00:30Z", attempt: 1, finding_count: 1,
-      response: { status_code: 200, media_type: "text/html" },
-      plugins: [{ id: "cookie-security", finding_count: 1 }],
+      routes: [{ id: "route-id", key: "session", url: "http://demo.test/", status: "completed",
+        response: { status_code: 200, media_type: "text/html", url: "http://demo.test/", redirects: [] },
+        plugins: [{ id: "cookie-security", finding_count: 1, checks: [] }], finding_count: 1,
+        coverage: { complete: true, expected_response: true, missing_checks: [], failed_checks: [] } }],
     },
   },
-  findings: [{ id: "f", plugin: "cookie-security", title: "SameSite configuration", severity: "low", description: "<img src=x onerror=alert(1)>", remediation: "Set Secure." }],
+  findings: [{ id: "f", route_result_id: "route-id", plugin: "cookie-security", title: "SameSite configuration", severity: "low", description: "<img src=x onerror=alert(1)>", remediation: "Set Secure." }],
   evidence: [cookieEvidence],
 };
 
@@ -31,8 +37,8 @@ export const multiFindingReport: AssessmentReport = {
     ...reportFixture.assessment,
     plugins: ["http-security-headers", "cookie-security"],
     result: {
-      ...reportFixture.assessment.result, finding_count: 3,
-      plugins: [{ id: "http-security-headers", finding_count: 0 }, { id: "cookie-security", finding_count: 3 }],
+      ...reportFixture.assessment.result!, finding_count: 3,
+      routes: reportFixture.assessment.result!.routes.map(route => ({ ...route, finding_count: 3, plugins: [{id: "http-security-headers", finding_count: 0, checks: []}, {id: "cookie-security", finding_count: 3, checks: []}] })),
     },
   },
   findings: [
@@ -45,6 +51,27 @@ export const multiFindingReport: AssessmentReport = {
     { ...cookieEvidence, id: "a-other", finding_id: "other", data: { ...cookieEvidence.data, cookie_name: "other" } },
     { ...cookieEvidence, id: "b-second", data: { ...cookieEvidence.data, cookie_name: "second" } },
   ],
+};
+
+export const routeReportFixture: AssessmentReport = {
+  ...reportFixture,
+  schema_version: 1,
+  assessment: {
+    ...reportFixture.assessment,
+    result: {
+      ...reportFixture.assessment.result!,
+      execution_outcome: "completed",
+      routes: [{
+        id: "route-id", key: "session", url: reportFixture.assessment.url, status: "completed",
+        finding_count: 1,
+        response: { status_code: 200, media_type: "text/html", url: reportFixture.assessment.url, redirects: [] },
+        plugins: [{ id: "cookie-security", finding_count: 1,
+          checks: [{ rule_id: "samesite-none-without-secure", status: "failed", reason: "Cookie attributes evaluated." }] }],
+        coverage: { complete: true, expected_response: true, missing_checks: [], failed_checks: ["cookie-security:samesite-none-without-secure"] },
+      }],
+    },
+  },
+  findings: [{ ...reportFixture.findings[0], route_result_id: "route-id" }],
 };
 
 export function blobText(blob: Blob): Promise<string> {
@@ -76,16 +103,16 @@ export const cspReportFixture: AssessmentReport = {
   assessment: {
     ...reportFixture.assessment, plugins: ["csp-policy"],
     result: {
-      ...reportFixture.assessment.result, finding_count: 1,
-      plugins: [{ id: "csp-policy", finding_count: 1, checks: [
+      ...reportFixture.assessment.result!, finding_count: 1,
+      routes: reportFixture.assessment.result!.routes.map(route => ({ ...route, plugins: [{ id: "csp-policy", finding_count: 1, checks: [
         { rule_id: "csp-script-sources", status: "passed", reason: "No covered weakness identified." },
         { rule_id: "csp-inline-scripts", status: "failed", reason: "Observed headers permit arbitrary inline scripts." },
         { rule_id: "csp-eval", status: "passed", reason: "No covered weakness identified." },
-      ] }],
+      ] }] })),
     },
   },
   findings: [{
-    id: "csp-inline", plugin: "csp-policy", title: "Unrestricted CSP inline script execution",
+    id: "csp-inline", route_result_id: "route-id", plugin: "csp-policy", title: "Unrestricted CSP inline script execution",
     severity: "medium", description: "Observed headers permit inline scripts; document content was not inspected.",
     remediation: "Remove effective unsafe-inline permissions.",
   }],

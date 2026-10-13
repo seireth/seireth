@@ -1,7 +1,5 @@
 """Application configuration loaded from environment variables."""
 
-from typing import Literal
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,15 +13,15 @@ class Settings(BaseSettings):
     api_port: int = Field(ge=1, le=65535)
 
     database_url: str = Field(pattern=r"^postgresql\+psycopg://")
-    sandbox_backend: Literal["inmemory", "docker"]
     assessment_timeout_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
-
-    docker_runner_image: TargetImage = "python:3.14-slim"
 
     docker_memory: str = "256m"
     docker_cpus: float = Field(default=0.5, gt=0, allow_inf_nan=False)
     docker_pids_limit: int = Field(default=64, gt=0)
     docker_timeout_seconds: float = Field(default=15, gt=0, allow_inf_nan=False)
+    operator_config_file: str = ""
+    cleanup_timeout_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
+    bundle_runner_image: TargetImage = "seireth/runner:local"
 
     model_config = SettingsConfigDict(
         env_prefix="SEIRETH_",

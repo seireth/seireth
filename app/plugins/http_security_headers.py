@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from .base import (
+    AnalysisContext,
     CheckOutcome,
     HttpObservation,
     Plugin,
@@ -142,7 +143,7 @@ def _absent_condition(fields: list[str]) -> HeaderCondition:
     return "blank" if not any(field.strip() for field in fields) else "unrecognized"
 
 
-def analyze(observation: HttpObservation) -> PluginResponse:
+def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginResponse:
     """Evaluate declared response context; never retain arbitrary header values."""
     headers, media_type = observation.headers, observation.media_type
     findings, checks = [], []
@@ -212,8 +213,13 @@ def analyze(observation: HttpObservation) -> PluginResponse:
 PLUGIN = Plugin(
     manifest=PluginManifest(
         id="http-security-headers",
+        version="1.0.0",
         name="HTTP security headers",
         description="Check MIME protection, CSP presence, and framing protection using declared HTTP response context.",
     ),
     analyze=analyze,
+    rules={
+        rule: "representation" if rule == "x-content-type-options" else "document"
+        for rule in RULE_REQUIREMENTS
+    },
 )

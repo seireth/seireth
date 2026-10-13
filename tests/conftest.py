@@ -19,6 +19,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
+pytest_plugins = ("tests.website",)
+
 # Keep explicit test switches, but discard operator environment settings.
 for key in tuple(os.environ):
     if (
@@ -32,7 +34,6 @@ for key in tuple(os.environ):
 os.environ.update(
     SEIRETH_API_HOST="127.0.0.1",
     SEIRETH_API_PORT="8000",
-    SEIRETH_SANDBOX_BACKEND="inmemory",
     SEIRETH_DATABASE_URL="postgresql+psycopg://unused:unused@127.0.0.1/unused",
 )
 
@@ -128,8 +129,9 @@ def database(database_context):
 
 
 @pytest.fixture
-def assessment_graph(database):
+def assessment_graph(database, mock_images):
     from app.persistence import models
+    from tests.sessions import frozen_plan
 
     def make(*, owner="local-development", plugins=None, status="queued"):
         with database.SessionLocal() as db:
@@ -147,10 +149,17 @@ def assessment_graph(database):
             assessment = models.Assessment(
                 project_id=project.id,
                 target_id=target.id,
-                url=target.url,
-                plugins=["http-security-headers"] if plugins is None else plugins,
+                plan_snapshot=frozen_plan(target=target),
                 status=status,
             )
+            if plugins is not None:
+                assessment.plan_snapshot = {
+                    **assessment.plan_snapshot,
+                    "plugins": [
+                        {"id": plugin, "version": "1.0.0"} for plugin in plugins
+                    ],
+                }
+                assessment.plan_snapshot["routes"][0]["plugins"] = plugins
             db.add(assessment)
             db.commit()
             return SimpleNamespace(
@@ -201,6 +210,63 @@ def make_plugin():
                 description=f"Test {plugin_id} plugin",
             ),
             analyze_plugin,
+            rules={},
         )
 
     return make
+
+
+@pytest.fixture
+def client(database):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+@pytest.fixture
+def project(client):
+    response = client.post("/api/v1/projects", json={"name": "demo"})
+    assert response.status_code == 200
+    return response.json()["id"]
+
+
+@pytest.fixture
+def mock_images(monkeypatch):
+    import hashlib
+
+    from app.assessments import images, worker
+
+    monkeypatch.setattr(
+        images,
+        "inspect_image",
+        lambda image: {
+            "Id": "sha256:" + hashlib.sha256(image.encode()).hexdigest(),
+            "Config": {"Volumes": None},
+        },
+    )
+    monkeypatch.setattr(images, "require_local_image", lambda image: None)
+    monkeypatch.setattr(worker, "require_local_image", lambda image: None)
+
+
+@pytest.fixture(autouse=True)
+def current_execution_doubles(request, monkeypatch):
+    if (
+        request.node.get_closest_marker("docker")
+        or "integration" in request.node.nodeid
+    ):
+        return
+    if "database" in request.fixturenames:
+        request.getfixturevalue("mock_images")
+    if request.node.nodeid.startswith(
+        ("tests/api/", "tests/assessments/test_worker")
+    ) and not any(
+        name in request.fixturenames
+        for name in ("website", "fake_docker", "pending_docker")
+    ):
+        from app.assessments import worker
+        from tests.sessions import fake_factory
+
+        monkeypatch.setattr(worker, "sandbox_for", fake_factory)

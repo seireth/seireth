@@ -1,7 +1,7 @@
 # Security model
 
 SEIRETH is a local, single-operator development tool for owned or explicitly
-authorized images. The fixed development actor provides no production
+authorized images and websites. The fixed development actor provides no production
 authentication. Example API/database bindings use loopback; a non-loopback API
 binding exposes an unauthenticated service. Keep it off untrusted networks.
 Report vulnerabilities through [SECURITY.md](../SECURITY.md).
@@ -12,25 +12,29 @@ Reads enforce project authorization. Browser writes reject cross-origin and
 opaque `Origin` headers; CLI requests without `Origin` remain supported. Vite
 preserves the browser's `Origin` and `Host` headers for these checks.
 
-The GUI renders stored content as text. Target HTTP requests remain inside the
-sandbox; the browser sends assessment requests only to Seireth.
+The GUI renders stored content as text and sends assessment requests only to
+Seireth. Docker requests execute inside the owned bundle; website requests use
+the native connection policy described in [workflows](workflows.md).
 
 Admission, execution, and retries check project/target ownership, origin/path,
 plugins, and local image availability. Registered root URLs include child paths; traversal,
 credentials, fragments, and ambiguous multiply encoded paths are rejected.
-Redirect responses are inspected without following them. The runner reads
+Redirect following is off by default. Explicitly configured following stays
+within the authorized origin/path and validates every connection. The fetcher reads
 status and headers, then closes the response without reading or retaining its
 body. Header-check applicability uses declared metadata; skipped or inconclusive
 checks do not establish protection for an unassessed representation or destination.
 
-The runner replaces the registered hostname with Docker alias `target`, measuring
-the disposable image instance. HTTPS certificates must be valid and trusted for
-that alias; custom hostname/TLS mapping is unsupported.
+Docker runs connect to the internal target while retaining the original
+Host and TLS server name. Website connections pin validated DNS addresses.
+System trust or an explicitly configured CA verifies certificates.
 
 Targets and runners have an internal network, no published ports or Docker socket,
 a non-root numeric user, dropped capabilities, no-new-privileges, read-only
 filesystems, and CPU/memory/PID limits. Execution timeouts and cancellation interrupt
-runner operations; cleanup independently verifies each resource.
+runner operations; cleanup independently verifies each resource. Declared writable
+volumes are owned by the attempt. A journaled helper with only CHOWN and no
+network initializes volume ownership; it is the sole root helper.
 
 ## Privileged and remaining boundaries
 
@@ -43,11 +47,11 @@ a kernel and are unsuitable for arbitrary hostile workloads. URL boundaries do n
 prove ownership. Multi-user authentication, tenant isolation, and production TLS
 are absent; audit records are not tamper-proof evidence.
 
-The in-memory backend simulates HTTP 200 and HTML headers without networking. The
-[header checks](assessments.md#header-checks) provide limited value checks, not
+The [header checks](assessments.md#header-checks) provide limited value checks, not
 proof of security or complete CSP validation.
 The passive [cookie checks](assessments.md#cookie-checks) inspect only response
-attribute requirements, skip malformed fields, and do not infer cookie purpose
+attribute requirements, skip malformed fields, and use explicit session-cookie
+declarations for Secure/HttpOnly requirements. They do not infer cookie purpose
 or validate login flows. Cookie values are not retained in findings/evidence or
 included in validation diagnostics.
 

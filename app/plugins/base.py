@@ -1,7 +1,7 @@
 """Typed, JSON-compatible contract for response-analysis plugins."""
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -19,6 +19,7 @@ from ..core.constraints import (
     FINDING_TITLE_MAX_LENGTH,
     MEDIA_TYPE_PATTERN,
     PLUGIN_ID_MAX_LENGTH,
+    PluginVersion,
     StoredHttpUrl,
 )
 
@@ -76,6 +77,26 @@ class PluginManifest(ContractModel):
     )
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=1000)
+    version: PluginVersion = "1.0.0"
+
+
+class AnalysisContext(ContractModel):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, strict=False, hide_input_in_errors=True
+    )
+    session_cookies: tuple[str, ...] = ()
+    expected_cookies: tuple[str, ...] = ()
+
+    @field_validator("session_cookies", "expected_cookies")
+    @classmethod
+    def valid_names(cls, names):
+        if (
+            len(names) > 30
+            or len(set(names)) != len(names)
+            or any(not re.fullmatch(_TOKEN, name) for name in names)
+        ):
+            raise ValueError("cookie declarations require unique cookie names")
+        return names
 
 
 class PluginFinding(ContractModel):
@@ -113,7 +134,7 @@ def require_unique_check_ids(checks: Sequence[CheckOutcome]) -> None:
 
 class PluginResponse(ContractModel):
     findings: tuple[PluginFinding, ...]
-    checks: tuple[CheckOutcome, ...] = ()
+    checks: tuple[CheckOutcome, ...]
 
     @model_validator(mode="after")
     def unique_checks(self):
@@ -124,11 +145,12 @@ class PluginResponse(ContractModel):
 @dataclass(frozen=True)
 class Plugin:
     manifest: PluginManifest
-    analyze: Callable[[HttpObservation], PluginResponse]
+    analyze: Callable[[HttpObservation, AnalysisContext], PluginResponse]
+    rules: Mapping[str, str]
 
 
 @dataclass(frozen=True)
 class PluginResult:
     plugin_id: str
     findings: tuple[PluginFinding, ...]
-    checks: tuple[CheckOutcome, ...] = ()
+    checks: tuple[CheckOutcome, ...]

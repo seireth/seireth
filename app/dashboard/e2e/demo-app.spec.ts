@@ -61,7 +61,7 @@ for (const scenario of [
     expect(results.result.cleanup_verified).toBe(true);
     expect(results.cleanup_pending).toBe(false);
     expect(evidence.evidence.map((entry: { data: { rule_id: string } }) => entry.data.rule_id)).toEqual(scenario.findings ? [scenario.path === "/lab/unknown-type" ? "x-content-type-options" : "framing-protection"] : []);
-    expect(results.result.plugins.find((plugin: {id: string}) => plugin.id === "http-security-headers").checks.map((check: {status: string}) => check.status)).toEqual(scenario.outcomes);
+    expect(results.result.routes[0].plugins.find((plugin: {id: string}) => plugin.id === "http-security-headers").checks.map((check: {status: string}) => check.status)).toEqual(scenario.outcomes);
     await expect(page.getByRole("region", {name: "Response and check outcomes"})).toBeVisible();
     for (const outcome of new Set(scenario.outcomes))
       await expect(page.locator(`.check-${outcome}`).first()).toBeVisible();

@@ -1,39 +1,28 @@
 """Execute a single attempt without holding a database transaction."""
 
-import logging
-from dataclasses import dataclass, field
-from urllib.parse import urlsplit
+from dataclasses import dataclass
 
 from pydantic import ValidationError
 
-from ..core.config import settings
-from ..plugins.base import Plugin, PluginResponse, PluginResult
-from .execution import Cancelled, Interrupted
-from .sandbox import DockerSandbox, InMemorySandbox
-
-logger = logging.getLogger(__name__)
+from ..plugins.base import PluginResponse, PluginResult
 
 
-def sandbox_for(attempt, target=None, context=None, persist_journal=None):
-    if attempt.backend == "inmemory":
-        return InMemorySandbox(context=context)
-    if attempt.backend != "docker":
-        raise ValueError("unsupported sandbox backend")
-    return DockerSandbox(
-        target.image if target else None,
-        runner_image=settings.docker_runner_image,
-        assessment_id=attempt.assessment_id,
-        attempt_id=attempt.id,
-        resources=attempt.resources or None,
-        target_host=urlsplit(target.url).hostname if target else None,
-        memory=settings.docker_memory,
-        cpus=settings.docker_cpus,
-        pids_limit=settings.docker_pids_limit,
-        command_timeout=settings.docker_timeout_seconds,
-        context=context,
-        operation_journal=attempt.operation_journal,
-        persist_journal=persist_journal,
-    )
+def sandbox_for(attempt, *, snapshot, persist_journal, context=None):
+    if attempt.backend == "docker":
+        from .bundle import BundleSession
+
+        return BundleSession(
+            snapshot, attempt, persist_journal=persist_journal, context=context
+        )
+    if attempt.backend == "http":
+        from .website import WebsiteSession
+
+        return WebsiteSession(
+            snapshot,
+            context,
+            attempt.execution_metadata["process_identity"].get("addresses", ()),
+        )
+    raise ValueError("unsupported execution backend")
 
 
 @dataclass
@@ -41,52 +30,36 @@ class Outcome:
     status: str = "completed"
     error: str | None = None
     cleanup_verified: bool = False
-    plugin_results: list[PluginResult] = field(default_factory=list)
     cleanup_reason: str | None = None
-    response: dict | None = None
+    error_kind: str | None = None
+    failed_plugin: str | None = None
+    execution_status: str | None = None
 
 
-def execute(sandbox, url, context, plugins: list[Plugin]) -> Outcome:
-    outcome = Outcome()
-    try:
-        context.check()
-        observation = sandbox.execute(url)
-        outcome.response = {
-            "status_code": observation.status_code,
-            "media_type": observation.media_type,
-        }
-        context.check()
-        for plugin in plugins:
-            try:
-                response = PluginResponse.model_validate(
-                    plugin.analyze(observation.model_copy(deep=True)), strict=True
-                )
-            except ValidationError as exc:
-                raise ValueError(
-                    f"plugin {plugin.manifest.id} returned an invalid response"
-                ) from exc
-            outcome.plugin_results.append(
-                PluginResult(plugin.manifest.id, response.findings, response.checks)
-            )
-            context.check()
-    except Cancelled:
-        outcome.status, outcome.error = "cancelled", "assessment cancelled"
-    except Interrupted:
-        outcome.status, outcome.error = "recovering", "execution interrupted"
-    except TimeoutError:
-        outcome.status, outcome.error = "failed", "assessment execution timed out"
-    except Exception:
-        logger.exception("assessment execution failed")
-        outcome.status, outcome.error = "failed", "assessment execution failed"
-    finally:
+class PluginExecutionError(RuntimeError):
+    """A safe plugin failure description, separate from security findings."""
+
+    def __init__(self, plugin_id, *, invalid=False):
+        self.plugin_id = plugin_id
+        super().__init__(
+            f"plugin {plugin_id} returned an invalid response"
+            if invalid
+            else f"plugin {plugin_id} execution failed"
+        )
+
+
+def analyze_response(observation, plugins, context, analysis):
+    results = []
+    for plugin in plugins:
         try:
-            cleanup = sandbox.cleanup()
-            outcome.cleanup_verified = cleanup.verified
-            outcome.cleanup_reason = cleanup.reason
-        except Exception:
-            logger.exception("assessment cleanup failed")
-            outcome.cleanup_reason = "cleanup could not be completed"
-        if not outcome.cleanup_verified:
-            outcome.status = "failed"
-            outcome.error = outcome.error or "sandbox cleanup could not be verified"
-    return outcome
+            value = plugin.analyze(observation.model_copy(deep=True), analysis)
+            response = PluginResponse.model_validate(value, strict=True)
+        except ValidationError as exc:
+            raise PluginExecutionError(plugin.manifest.id, invalid=True) from exc
+        except Exception as exc:
+            raise PluginExecutionError(plugin.manifest.id) from exc
+        results.append(
+            PluginResult(plugin.manifest.id, response.findings, response.checks)
+        )
+        context.check()
+    return results

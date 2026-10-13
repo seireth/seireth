@@ -68,12 +68,12 @@ python -m app serve
 For later starts, activate the existing `.venv` for your OS and repeat these three
 commands. Applying migrations again is safe when the schema is already current.
 
-## Simulated assessment
+## Native assessment
 
 `serve` stays running in the terminal. With the example `.env`, open
 http://127.0.0.1:8000/dashboard/. Create a project, register an explicit image and base URL,
 then choose an **Assessment URL** and plugins on **New assessment**. Records can be reused; editing and deletion are
-not available. The example uses simulated responses (`inmemory`) and PostgreSQL.
+not available. Assessments request real Docker applications or registered websites.
 The JSON API explorer remains at `/docs`.
 Setup preserves an existing `.env`; customized settings may differ.
 
@@ -82,7 +82,9 @@ In a **second terminal**, return to the repository and activate `.venv` using
 Then run:
 
 ```bash
-python -m app verify --image sample:local --target-url http://sample:8080/ --plugins http-security-headers --expected-backend inmemory
+docker build -t seireth/demo-app:local examples/demo_app
+docker build --target runner -t seireth/runner:local .
+python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/ --plugins http-security-headers
 ```
 
 Stop the API with Ctrl+C. `docker compose down` stops the database and retains its
@@ -95,22 +97,22 @@ and runner images once (rebuild the demo after changing its source):
 
 ```bash
 docker build -t seireth/demo-app:local examples/demo_app
-docker pull python:3.14-slim
+docker build --target runner -t seireth/runner:local .
 ```
 
 Then start and verify the Docker stack:
 
 ```bash
 python -m app docker-up
-python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security --expected-backend docker
+python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security
 ```
 
 Verification checks findings, evidence associations, cleanup, and the audit trail;
 its JSON output includes `results` and `evidence`.
 
 `docker-up` builds the API, detects the Docker socket group for its non-root user,
-waits for PostgreSQL, applies migrations, and waits for API health. Compose selects
-the Docker backend; `--expected-backend` only checks results. Use `docker-up` for
+waits for PostgreSQL, applies migrations, and waits for API health. Targets select
+Docker or website execution. Use `docker-up` for
 startup: plain `docker compose up` skips migrations and socket-group detection.
 Open `/dashboard/` on the configured API address for real assessments; choose the
 demo's `http://demo-app:8080/cookies` URL and both plugins for six findings.
@@ -125,12 +127,10 @@ individual and combined plugin selections through real Docker assessments.
 
 ## Fresh database baseline
 
-This target API replaces the former authorization-scope schema. Initialize a fresh
-database; upgrading an existing populated database is unsupported. The initial
-migration has a required assessment URL and no authorization-scope table. If you
-choose to discard local records, stop the stack and verify its Compose project and
-PostgreSQL volume labels before removing only that database volume. Never prune
-unrelated resources. Apply migrations before starting the updated API.
+The current schema is `0001_current_schema`. Previous schemas are unsupported.
+Follow the [reset procedure](configuration.md#reset-to-the-current-schema) for
+disposable older databases, after verified assessment cleanup. Migrate an empty
+database before starting the API; do not stamp an older schema to the new revision.
 
 ## After pulling changes
 

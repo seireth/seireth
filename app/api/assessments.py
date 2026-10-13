@@ -1,17 +1,19 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..assessments import images
-from ..assessments.lifecycle import audit, transition
-from ..assessments.policy import PolicyError, validate
+from ..assessments.lifecycle import attempt_result, audit, latest_attempt, transition
+from ..assessments.plans import RoutePlan, freeze_plan
+from ..assessments.policy import PolicyError
 from ..assessments.worker import dispatcher
+from ..assessments.workflows import public_findings, refresh_result
+from ..core.config import settings
 from ..persistence import models
 from ..persistence.db import get_db
-from ..plugins.registry import registry as plugin_registry
 from .dependencies import authorize_project, page, pagination
 from .schemas import (
     AssessmentCreate,
@@ -41,11 +43,12 @@ def load_assessment(
 
 def load_evidence(db: Session, item: models.Assessment) -> list[EvidenceOut]:
     evidence = []
-    if item.status == models.AssessmentStatus.completed:
+    findings = public_findings(db, item)
+    if findings:
         rows = db.scalars(
             select(models.Evidence)
             .join(models.Finding)
-            .where(models.Finding.assessment_id == item.id)
+            .where(models.Finding.id.in_([finding.id for finding in findings]))
             .order_by(models.Evidence.id)
         )
         for row in rows:
@@ -88,35 +91,51 @@ def list_assessments(
     },
 )
 def create_assessment(
-    payload: AssessmentCreate, response: Response, db: Session = Depends(get_db)
+    payload: AssessmentCreate,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
     """Validate the target, response URL, and plugins before enqueueing."""
 
     project = authorize_project(db, payload.project_id)
     target = db.get(models.Target, payload.target_id)
     try:
-        plugins = plugin_registry.select(payload.plugins)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    try:
-        validate(
+        if not target:
+            raise PolicyError("valid project and target required")
+        if target.project_id != project.id:
+            raise PolicyError("target does not belong to this project")
+        routes = (
+            payload.routes
+            if payload.routes is not None
+            else [RoutePlan(key="response", url=payload.url, plugins=payload.plugins)]
+        )
+        snapshot = freeze_plan(
             project,
             target,
-            str(payload.url),
+            routes,
+            timeout_seconds=settings.assessment_timeout_seconds
+            if payload.routes is None
+            else None,
+            baseline=payload.baseline,
+            control_endpoint=request.scope.get("server"),
         )
     except PolicyError as exc:
         raise HTTPException(403, str(exc)) from exc
-    try:
-        images.require_local_image(target.image)
     except images.ImageUnavailable as exc:
         raise HTTPException(400, str(exc)) from None
     except images.DockerUnavailable as exc:
         raise HTTPException(503, str(exc)) from None
+    except ValueError:
+        raise HTTPException(400, "invalid plugin selection or plan") from None
+    if payload.baseline:
+        baseline, _ = load_assessment(db, payload.baseline)
+        if baseline.project_id != project.id:
+            raise HTTPException(403, "baseline must belong to this project")
     item = models.Assessment(
         project_id=payload.project_id,
         target_id=target.id,
-        url=str(payload.url),
-        plugins=[plugin.manifest.id for plugin in plugins],
+        plan_snapshot=snapshot,
     )
     db.add(item)
     db.flush()
@@ -153,7 +172,7 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
         "status": item.status,
         "cleanup_pending": item.cleanup_pending,
         "result": item.result,
-        "findings": item.findings,
+        "findings": public_findings(db, item),
     }
 
 
@@ -195,12 +214,12 @@ def get_report(assessment_id: str, response: Response, db: Session = Depends(get
     try:
         assessment = ReportAssessmentOut.model_validate(item)
         report = AssessmentReportOut(
-            schema_version=2,
+            schema_version=1,
             generated_at=models.now(),
             project=project,
-            target=db.get(models.Target, item.target_id),
+            target=item.plan_snapshot["target"],
             assessment=assessment,
-            findings=sorted(item.findings, key=lambda finding: finding.id),
+            findings=public_findings(db, item),
             evidence=load_evidence(db, item),
         )
     except ValidationError:
@@ -228,6 +247,22 @@ def cancel_assessment(
         raise HTTPException(409, "assessment is no longer cancellable")
     if item.status == "queued":
         transition(db, item, "cancelled")
+        attempt = latest_attempt(db, item.id)
+        item.result = {
+            "error": "assessment cancelled before execution",
+            "execution_outcome": "not_started",
+            "cleanup_verified": True,
+            "cleanup_reason": None,
+            "completed_at": models.now().isoformat(),
+        }
+        if attempt:
+            item.result = {
+                **item.result,
+                **attempt_result(attempt),
+                "cleanup_verified": attempt.cleanup_verified,
+            }
+            item.cleanup_pending = not attempt.cleanup_verified
+        refresh_result(db, item, attempt)
     else:
         if item.status != "cancelling":
             transition(db, item, "cancelling")

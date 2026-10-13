@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from .base import (
+    AnalysisContext,
     CheckOutcome,
     HttpObservation,
     Plugin,
@@ -247,7 +248,7 @@ _RULES = (
 )
 
 
-def analyze(observation: HttpObservation) -> PluginResponse:
+def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginResponse:
     media_type = observation.media_type
     unevaluated = [
         unevaluated_check(rule.id, observation.status_code, media_type)
@@ -355,8 +356,10 @@ def analyze(observation: HttpObservation) -> PluginResponse:
 PLUGIN = Plugin(
     manifest=PluginManifest(
         id="csp-policy",
+        version="1.0.0",
         name="CSP policy",
         description="Analyze existing enforced CSP headers for broad script sources, unrestricted inline scripts, and JavaScript evaluation; document content is not inspected.",
     ),
     analyze=analyze,
+    rules={rule: "document" for rule in RULE_CONTEXTS},
 )

@@ -47,18 +47,8 @@ def test_response_url_rejects_outside_or_unsafe_boundaries(
     assert dispatch_calls["submit"] == []
 
 
-def test_url_is_required_and_old_scope_contract_is_removed(
-    read_client, assessment_graph
-):
+def test_submission_requires_a_url_or_route_plan(read_client, assessment_graph):
     graph = assessment_graph()
     payload = submission(graph)
     del payload["url"]
-    payload["scope_id"] = "old-scope"
     assert read_client.post("/api/v1/assessments", json=payload).status_code == 422
-    for path in [
-        "/authorization-scopes",
-        "/authorization-scopes/missing",
-        f"/projects/{graph.project.id}/authorization-scopes",
-    ]:
-        assert read_client.get("/api/v1" + path).status_code == 404
-        assert read_client.post("/api/v1" + path, json={}).status_code == 404

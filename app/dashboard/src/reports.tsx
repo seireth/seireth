@@ -1,10 +1,11 @@
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import type { AssessmentReport } from "./api/types";
-import { AssessmentRequestFields, AssessmentSummary, EmptyFindings, FindingDetails, ResponseChecks } from "./components/AssessmentDetails";
+import { AssessmentRequestFields, AssessmentSummary, EmptyFindings, ExecutionMetadata, FindingDetails, IncompleteExecution } from "./components/AssessmentDetails";
 import { EvidenceDetails } from "./components/EvidenceDetails";
 import { groupEvidenceByFinding } from "./evidence";
 import dashboardStyles from "./styles.css?inline";
+import { AssessmentSource, RouteResults } from "./components/RouteResults";
 
 const reportStyles = `
 .report { max-width: 1000px; margin: 24px auto; padding: 0 20px; }
@@ -36,6 +37,8 @@ function ReportContent({ report }: { report: AssessmentReport }) {
           <dt>Target ID</dt><dd>{target.id}</dd>
           <dt>Target image</dt><dd>{target.image}</dd>
           <AssessmentRequestFields assessment={assessment} targetUrl={target.url} />
+          <ExecutionMetadata result={assessment.result} />
+          <AssessmentSource assessment={assessment} />
           <dt>Created at (UTC)</dt><dd>{new Date(assessment.created_at).toISOString()}</dd>
           {assessment.result?.completed_at && <><dt>Completed at (UTC)</dt><dd>{new Date(assessment.result.completed_at).toISOString()}</dd></>}
           {assessment.result?.attempt !== undefined && <><dt>Attempt</dt><dd>{assessment.result.attempt}</dd></>}
@@ -43,15 +46,15 @@ function ReportContent({ report }: { report: AssessmentReport }) {
           <dt>Report schema version</dt><dd>{report.schema_version}</dd>
         </dl>
         <p>This report is a snapshot. Later cleanup reconciliation may change subsequent reports.</p>
-        {assessment.result?.sandbox_backend === "inmemory" && <p>Simulated assessment: the in-memory backend performs no target networking.</p>}
         {assessment.result?.error && <p className="error">{assessment.result.error}</p>}
+        <IncompleteExecution status={assessment.status} />
       </section>
       <AssessmentSummary assessment={assessment} findingCount={findings.length} />
-      <ResponseChecks result={assessment.result} />
+      <RouteResults result={assessment.result} />
       <section className="findings-section">
         <h2>Findings and evidence</h2>
         {findings.length === 0 ? <EmptyFindings status={assessment.status} /> : findings.map((finding) => (
-          <FindingDetails key={finding.id} finding={finding} expanded>
+          <FindingDetails key={finding.id} finding={finding} routes={assessment.result?.routes} expanded>
             <EvidenceDetails evidence={evidenceByFinding.get(finding.id) ?? []} />
           </FindingDetails>
         ))}

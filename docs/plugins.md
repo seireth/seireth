@@ -14,7 +14,7 @@ Create a behavior-specific module under `app/plugins` exporting `PLUGIN`:
 from .base import HttpObservation, Plugin, PluginManifest, PluginResponse
 
 
-def analyze(observation: HttpObservation) -> PluginResponse:
+def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginResponse:
     return PluginResponse(findings=())
 
 
@@ -32,6 +32,12 @@ Import it in `app/plugins/registry.py` and add it to the registry's ordered
 `plugins` tuple. Registration enables explicit selection, never automatic
 execution. Startup rejects duplicate IDs and invalid manifests.
 
+Declare implemented rule IDs and applicability in `Plugin.rules`; the registered
+metadata supplies `/api/v1/plugin-rules` and route coverage. Derive IDs from the
+plugin's existing evidence contract where possible. Applicability is
+`representation`, `document`, `cookie-observation`, `session`, or `cookie-presence`.
+A plugin without rule metadata cannot satisfy default required coverage.
+
 ## Contract and tests
 
 Observation `headers` is a `dict[str, list[str]]`: names are lowercased,
@@ -42,8 +48,8 @@ the original authorized URL and a required integer `status_code` (100–599).
 `media_type` is derived from the ordered `Content-Type` fields: parameters and
 case are ignored, while missing, malformed, or conflicting declarations return
 `None`. Docker's internal `target` alias is only used for the runner request.
-Redirects are not followed, and response bodies are not read or retained. The
-simulated backend defaults to HTTP 200 with `text/html`.
+Redirects default to disabled. Request profiles may enable up to five hops within
+the registered origin and path; response bodies are not read or retained. Both executors request real responses.
 
 See the [header checks](assessments.md#header-checks) and
 [cookie checks](assessments.md#cookie-checks) and
@@ -52,13 +58,13 @@ See the [header checks](assessments.md#header-checks) and
 and boundary cases.
 
 Each analyzer receives an independent copy of the shared HTTP observation and
-returns `PluginResponse`. Its optional `checks` tuple contains unique stable
+returns `PluginResponse`. Its required `checks` tuple contains unique stable
 `rule_id` values, a `passed`, `failed`, `skipped`, or `inconclusive` status, and a
 short nonblank reason. The header and CSP policy plugins report every check, including those
-that produce no finding; cookie output remains unchanged. Titles and severities have length limits; descriptions
-and remediation must contain non-whitespace text, and evidence must be
-JSON-compatible. Accepted text retains its formatting. Invalid output fails the
-affected assessment without partial persistence.
+that produce no finding. Every plugin implements
+`analyze(observation: HttpObservation, context: AnalysisContext) -> PluginResponse`.
+The response requires explicit `findings` and `checks` collections. Analyzers that
+do not need cookie declarations still receive the same immutable context.
 
 Never put cookie values, complete cookie fields, raw CSP policies, nonces,
 hashes, allowlist hosts, reporting destinations, or arbitrary attribute values in
@@ -77,6 +83,11 @@ accepted models; registration alone does not extend that contract.
 
 Analyzers run synchronously. Cancellation and deadline checks occur between
 calls; a blocking analyzer delays interruption and cleanup. Keep analysis bounded.
+
+Set the manifest's `version` to a numeric `major.minor.patch` value and increment
+it when analysis behavior changes. The worker records the selected versions
+before execution; reports read those saved versions, including when a plugin
+fails. Queued plans reject a changed installed version; the rule catalogue exposes current versions.
 
 Cover positive, negative, boundary, and relevant malformed/incomplete observations.
 Use a local `PluginRegistry` to test catalog visibility and selection; preserve

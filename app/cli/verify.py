@@ -66,7 +66,6 @@ def verify(
     target_url: str,
     plugins: list[str],
     timeout_seconds: float = 120,
-    expected_backend: str | None = None,
 ) -> dict:
     """Run the complete reachable MVP workflow against a running API."""
 
@@ -109,11 +108,8 @@ def verify(
             raise RuntimeError(f"assessment did not complete: {results}")
         if not results["result"]["cleanup_verified"]:
             raise RuntimeError("sandbox cleanup was not verified")
-        if (
-            expected_backend
-            and results["result"]["sandbox_backend"] != expected_backend
-        ):
-            raise RuntimeError(f"expected {expected_backend} backend, got: {results}")
+        if results["result"]["sandbox_backend"] != "docker":
+            raise RuntimeError("verification requires a real Docker execution")
         try:
             evidence = AssessmentEvidenceOut.model_validate(
                 require(
@@ -136,7 +132,11 @@ def verify(
             client.get(f"/api/v1/projects/{project['id']}/audit-events"),
             200,
         )
-        actions = [event["action"] for event in audit]
+        actions = [
+            event["action"]
+            for event in audit
+            if event["action"] != "assessment.route_finished"
+        ]
         expected_actions = [
             "project.created",
             "target.registered",

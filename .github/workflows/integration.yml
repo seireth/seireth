@@ -59,31 +59,37 @@ jobs:
         run: |
           uv sync --locked --extra test --no-editable --no-build
           mkdir -p artifacts
+          echo 'SEIRETH_OPERATOR_CONFIG_FILE=/tmp/seireth-operator.json' >> .env
           docker build -t seireth/demo-app:local examples/demo_app
           docker compose -p seireth-ci-demo-app -f examples/demo_app/compose.yml up -d --wait
-          docker pull python:3.14-slim
+          docker build --target runner -t seireth/runner:local .
           uv run --no-sync --no-build python -m app docker-up --api-ready-timeout-seconds 120
+          docker build -t seireth/service-fixture:local examples/service_bundle
+          python .github/scripts/prepare_website_fixture.py
           migration_containers=$(docker compose ps -a -q migrate)
           test -z "$migration_containers"
       - name: Verify real assessment and resource removal
         run: |
           set -euo pipefail
-          uv run --no-sync --no-build python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security --timeout-seconds 120 --expected-backend docker | tee artifacts/verification.json
+          uv run --no-sync --no-build python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security --timeout-seconds 120 | tee artifacts/verification.json
           docker ps -a --format '{{.Names}}' > artifacts/container-names.txt
           docker network ls --format '{{.Name}}' > artifacts/network-names.txt
-          containers=$(grep -E '^seireth-(target-|assessment-runner-)' artifacts/container-names.txt || true)
-          networks=$(grep -E '^seireth-assessment-' artifacts/network-names.txt || true)
+          containers=$(docker ps -aq --filter label=seireth.assessment)
+          networks=$(docker network ls -q --filter label=seireth.assessment)
+          volumes=$(docker volume ls -q --filter label=seireth.assessment)
           test -z "$containers" || { echo "::error::Assessment containers remain: $containers"; exit 1; }
           test -z "$networks" || { echo "::error::Assessment networks remain: $networks"; exit 1; }
+          test -z "$volumes" || { echo "::error::Assessment volumes remain: $volumes"; exit 1; }
       - name: Verify application plugin scenarios
         run: uv run --no-sync --no-build python -m examples.demo_app.verify --base-url http://127.0.0.1:18080 --output artifacts/demo-app.json
       - name: Verify real cancellation and crash recovery
         env:
           SEIRETH_DOCKER_TESTS: "1"
-        run: uv run --no-sync --no-build python -m pytest -m docker tests/integration/test_api_process_lifecycle.py --basetemp artifacts/api-process
+        run: uv run --no-sync --no-build python -m pytest -m docker tests/integration --basetemp artifacts/api-process
       - name: Verify GUI image selection, demo actions, and packaged assets
         env:
           SEIRETH_UI_URL: http://127.0.0.1:18080
+          SEIRETH_WEBSITE_FIXTURE_URL: http://workspace:8080/
         run: |
           npm --prefix app/dashboard run test:e2e
           docker compose exec -T api python -c 'from pathlib import Path; import app.main; root = Path(app.main.__file__).parent; assert (root / "dashboard/dist/index.html").is_file(); assert list((root / "dashboard/dist/assets").glob("*.js")); assert not (root / "dashboard/src").exists(); assert not (root / "dashboard/node_modules").exists()'
@@ -105,8 +111,9 @@ jobs:
         run: |
           # This job runs on a disposable GitHub-hosted Docker daemon.
           status=0
-          docker ps -aq --filter name=seireth-target- --filter name=seireth-assessment-runner- | xargs -r docker rm -f || status=1
-          docker network ls -q --filter name=seireth-assessment- | xargs -r docker network rm || status=1
+          docker ps -aq --filter label=seireth.assessment | xargs -r docker rm -f || status=1
+          docker volume ls -q --filter label=seireth.assessment | xargs -r docker volume rm || status=1
+          docker network ls -q --filter label=seireth.assessment | xargs -r docker network rm || status=1
           docker compose down --volumes --remove-orphans || status=1
           docker compose -p seireth-ci-demo-app -f examples/demo_app/compose.yml down || status=1
           exit "$status"

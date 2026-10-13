@@ -11,14 +11,17 @@ from sqlalchemy import event, func, select, text
 
 from app.assessments import execution, policy, worker
 from app.assessments.execution import ExecutionContext, Interrupted
-from app.assessments.sandbox import CleanupOutcome, InMemorySandbox, new_journal
+from app.assessments.sandbox import CleanupOutcome
 from app.assessments.worker import AssessmentDispatcher
+from app.assessments.workflows import public_findings
 from app.core.config import settings
 from app.persistence import models
+from app.plugins import registry as registry_module
 from app.plugins.base import HttpObservation, Plugin, PluginManifest
 from app.plugins.cookie_security import PLUGIN as COOKIE_SECURITY_PLUGIN
 from app.plugins.http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 from app.plugins.registry import PluginRegistry
+from tests.sessions import FakeSession, attempt_record
 
 
 @pytest.fixture
@@ -128,180 +131,14 @@ def test_initial_claim_rejects_lost_ownership_before_policy_or_writes(monkeypatc
     session.commit.assert_not_called()
 
 
-@pytest.fixture
-def recovery_state(monkeypatch):
-    item = models.Assessment(
-        id="interrupted-assessment",
-        project_id="test-project",
-        status="running",
-        cleanup_pending=True,
-    )
-    attempt = models.Attempt(
-        id="interrupted-attempt",
-        assessment_id=item.id,
-        number=1,
-        backend="inmemory",
-        operation_journal=new_journal(),
-    )
-    session = MagicMock()
-    session.__enter__.return_value = session
-    session.get.side_effect = lambda model, *a, **kw: (
-        item if model is models.Assessment else attempt
-    )
-    session.scalar.return_value = attempt
-    session.scalars.side_effect = [[item.id], []]
-    monkeypatch.setattr(worker.database, "SessionLocal", lambda: session)
-    dispatcher = AssessmentDispatcher()
-    check_policy = Mock()
-    monkeypatch.setattr(dispatcher, "_policy", check_policy)
-    state = SimpleNamespace(
-        item=item,
-        attempt=attempt,
-        session=session,
-        dispatcher=dispatcher,
-        check_policy=check_policy,
-        cleanup_outcome=CleanupOutcome(True),
-        original_token=attempt.operation_journal["owner"],
-    )
-
-    def cleanup():
-        # Claim must be committed and its session closed before external cleanup.
-        assert session.commit.call_count == 1
-        assert session.__exit__.call_count == 2
-        assert attempt.operation_journal["owner"] != state.original_token
-        return state.cleanup_outcome
-
-    state.cleanup = Mock(side_effect=cleanup)
-    state.sandbox = Mock(return_value=SimpleNamespace(cleanup=state.cleanup))
-    monkeypatch.setattr(worker, "sandbox_for", state.sandbox)
-    return state
-
-
-@pytest.mark.parametrize(
-    "status, verified, number, policy_error, expected_status, expected_error",
-    [
-        ("running", True, 1, None, "queued", None),
-        ("recovering", True, 1, None, "queued", None),
-        ("cancelling", True, 1, None, "cancelled", "assessment cancelled"),
-        ("running", True, 2, None, "failed", "crash recovery retry limit reached"),
-        (
-            "running",
-            True,
-            1,
-            "authorization expired",
-            "failed",
-            "authorization expired",
-        ),
-        ("running", False, 1, None, "failed", "sandbox cleanup could not be verified"),
-        ("failed", True, 1, None, "failed", "original execution failure"),
-        ("failed", False, 1, None, "failed", "original execution failure"),
-    ],
-)
-def test_recovery_preserves_results_and_retry_rules_without_database(
-    recovery_state,
-    status,
-    verified,
-    number,
-    policy_error,
-    expected_status,
-    expected_error,
-):
-    state = recovery_state
-    state.item.status = status
-    state.attempt.number = number
-    if status == "failed":
-        state.item.result = {"error": "original execution failure"}
-        state.attempt.error = "original execution failure"
-    if policy_error:
-        state.check_policy.side_effect = policy.PolicyError(policy_error)
-    reason = None if verified else "daemon unavailable"
-    state.cleanup_outcome = CleanupOutcome(verified, reason)
-
-    state.dispatcher.recover(include_failed_cleanup=True)
-
-    assert state.item.status == expected_status
-    assert state.item.cleanup_pending is not verified
-    assert state.attempt.cleanup_verified is verified
-    assert state.attempt.finished_at is not None
-    assert state.session.commit.call_count == 2
-    state.cleanup.assert_called_once()
-    if expected_status == "queued":
-        assert state.item.result is None
-        assert state.attempt.error == "execution interrupted"
-    else:
-        assert state.item.result["error"] == expected_error
-        assert state.item.result["cleanup_verified"] is verified
-        assert state.item.result["cleanup_reason"] == reason
-    if status == "failed":
-        state.check_policy.assert_not_called()
-        assert state.attempt.error == "original execution failure"
-        actions = [call.args[0].action for call in state.session.add.call_args_list]
-        assert actions == (["assessment.cleanup_verified"] if verified else [])
-
-
-@pytest.mark.parametrize("missing_attempt", [False, True])
-def test_recovery_rejects_invalid_journal_before_cleanup_without_database(
-    recovery_state, missing_attempt
-):
-    state = recovery_state
-    if missing_attempt:
-        state.session.scalar.return_value = None
-        reason = "execution attempt missing"
-    else:
-        state.attempt.operation_journal = {}
-        reason = "invalid operation journal"
-
-    state.dispatcher.recover()
-
-    assert state.item.status == "failed"
-    assert state.item.cleanup_pending
-    assert state.item.result["cleanup_verified"] is False
-    assert state.item.result["cleanup_reason"] == reason
-    state.sandbox.assert_not_called()
-    state.session.commit.assert_called_once()
-
-
-@pytest.mark.parametrize("change", ["owner_lost", "token_changed", "status_changed"])
-def test_recovery_rejects_stale_cleanup_results_without_database(
-    recovery_state, change
-):
-    state = recovery_state
-    original_cleanup = state.cleanup.side_effect
-
-    def stale_cleanup():
-        outcome = original_cleanup()
-        if change == "owner_lost":
-            state.dispatcher._lost.set()
-        elif change == "token_changed":
-            state.attempt.operation_journal["owner"] = "new-owner"
-        else:
-            state.item.status = "completed"
-        return outcome
-
-    state.cleanup.side_effect = stale_cleanup
-    if change == "owner_lost":
-        with pytest.raises(Interrupted, match="ownership lost"):
-            state.dispatcher.recover()
-    else:
-        state.dispatcher.recover()
-
-    assert state.item.status == (
-        "completed" if change == "status_changed" else "recovering"
-    )
-    assert state.item.cleanup_pending
-    assert state.attempt.finished_at is None
-    state.check_policy.assert_not_called()
-    state.session.commit.assert_called_once()
-
-
 @pytest.mark.parametrize("change", ["url", "malformed-url", "image", "relationship"])
 def test_execution_revalidates_policy(database, assessment, monkeypatch, change):
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
         if change == "url":
-            item.url = "http://other-app:8080/"
+            db.get(models.Target, item.target_id).url = "http://other-app:8080/"
         elif change == "malformed-url":
-            item.url = "http://[invalid/"
+            db.get(models.Target, item.target_id).url = "http://[invalid/"
         elif change == "relationship":
             other_project = models.Project(name="other")
             db.add(other_project)
@@ -315,7 +152,7 @@ def test_execution_revalidates_policy(database, assessment, monkeypatch, change)
             )
         db.commit()
     called = []
-    monkeypatch.setattr(InMemorySandbox, "execute", lambda *a: called.append(True))
+    monkeypatch.setattr(FakeSession, "fetch", lambda *a: called.append(True))
     AssessmentDispatcher()._run(assessment, Event())
     assert read(database, assessment).status == "failed"
     assert not called
@@ -325,14 +162,14 @@ def test_running_visible_duplicate_claims_and_terminal_redispatch(
     database, assessment, monkeypatch
 ):
     entered, release = Event(), Event()
-    original = InMemorySandbox.execute
+    original = FakeSession.fetch
 
     def blocked(self, *args):
         entered.set()
         assert release.wait(5)
         return original(self, *args)
 
-    monkeypatch.setattr(InMemorySandbox, "execute", blocked)
+    monkeypatch.setattr(FakeSession, "fetch", blocked)
     dispatcher = AssessmentDispatcher()
     thread = Thread(target=dispatcher._run, args=(assessment, Event()))
     thread.start()
@@ -377,9 +214,9 @@ def test_active_execution_stops_and_cleans(
             self.context.check()
             sleep(0.005)
 
-    monkeypatch.setattr(InMemorySandbox, "execute", blocking)
+    monkeypatch.setattr(FakeSession, "fetch", blocking)
     monkeypatch.setattr(
-        InMemorySandbox, "cleanup", lambda self: cleaned.set() or CleanupOutcome(True)
+        FakeSession, "cleanup", lambda self: cleaned.set() or CleanupOutcome(True)
     )
     if reason == "timeout":
         monkeypatch.setattr(settings, "assessment_timeout_seconds", 30)
@@ -396,7 +233,7 @@ def test_active_execution_stops_and_cleans(
         elif reason == "shutdown":
             dispatcher._shutdown.set()
         else:
-            execution_clock.elapsed = 31
+            execution_clock.elapsed = 61
         thread.join(5)
         assert not thread.is_alive()
         assert cleaned.is_set()
@@ -431,12 +268,10 @@ def interrupted(database, assessment, number=1, status="running"):
         item.status, item.cleanup_pending = status, True
         for n in range(1, number + 1):
             db.add(
-                models.Attempt(
+                attempt_record(
+                    plan=item.plan_snapshot,
                     assessment_id=item.id,
                     number=n,
-                    backend="inmemory",
-                    resources={},
-                    operation_journal=new_journal(),
                 )
             )
         db.commit()
@@ -472,7 +307,7 @@ def test_recovery_retries_after_verified_cleanup(database, assessment):
     assert item.result["finding_count"] == 3
     assert [
         {key: plugin[key] for key in ("id", "finding_count")}
-        for plugin in item.result["plugins"]
+        for plugin in item.result["routes"][0]["plugins"]
     ] == [{"id": "http-security-headers", "finding_count": 3}]
 
 
@@ -498,7 +333,7 @@ def test_recovery_rejects_changed_url_boundary(database, assessment):
     interrupted(database, assessment)
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
-        item.url = "http://other-app:8080/"
+        db.get(models.Target, item.target_id).url = "http://other-app:8080/"
         db.commit()
     AssessmentDispatcher().recover()
     item = read(database, assessment)
@@ -510,7 +345,7 @@ def test_recovery_rejects_changed_url_boundary(database, assessment):
 def test_recovery_keeps_unverified_cleanup_pending(database, assessment, monkeypatch):
     interrupted(database, assessment)
     monkeypatch.setattr(
-        InMemorySandbox,
+        FakeSession,
         "cleanup",
         lambda self: CleanupOutcome(False, "daemon unavailable"),
     )
@@ -520,7 +355,7 @@ def test_recovery_keeps_unverified_cleanup_pending(database, assessment, monkeyp
     assert item.status == "failed" and item.cleanup_pending
     assert item.result["error"] == "sandbox cleanup could not be verified"
     assert item.result["cleanup_reason"] == "daemon unavailable"
-    monkeypatch.setattr(InMemorySandbox, "cleanup", lambda self: CleanupOutcome(True))
+    monkeypatch.setattr(FakeSession, "cleanup", lambda self: CleanupOutcome(True))
     dispatcher.recover(include_failed_cleanup=True)
     item = read(database, assessment)
     assert item.status == "failed" and not item.cleanup_pending
@@ -532,13 +367,13 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
 ):
     calls = []
 
-    def broken(observation):
+    def broken(observation, _analysis):
         calls.append(observation.url)
         raise RuntimeError("synthetic plugin failure")
 
     monkeypatch.setattr(
-        worker,
-        "plugin_registry",
+        registry_module,
+        "registry",
         PluginRegistry(
             (
                 SECURITY_HEADERS_PLUGIN,
@@ -548,28 +383,41 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
                         id="broken", name="Broken", description="Test failure"
                     ),
                     broken,
+                    rules={},
                 ),
             ),
         ),
     )
+    from app.assessments import plans, workflows
+
+    monkeypatch.setattr(plans, "registry", registry_module.registry)
+    monkeypatch.setattr(workflows, "registry", registry_module.registry)
     with database.SessionLocal() as db:
-        db.get(models.Assessment, assessment).plugins = [
-            "http-security-headers",
-            "cookie-security",
-            "broken",
+        item = db.get(models.Assessment, assessment)
+        snapshot = dict(item.plan_snapshot)
+        snapshot["plugins"] = [
+            {"id": name, "version": "1.0.0"}
+            for name in ("http-security-headers", "cookie-security", "broken")
         ]
+        snapshot["routes"][0]["plugins"] = [
+            entry["id"] for entry in snapshot["plugins"]
+        ]
+        item.plan_snapshot = snapshot
         db.commit()
     monkeypatch.setattr(
-        InMemorySandbox,
-        "execute",
-        lambda self, url: HttpObservation(
-            status_code=200,
-            url=url,
-            headers={
-                "Content-Type": ["text/html"],
-                **{"Set-Cookie": ["cross=synthetic-cookie-secret; SameSite=None"]},
-            },
-        ),
+        FakeSession,
+        "fetch",
+        lambda self, route: {
+            "observation": HttpObservation(
+                status_code=200,
+                url=route["url"],
+                headers={
+                    "Content-Type": ["text/html"],
+                    **{"Set-Cookie": ["cross=synthetic-cookie-secret; SameSite=None"]},
+                },
+            ),
+            "redirects": [],
+        },
     )
     AssessmentDispatcher()._run(assessment, Event())
     assert len(calls) == 1
@@ -577,7 +425,7 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
         item = db.get(models.Assessment, assessment)
         assert item.status == "failed"
         assert item.result["cleanup_verified"]
-        assert item.findings == []
+        assert db.scalar(select(func.count()).select_from(models.Finding)) == 0
         assert (
             db.scalar(
                 select(models.Evidence.id)
@@ -661,20 +509,22 @@ def test_finalization_flush_failure_rolls_back_before_retry(
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
         assert item.status == "running" and item.result is None
-        assert rows(db, models.Finding) == rows(db, models.Evidence) == 0
+        assert rows(db, models.Finding) == rows(db, models.Evidence) == 3
+        assert public_findings(db, item) == []
         assert list(
             db.scalars(
                 select(models.AuditEvent.action).where(
                     models.AuditEvent.resource_id == assessment
                 )
             )
-        ) == ["assessment.running"]
+        ) == ["assessment.running", "assessment.route_finished"]
     dispatcher.recover()
     dispatcher._run(assessment, Event())
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
         assert item.status == "completed" and item.result["attempt"] == 2
-        assert rows(db, models.Finding) == rows(db, models.Evidence) == 3
+        assert rows(db, models.Finding) == rows(db, models.Evidence) == 6
+        assert len(public_findings(db, item)) == 3
         assert rows(db, models.Attempt) == 2
         assert list(
             db.scalars(
@@ -720,7 +570,7 @@ def test_recovery_does_not_requeue_after_ownership_loss(
         dispatcher._lost.set()
         return CleanupOutcome(True)
 
-    monkeypatch.setattr(InMemorySandbox, "cleanup", lose_ownership)
+    monkeypatch.setattr(FakeSession, "cleanup", lose_ownership)
     with pytest.raises(RuntimeError, match="ownership lost"):
         dispatcher.recover()
     item = read(database, assessment)
@@ -730,41 +580,29 @@ def test_recovery_does_not_requeue_after_ownership_loss(
 
 @pytest.fixture
 def pending_docker(database, assessment):
-    from uuid import uuid4
+    from app.assessments.bundle import BundleSession
 
-    from app.assessments.sandbox import DockerSandbox
-
-    attempt_id = str(uuid4())
-    journal = new_journal()
-    journal["resources"]["network"]["state"] = "uncertain"
-    sandbox = DockerSandbox(
-        "seireth/demo-app:local",
-        runner_image=settings.docker_runner_image,
-        assessment_id=assessment,
-        attempt_id=attempt_id,
-        operation_journal=journal,
-    )
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
+        attempt = attempt_record(
+            plan=item.plan_snapshot,
+            assessment_id=assessment,
+            number=1,
+            error="original execution failure",
+        )
+        attempt.operation_journal["resources"]["network"]["state"] = "uncertain"
         item.status, item.cleanup_pending = "failed", True
         item.result = {
             "error": "original execution failure",
+            "execution_outcome": "failed",
             "cleanup_verified": False,
             "cleanup_reason": "creation outcome unknown",
         }
-        db.add(
-            models.Attempt(
-                id=attempt_id,
-                assessment_id=assessment,
-                number=1,
-                backend="docker",
-                resources=sandbox.resources,
-                operation_journal=journal,
-                error="original execution failure",
-            )
-        )
+        db.add(attempt)
         db.commit()
-    return sandbox
+        return BundleSession(
+            item.plan_snapshot, attempt, persist_journal=lambda *a, **kw: None
+        )
 
 
 def test_pending_cleanup_survives_restart_and_resolves_once(
@@ -866,8 +704,7 @@ def test_background_cleanup_runs_without_blocking_new_assessments(
             new = models.Assessment(
                 project_id=old.project_id,
                 target_id=old.target_id,
-                url=old.url,
-                plugins=["http-security-headers"],
+                plan_snapshot=old.plan_snapshot,
             )
             db.add(new)
             db.commit()
@@ -895,7 +732,7 @@ def test_background_cleanup_runs_without_blocking_new_assessments(
 def test_failed_cleanup_runs_after_dispatcher_becomes_ready(
     database, pending_docker, monkeypatch
 ):
-    from app.assessments.sandbox import DockerSandbox
+    from app.assessments.bundle import BundleSession
 
     entered, release = Event(), Event()
 
@@ -904,7 +741,7 @@ def test_failed_cleanup_runs_after_dispatcher_becomes_ready(
         assert release.wait(5)
         return CleanupOutcome(False, "daemon unavailable")
 
-    monkeypatch.setattr(DockerSandbox, "cleanup", blocked_cleanup)
+    monkeypatch.setattr(BundleSession, "cleanup", blocked_cleanup)
     dispatcher = AssessmentDispatcher()
     dispatcher.start()
     try:

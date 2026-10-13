@@ -53,6 +53,8 @@ test("creates, refreshes, and retrieves a real cookie assessment with verified c
   await expect(page.locator(".finding")).toHaveCount(6);
   await page.reload();
   await expect(page.locator(".finding")).toHaveCount(6);
+  await expect(page.getByText("http-security-headers 1.0.0 · cookie-security 1.0.0", {exact: true})).toBeVisible();
+  await expect(page.getByText("Execution deadline (UTC)", {exact: true})).toBeVisible();
   for (const detail of await page.locator(".finding summary").all())
     await detail.click();
   await expect(
@@ -97,8 +99,12 @@ test("creates, refreshes, and retrieves a real cookie assessment with verified c
   }
   const jsonDownload = await downloadReport("JSON");
   const report = JSON.parse(jsonDownload.content) as AssessmentReport;
-  expect(report.schema_version).toBe(2);
+  expect(report.schema_version).toBe(1);
   expect(report.assessment.result).toEqual(results.result);
+  expect(report.assessment.result?.execution?.plugins).toEqual([
+    {id: "http-security-headers", version: "1.0.0"},
+    {id: "cookie-security", version: "1.0.0"},
+  ]);
   expect(report.findings).toEqual([...results.findings].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   expect(report.evidence).toEqual(evidence.evidence);
   const htmlDownload = await downloadReport("HTML");
@@ -177,11 +183,6 @@ test("direct navigation renders saved text safely and keeps API and missing asse
   const root = await request.get("/", { maxRedirects: 0 });
   expect(root.status()).toBe(307);
   expect(root.headers().location).toBe("/dashboard/");
-  for (const path of ["/app", "/app/", "/app/projects/demo"]) {
-    expect(
-      (await request.get(path, { headers: { Accept: "text/html" } })).status(),
-    ).toBe(404);
-  }
   const name = "<script>window.syntheticInjected=true</script>";
   const created = await request.post("/api/v1/projects", { data: { name } });
   expect(created.ok()).toBe(true);

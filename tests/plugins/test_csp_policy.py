@@ -5,7 +5,7 @@ import json
 import pytest
 
 from app.api.schemas import CspEvidenceData
-from app.plugins.base import HttpObservation
+from app.plugins.base import AnalysisContext, HttpObservation
 from app.plugins.csp_policy import PLUGIN, analyze
 
 URL = "https://example.test/"
@@ -24,7 +24,7 @@ def response(*policies, status=200, content_type="text/html", extra=None):
 
 
 def assert_checks(observation, expected):
-    result = analyze(observation)
+    result = analyze(observation, AnalysisContext())
     assert tuple(check.rule_id for check in result.checks) == RULES
     assert tuple(check.status for check in result.checks) == expected
     assert all(check.reason.strip() for check in result.checks)

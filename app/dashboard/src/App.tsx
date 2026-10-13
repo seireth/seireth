@@ -1,6 +1,6 @@
 import { Link, NavLink, Route, Routes } from "react-router";
-import { useList, useResource } from "./api/queries";
-import type { Project, Runtime } from "./api/types";
+import { useList } from "./api/queries";
+import type { Project } from "./api/types";
 import { ErrorMessage, More } from "./components/common";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
@@ -10,7 +10,6 @@ import logo from "../../../docs/assets/seireth-logo.png";
 
 export default function App() {
   const projects = useList<Project>("/projects");
-  const runtime = useResource<Runtime>("/runtime");
   return (
     <div className="workspace">
       <a className="skip-link" href="#main">
@@ -45,11 +44,7 @@ export default function App() {
         <div className="sidebar-footer">
           <span className="eyebrow">Execution backend</span>
           <strong>
-            {runtime.data?.sandbox_backend === "inmemory"
-              ? "Simulated responses"
-              : runtime.data?.sandbox_backend === "docker"
-                ? "Docker containers"
-                : "Unavailable"}
+            Docker and websites
           </strong>
           <p>
             Local targets. Selected checks.

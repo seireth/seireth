@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from ..assessments import images
 from ..assessments.lifecycle import audit
 from ..assessments.policy import bounded_url
+from ..assessments.profiles import load_config
 from ..persistence import models
 from ..persistence.db import get_db
 from .dependencies import authorize_project, page, pagination
@@ -68,8 +69,18 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)):
     target_image = payload.image
     if not bounded_url(target_url, target_url):
         raise HTTPException(400, "invalid target URL boundary")
+    if payload.launch_profile or payload.network_profile or payload.trust_profile:
+        config = load_config()
+        for name, entries in (
+            (payload.launch_profile, config.launches),
+            (payload.network_profile, config.networks),
+            (payload.trust_profile, config.trusts),
+        ):
+            if name and name not in entries:
+                raise HTTPException(400, "selected operator profile is unavailable")
     try:
-        images.require_local_image(target_image)
+        if payload.kind == "docker":
+            images.require_local_image(target_image)
     except images.ImageUnavailable as exc:
         raise HTTPException(400, str(exc)) from None
     except images.DockerUnavailable as exc:
@@ -79,6 +90,10 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)):
         name=payload.name,
         image=target_image,
         url=target_url,
+        kind=payload.kind,
+        launch_profile=payload.launch_profile,
+        network_profile=payload.network_profile,
+        trust_profile=payload.trust_profile,
     )
     db.add(item)
     db.flush()
