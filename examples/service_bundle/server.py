@@ -2,7 +2,9 @@
 
 import os
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPSServer
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import psycopg
 
@@ -65,4 +67,13 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+with TemporaryDirectory(prefix="seireth-fixture-tls-") as directory:
+    certificate = Path(directory) / "cert.pem"
+    private_key = Path(directory) / "key.pem"
+    certificate.write_text(os.environ["TLS_CERTIFICATE"])
+    private_key.write_text(os.environ["TLS_PRIVATE_KEY"])
+    private_key.chmod(0o600)
+    with ThreadingHTTPSServer(
+        ("0.0.0.0", 8080), Handler, certfile=certificate, keyfile=private_key
+    ) as server:
+        server.serve_forever()

@@ -1,5 +1,6 @@
 """Controlled website acceptance, frozen configuration, and safe request bounds."""
 
+import asyncio
 import json
 from threading import Event
 from time import monotonic
@@ -60,6 +61,47 @@ def test_public_target_cannot_connect_to_private_or_metadata_addresses(addresses
     )
     with pytest.raises(PolicyError):
         authorize("example.test", 443, addresses)
+
+
+@pytest.mark.parametrize(
+    "address", ["169.254.169.254", "::ffff:169.254.169.254", "fd00:ec2::254"]
+)
+def test_private_grants_cannot_authorize_metadata_addresses(monkeypatch, address):
+    config = OperatorConfig.model_validate(
+        {
+            "networks": {
+                "fixture": {
+                    "url": "https://example.test/",
+                    "cidrs": ["0.0.0.0/0", "::/0"],
+                }
+            }
+        }
+    )
+    snapshot = {
+        "target": {
+            "url": "https://example.test/",
+            "network_profile": "fixture",
+            "trust_profile": None,
+        },
+        "network": config.networks["fixture"].model_dump(),
+        "control_endpoints": [],
+    }
+    authorize = http_fetch.website_authorizer(
+        snapshot, lambda: config, ("http", "127.0.0.1", 8000)
+    )
+
+    async def resolver(host):
+        assert host == "example.test"
+        return [address]
+
+    async def connect(*args, **kwargs):
+        pytest.fail("a rejected metadata address must never reach the socket backend")
+
+    monkeypatch.setattr(http_fetch, "resolve", resolver)
+    backend = http_fetch.PinnedBackend(authorize)
+    monkeypatch.setattr(backend.backend, "connect_tcp", connect)
+    with pytest.raises(PolicyError, match="destination address is forbidden"):
+        asyncio.run(backend.connect_tcp("example.test", 443))
 
 
 def test_network_permission_revocation_applies_to_frozen_plan(

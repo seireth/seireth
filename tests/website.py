@@ -1,7 +1,10 @@
 """Controlled website fixture and operator configuration shared across test layers."""
 
 import json
+import shutil
+import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from threading import Thread
 from time import sleep
 from types import SimpleNamespace
@@ -9,6 +12,36 @@ from types import SimpleNamespace
 import pytest
 
 from app.core.config import settings
+
+
+def tls_certificate(directory, hostname="fixture.test"):
+    executable = shutil.which("openssl") or "C:/Program Files/Git/usr/bin/openssl.exe"
+    if not Path(executable).is_file():
+        pytest.skip("openssl required to generate a controlled local certificate")
+    certificate, private_key = directory / "cert.pem", directory / "key.pem"
+    subprocess.run(
+        [
+            executable,
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-noenc",
+            "-keyout",
+            str(private_key),
+            "-out",
+            str(certificate),
+            "-days",
+            "1",
+            "-subj",
+            f"/CN={hostname}",
+            "-addext",
+            f"subjectAltName=DNS:{hostname}",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    return certificate, private_key
 
 
 @pytest.fixture

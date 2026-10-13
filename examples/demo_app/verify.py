@@ -244,7 +244,12 @@ def verify(
             if check_resources:
                 verify_resource_removal(assessment["id"])
             expected_actions.extend(
-                ("assessment.queued", "assessment.running", "assessment.completed")
+                (
+                    "assessment.queued",
+                    "assessment.running",
+                    "assessment.route_finished",
+                    "assessment.completed",
+                )
             )
             case.update(
                 assessment_id=assessment["id"],

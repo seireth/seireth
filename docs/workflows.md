@@ -128,12 +128,26 @@ checks the lifecycle and evidence; it deliberately does not implement this gate.
 
 ## Reproduce a configured Docker application
 
-The controlled example uses PostgreSQL, an owned volume, seeded data, and a
-supplied bearer token:
+The controlled example uses PostgreSQL, an owned volume, seeded data, verified
+HTTPS, and a supplied bearer token:
 
 ~~~sh
 docker build -t seireth/service-fixture:local examples/service_bundle
 ~~~
+
+Supply a certificate and private key for `fixture.test`, issued by a trusted CA
+or a development CA whose certificate you configure below. For a disposable
+local fixture, run OpenSSL outside the checkout to generate a one-day self-signed
+certificate:
+
+~~~sh
+openssl req -x509 -newkey rsa:2048 -noenc -keyout fixture-key.pem -out fixture-cert.pem -days 1 -subj /CN=fixture.test -addext subjectAltName=DNS:fixture.test
+~~~
+
+The paths below must be readable by the API process; a containerized API needs
+operator-managed files available inside
+that container. The private key is resolved at runtime and never enters a saved
+plan or report.
 
 Add this launch configuration:
 
@@ -141,8 +155,11 @@ Add this launch configuration:
 {
   "secrets": {
     "database": {"env": "FIXTURE_DATABASE_PASSWORD"},
-    "session": {"env": "FIXTURE_AUTHORIZATION"}
+    "session": {"env": "FIXTURE_AUTHORIZATION"},
+    "tls-certificate": {"file": "/operator/fixture-cert.pem"},
+    "tls-private-key": {"file": "/operator/fixture-key.pem"}
   },
+  "trusts": {"fixture-ca": {"file": "/operator/fixture-cert.pem"}},
   "requests": {
     "fixture-session": {"secret_headers": {"Authorization": "session"}}
   },
@@ -150,9 +167,12 @@ Add this launch configuration:
     "fixture": {
       "target": {
         "depends_on": ["postgres"],
+        "readiness": {"kind": "https", "port": 8080},
         "secret_environment": {
           "DATABASE_PASSWORD": "database",
-          "SESSION_TOKEN": "session"
+          "SESSION_TOKEN": "session",
+          "TLS_CERTIFICATE": "tls-certificate",
+          "TLS_PRIVATE_KEY": "tls-private-key"
         }
       },
       "services": {
@@ -172,8 +192,8 @@ Add this launch configuration:
 }
 ~~~
 
-Register image seireth/service-fixture:local, URL http://fixture.test:8080/, and
-launch_profile fixture. Use request profile fixture-session for /private;
+Register image seireth/service-fixture:local, URL https://fixture.test:8080/,
+launch_profile fixture and trust_profile fixture-ca. Use request profile fixture-session for /private;
 /before and /after demonstrate a finding and its correction. Set the two
 referenced variables in the API process before starting a run.
 
@@ -184,6 +204,12 @@ helper initializes fresh volume ownership. Host binds, shared/external volumes,
 and undeclared image volumes are rejected. Credentials must match this freshly
 seeded instance; sessions from another deployment are not transferred.
 No browser login is run.
+
+Readiness supports `tcp`, `http` and `https`. HTTPS probes use the bundle's
+configured trust and preserve the target's registered Host/SNI; companion probes
+use the declared service name. Certificate and hostname checks remain enabled.
+Selecting `http` explicitly requests a plaintext internal probe; network
+isolation does not provide encryption.
 
 ## Failures, recovery, and reports
 

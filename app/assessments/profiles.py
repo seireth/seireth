@@ -91,7 +91,7 @@ class VolumeSpec(ConfigModel):
 
 
 class Readiness(ConfigModel):
-    kind: Literal["tcp", "http"] = "tcp"
+    kind: Literal["tcp", "http", "https"] = "tcp"
     port: int = Field(ge=1, le=65535)
     path: str = "/"
     status: int = Field(default=200, ge=100, le=599)

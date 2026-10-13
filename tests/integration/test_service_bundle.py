@@ -9,6 +9,7 @@ import pytest
 from app.core.config import settings
 from tests.api.helpers import finish
 from tests.integration.helpers import remove_assessment_resources
+from tests.website import tls_certificate
 
 pytestmark = [
     pytest.mark.docker,
@@ -23,6 +24,7 @@ pytestmark = [
 def test_owned_postgres_bundle_and_verified_cleanup(
     client, project, tmp_path, monkeypatch, wait_until, mode
 ):
+    certificate, private_key = tls_certificate(tmp_path)
     path = tmp_path / "operator.json"
     path.write_text(
         json.dumps(
@@ -30,7 +32,10 @@ def test_owned_postgres_bundle_and_verified_cleanup(
                 "secrets": {
                     "db": {"env": "FIXTURE_DB_PASSWORD"},
                     "session": {"env": "FIXTURE_SESSION"},
+                    "tls-certificate": {"file": str(certificate)},
+                    "tls-private-key": {"file": str(private_key)},
                 },
+                "trusts": {"fixture": {"file": str(certificate)}},
                 "requests": {
                     "session": {"secret_headers": {"Authorization": "session"}}
                 },
@@ -39,9 +44,12 @@ def test_owned_postgres_bundle_and_verified_cleanup(
                         "startup_seconds": 30,
                         "target": {
                             "depends_on": ["postgres"],
+                            "readiness": {"kind": "https", "port": 8080},
                             "secret_environment": {
                                 "DATABASE_PASSWORD": "db",
                                 "SESSION_TOKEN": "session",
+                                "TLS_CERTIFICATE": "tls-certificate",
+                                "TLS_PRIVATE_KEY": "tls-private-key",
                             },
                         },
                         "services": {
@@ -82,8 +90,9 @@ def test_owned_postgres_bundle_and_verified_cleanup(
             "project_id": project,
             "name": "bundle",
             "image": "seireth/service-fixture:local",
-            "url": "http://fixture.test:8080/",
+            "url": "https://fixture.test:8080/",
             "launch_profile": "fixture",
+            "trust_profile": "fixture",
         },
     )
     assert target_response.status_code == 200, target_response.text
@@ -124,6 +133,7 @@ def test_owned_postgres_bundle_and_verified_cleanup(
         ), result
         assert "fixture-session-secret" not in json.dumps(report)
         assert "fixture-db-secret" not in json.dumps(report)
+        assert "BEGIN PRIVATE KEY" not in json.dumps(report)
         selector = f"label=seireth.assessment={identifier}"
         for args in (["ps", "-aq"], ["network", "ls", "-q"], ["volume", "ls", "-q"]):
             assert (

@@ -2,11 +2,8 @@
 
 import asyncio
 import json
-import shutil
 import ssl
-import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from threading import Event, Thread
 from time import monotonic
 
@@ -18,7 +15,7 @@ from app.assessments.execution import Cancelled, ExecutionContext
 from app.assessments.plans import RoutePlan, freeze_plan
 from app.assessments.policy import PolicyError
 from app.assessments.website import WebsiteSession
-from tests.website import configure, graph
+from tests.website import configure, graph, tls_certificate
 
 
 def test_unreachable_ipv6_falls_back_only_to_an_approved_ipv4_address(monkeypatch):
@@ -124,33 +121,11 @@ def test_cancelled_native_fetch_closes_tasks_before_cleanup(
     assert session.cleanup().verified
 
 
-def test_tls_custom_ca_preserves_original_sni_and_host(monkeypatch, tmp_path):
-    executable = shutil.which("openssl") or "C:/Program Files/Git/usr/bin/openssl.exe"
-    if not Path(executable).is_file():
-        pytest.skip("openssl required to generate a controlled local certificate")
-    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
-    subprocess.run(
-        [
-            executable,
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-noenc",
-            "-keyout",
-            str(key),
-            "-out",
-            str(cert),
-            "-days",
-            "1",
-            "-subj",
-            "/CN=fixture.test",
-            "-addext",
-            "subjectAltName=DNS:fixture.test",
-        ],
-        capture_output=True,
-        check=True,
-    )
+@pytest.mark.parametrize("hostname", ["fixture.test", "mismatch.test"])
+def test_tls_validates_certificate_hostname_and_preserves_identity(
+    monkeypatch, tmp_path, hostname
+):
+    cert, key = tls_certificate(tmp_path)
     names, hosts = [], []
 
     class Handler(BaseHTTPRequestHandler):
@@ -176,7 +151,7 @@ def test_tls_custom_ca_preserves_original_sni_and_host(monkeypatch, tmp_path):
         from app.core.config import settings
         from app.core.identity import ACTOR
 
-        url = f"https://fixture.test:{server.server_port}/"
+        url = f"https://{hostname}:{server.server_port}/"
         config = tmp_path / "operator.json"
         config.write_text(
             json.dumps(
@@ -189,7 +164,7 @@ def test_tls_custom_ca_preserves_original_sni_and_host(monkeypatch, tmp_path):
         monkeypatch.setattr(settings, "operator_config_file", str(config))
 
         async def resolver(host):
-            assert host == "fixture.test"
+            assert host == hostname
             return ["127.0.0.1"]
 
         monkeypatch.setattr(http_fetch, "resolve", resolver)
@@ -214,9 +189,16 @@ def test_tls_custom_ca_preserves_original_sni_and_host(monkeypatch, tmp_path):
             snapshot, ExecutionContext(Event(), Event(), monotonic() + 5)
         )
         session.prepare()
-        assert session.fetch(snapshot["routes"][0])["observation"].status_code == 200
-        assert names == ["fixture.test"]
-        assert hosts == [f"fixture.test:{server.server_port}"]
+        if hostname == "fixture.test":
+            assert (
+                session.fetch(snapshot["routes"][0])["observation"].status_code == 200
+            )
+            assert hosts == [f"fixture.test:{server.server_port}"]
+        else:
+            with pytest.raises(httpcore.ConnectError):
+                session.fetch(snapshot["routes"][0])
+            assert hosts == []
+        assert names == [hostname]
         assert session.cleanup().verified
         target.trust_profile = None
         untrusted = freeze_plan(

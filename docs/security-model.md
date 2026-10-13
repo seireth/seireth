@@ -27,7 +27,17 @@ checks do not establish protection for an unassessed representation or destinati
 
 Docker runs connect to the internal target while retaining the original
 Host and TLS server name. Website connections pin validated DNS addresses.
-System trust or an explicitly configured CA verifies certificates.
+System trust or an explicitly configured CA verifies certificates and hostnames.
+Metadata, link-local and control destinations are rejected even when a private
+network grant includes their addresses. The hardcoded metadata addresses are
+denylist entries; they are never request destinations.
+
+CLI commands run with the local operator's filesystem permissions and use
+explicitly selected plan/output paths and API origin. Verified HTTPS readiness
+uses the same trust and connection policy as route requests. Plain HTTP readiness
+remains an explicit operator choice and sends no authentication headers. Internal
+network isolation does not provide encryption; the seeded service-bundle fixture
+uses TLS for both readiness and its authenticated application routes.
 
 Targets and runners have an internal network, no published ports or Docker socket,
 a non-root numeric user, dropped capabilities, no-new-privileges, read-only

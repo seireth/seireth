@@ -1,8 +1,10 @@
 """Bundle commands, interrupted processes, and conservative cleanup."""
 
+import json
 import subprocess
 import sys
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,7 +12,9 @@ from app.assessments.bundle import BundleSession
 from app.assessments.execution import Cancelled
 from app.assessments.sandbox import DockerCommands, validate_journal
 from app.assessments.workflows import execute_plan
+from app.core.config import settings
 from tests.sessions import attempt_record, frozen_plan
+from tests.website import tls_certificate
 
 
 @pytest.fixture
@@ -46,6 +50,60 @@ def test_owned_restricted_bundle_is_reused_and_cleaned(sandbox, fake_docker):
     assert all(
         entry["state"] == "removed" for entry in sandbox.journal["resources"].values()
     )
+
+
+@pytest.mark.parametrize("scheme", ["http", "https"])
+def test_readiness_preserves_registered_host_query_and_certificate_trust(
+    mock_images, execution_context, fake_docker, monkeypatch, tmp_path, scheme
+):
+    certificate, _ = tls_certificate(tmp_path, hostname="owned.test")
+    target = SimpleNamespace(**frozen_plan()["target"])
+    target.url = f"{scheme}://owned.test:8443/"
+    target.launch_profile = target.trust_profile = "fixture"
+    config = tmp_path / "operator.json"
+    config.write_text(
+        json.dumps(
+            {
+                "trusts": {"fixture": {"file": str(certificate)}},
+                "launches": {
+                    "fixture": {
+                        "target": {
+                            "readiness": {
+                                "kind": scheme,
+                                "port": 8443,
+                                "path": "/health?full=1",
+                            }
+                        }
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(settings, "operator_config_file", str(config))
+    plan = frozen_plan(target=target)
+    attempt = attempt_record(plan=plan, assessment_id="assessment", number=1)
+    sandbox = BundleSession(
+        plan, attempt, context=execution_context, persist_journal=lambda *a, **kw: None
+    )
+    requests = []
+    original = fake_docker.run
+
+    def record(*args, **kwargs):
+        if kwargs.get("input_data"):
+            requests.append(json.loads(kwargs["input_data"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(fake_docker, "run", record)
+    try:
+        sandbox.prepare()
+        assert requests[0]["url"] == target.url + "health?full=1"
+        assert requests[0]["registered"] == target.url
+        assert requests[0]["mapping"] == {"owned.test": "target"}
+        assert requests[0]["ca"] == certificate.read_text()
+        assert not requests[0]["headers"] and not requests[0]["follow_redirects"]
+    finally:
+        assert sandbox.cleanup().verified
+    assert not fake_docker.live
 
 
 @pytest.mark.parametrize(

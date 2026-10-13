@@ -132,16 +132,13 @@ def verify(
             client.get(f"/api/v1/projects/{project['id']}/audit-events"),
             200,
         )
-        actions = [
-            event["action"]
-            for event in audit
-            if event["action"] != "assessment.route_finished"
-        ]
+        actions = [event["action"] for event in audit]
         expected_actions = [
             "project.created",
             "target.registered",
             "assessment.queued",
             "assessment.running",
+            "assessment.route_finished",
             "assessment.completed",
         ]
         if actions != expected_actions:

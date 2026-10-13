@@ -67,8 +67,11 @@ class PinnedBackend(httpcore.AsyncNetworkBackend):
 
 class CoreTransport(httpx.AsyncBaseTransport):
     def __init__(self, backend, ca=None):
+        context = ssl.create_default_context(cadata=ca)
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
         self.pool = httpcore.AsyncConnectionPool(
-            ssl_context=ssl.create_default_context(cadata=ca),
+            ssl_context=context,
             network_backend=backend,
             max_connections=1,
             max_keepalive_connections=0,
@@ -121,6 +124,8 @@ async def fetch(
     ca=None,
 ) -> dict:
     async with asyncio.timeout(timeout):
+        # Honor pending cancellation before creating transport resources.
+        await asyncio.sleep(0)
         backend = PinnedBackend(authorize, mapping)
         transport = CoreTransport(backend, ca)
         async with httpx.AsyncClient(

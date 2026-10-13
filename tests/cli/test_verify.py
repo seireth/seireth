@@ -115,6 +115,7 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
         "target.registered",
         "assessment.queued",
         "assessment.running",
+        "assessment.route_finished",
         "assessment.completed",
     ]
 
@@ -179,6 +180,8 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
         ("cleanup", "sandbox cleanup was not verified"),
         ("backend", "verification requires a real Docker execution"),
         ("audit", "unexpected audit trail"),
+        ("audit-route", "unexpected audit trail"),
+        ("audit-order", "unexpected audit trail"),
         ("evidence-http", "500:.*stored evidence is invalid"),
         ("evidence-payload", "API returned invalid evidence"),
         ("evidence-assessment", "evidence did not match the completed assessment"),
@@ -204,10 +207,15 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
         "target.registered",
         "assessment.queued",
         "assessment.running",
+        "assessment.route_finished",
         "assessment.completed",
     ]
     if failure == "audit":
         actions = actions[:-1]
+    elif failure == "audit-route":
+        actions.remove("assessment.route_finished")
+    elif failure == "audit-order":
+        actions[3], actions[4] = actions[4], actions[3]
     evidence = {
         "assessment_id": "other-assessment"
         if failure == "evidence-assessment"
@@ -277,8 +285,8 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
     assert "synthetic-private-cookie-value" not in str(error.value)
     assert ("GET", "/api/v1/assessments/assessment-1/results") in observed
     assert (("GET", "/api/v1/projects/project-1/audit-events") in observed) is (
-        failure == "audit"
+        failure.startswith("audit")
     )
     assert (("GET", "/api/v1/assessments/assessment-1/evidence") in observed) is (
-        failure == "audit" or failure.startswith("evidence-")
+        failure.startswith(("audit", "evidence-"))
     )

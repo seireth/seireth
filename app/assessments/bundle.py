@@ -6,6 +6,8 @@ from time import monotonic, sleep
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+import httpx
+
 from ..core.config import settings
 from ..plugins.base import HttpObservation
 from .profiles import (
@@ -304,16 +306,24 @@ class BundleSession(DockerCommands):
                         command_seconds,
                     )
                 else:
+                    host = (
+                        urlsplit(self.snapshot["target"]["url"]).hostname
+                        if name == "target"
+                        else name
+                    )
+                    origin = httpx.URL(
+                        scheme=probe["kind"], host=host, port=probe["port"]
+                    )
                     value = self._runner(
                         {
                             "op": "fetch",
-                            "url": f"http://{name}:{probe['port']}{probe['path']}",
-                            "registered": f"http://{name}:{probe['port']}/",
+                            "url": str(origin) + probe["path"],
+                            "registered": str(origin.copy_with(path="/")),
                             "headers": {},
                             "follow_redirects": False,
                             "timeout": 2,
-                            "mapping": {name: name},
-                            "ca": None,
+                            "mapping": {host: name},
+                            "ca": self.snapshot["ca"],
                         },
                         command_seconds,
                     )

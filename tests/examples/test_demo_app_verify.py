@@ -148,9 +148,18 @@ def test_invalid_live_outcome_is_rejected(failure):
     assert "synthetic-secret" not in str(error.value)
 
 
-@pytest.mark.parametrize("register_only", [False, True])
+@pytest.mark.parametrize(
+    "register_only,audit_fault",
+    [
+        (False, None),
+        (True, None),
+        (False, "missing"),
+        (False, "duplicate"),
+        (False, "order"),
+    ],
+)
 def test_verifier_requires_completed_assessments_and_checks_resources(
-    monkeypatch, register_only
+    monkeypatch, register_only, audit_fault
 ):
     paths = ("/", "/lab/missing-all")
     actions = ["project.created"]
@@ -172,7 +181,12 @@ def test_verifier_requires_completed_assessments_and_checks_resources(
             assert payload["plugins"] == ["http-security-headers"]
             current_path[0] = payload["url"].removeprefix(ORIGIN)
             actions.extend(
-                ("assessment.queued", "assessment.running", "assessment.completed")
+                (
+                    "assessment.queued",
+                    "assessment.running",
+                    "assessment.route_finished",
+                    "assessment.completed",
+                )
             )
             return httpx.Response(202, json={"id": "assessment-1"})
         if path.endswith("/results"):
@@ -180,6 +194,12 @@ def test_verifier_requires_completed_assessments_and_checks_resources(
         if path.endswith("/evidence"):
             return httpx.Response(200, json=outcome(current_path[0])[2])
         if path.endswith("/audit-events"):
+            if audit_fault == "missing":
+                actions.remove("assessment.route_finished")
+            elif audit_fault == "duplicate":
+                actions.insert(4, "assessment.route_finished")
+            elif audit_fault == "order":
+                actions[3], actions[4] = actions[4], actions[3]
             return httpx.Response(200, json=[{"action": action} for action in actions])
         raise AssertionError(f"Unexpected request: {request.method} {path}")
 
@@ -194,6 +214,13 @@ def test_verifier_requires_completed_assessments_and_checks_resources(
     monkeypatch.setattr(
         demo_verify, "verify_resource_removal", checked_resources.append
     )
+    if audit_fault:
+        with pytest.raises(RuntimeError, match="audit trail does not match"):
+            demo_verify.verify(
+                "http://test", scenarios=tuple(BY_PATH[path] for path in paths)
+            )
+        assert len(checked_resources) == 2
+        return
     report = demo_verify.verify(
         "http://test",
         scenarios=tuple(BY_PATH[path] for path in paths),
