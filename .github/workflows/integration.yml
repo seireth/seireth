@@ -110,13 +110,13 @@ jobs:
           docker compose down --volumes --remove-orphans || status=1
           docker compose -p seireth-ci-demo-app -f examples/demo_app/compose.yml down || status=1
           exit "$status"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: docker-verification
           path: artifacts/
           retention-days: 7
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: browser-failures
