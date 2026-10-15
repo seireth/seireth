@@ -1,13 +1,18 @@
 """Real API processes and opt-in Docker lifecycle acceptance."""
 
 import os
+from dataclasses import replace
 from uuid import uuid4
 
 import pytest
 
-from app.core.config import settings
 from app.persistence import models
-from tests.integration.helpers import docker, remove_assessment_resources
+from tests.api.helpers import finish
+from tests.integration.helpers import (
+    docker,
+    remove_assessment_resources,
+    submit_docker_assessment,
+)
 
 docker_only = pytest.mark.skipif(
     os.environ.get("SEIRETH_DOCKER_TESTS") != "1",
@@ -55,33 +60,12 @@ def test_real_api_lifecycle(
 ):
     client = api_process.client
 
-    def post(path, data):
-        response = client.post(path, json=data)
-        response.raise_for_status()
-        return response.json()
-
-    project = post("/api/v1/projects", {"name": "Docker recovery"})
     image = "seireth/demo-app:local"
     if action == "image-removed":
         image = f"seireth/recovery-test:{uuid4().hex}"
         docker("tag", "seireth/demo-app:local", image)
-    target = post(
-        "/api/v1/targets",
-        {
-            "project_id": project["id"],
-            "name": "slow",
-            "image": image,
-            "url": "http://demo-app:8080/slow",
-        },
-    )
-    assessment = post(
-        "/api/v1/assessments",
-        {
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "url": target["url"],
-            "plugins": ["http-security-headers"],
-        },
+    _, assessment = submit_docker_assessment(
+        client, "/slow", ["http-security-headers"], image=image
     )
     aid = api_process.assessment_id = assessment["id"]
     assert assessment["plugins"] == ["http-security-headers"]
@@ -152,14 +136,11 @@ def test_real_api_lifecycle(
 
 @docker_only
 @pytest.mark.docker
-@pytest.mark.parametrize(
-    "case", ["vulnerable", "corrected", "plugin-failure", "analyzer-overrun"]
-)
+@pytest.mark.parametrize("case", ["vulnerable", "corrected", "plugin-failure"])
 def test_acceptance_run_persists_provenance_and_survives_restart(
-    database, monkeypatch, wait_until, case
+    database, monkeypatch, wait_until, make_plugin, case
 ):
     from datetime import datetime
-    from time import monotonic, sleep
 
     from fastapi.testclient import TestClient
     from sqlalchemy import select
@@ -167,27 +148,8 @@ def test_acceptance_run_persists_provenance_and_survives_restart(
     from app.assessments import plans as assessment_plans
     from app.assessments import worker
     from app.assessments import workflows as assessment_workflows
-    from app.assessments.bundle import BundleSession
     from app.main import app
-    from app.plugins.base import Plugin, PluginManifest, PluginResponse
     from app.plugins.registry import PluginRegistry, registry
-
-    timings = []
-    command_run = BundleSession._run
-
-    def timed_run(self, args, timeout, **kwargs):
-        before = monotonic()
-        try:
-            value = command_run(self, args, timeout, **kwargs)
-            timings.append((args[0], round(monotonic() - before, 2), value.returncode))
-            return value
-        except Exception as error:
-            timings.append(
-                (args[0], round(monotonic() - before, 2), type(error).__name__)
-            )
-            raise
-
-    monkeypatch.setattr(BundleSession, "_run", timed_run)
 
     analysis_calls = []
 
@@ -195,76 +157,28 @@ def test_acceptance_run_persists_provenance_and_survives_restart(
         analysis_calls.append("broken")
         raise RuntimeError("synthetic crash detail")
 
-    def exceed_deadline(_observation, _analysis):
-        analysis_calls.append("delayed")
-        # Prove overrun classification after a bounded analyzer returns, not interruption.
-        deadline = monotonic() + settings.assessment_timeout_seconds
-        while monotonic() <= deadline:
-            sleep(0.02)
-        return PluginResponse(findings=(), checks=())
-
-    plugins = registry.plugins + tuple(
-        Plugin(
-            PluginManifest(id=identity, name=identity, description="Acceptance fault"),
-            analyze,
-            rules={},
-        )
-        for identity, analyze in (("broken", broken), ("delayed", exceed_deadline))
-    )
+    plugins = registry.plugins + (make_plugin("broken", broken),)
     selection = PluginRegistry(plugins)
     monkeypatch.setattr(assessment_plans, "registry", selection)
     monkeypatch.setattr(assessment_workflows, "registry", selection)
-    monkeypatch.setattr(settings, "assessment_timeout_seconds", 45)
     path = (
         "/lab/nosniff-first-invalid"
         if case == "vulnerable"
         else "/lab/nosniff-first-valid"
     )
-    selected = ["http-security-headers"] + {
-        "plugin-failure": ["broken"],
-        "analyzer-overrun": ["delayed"],
-    }.get(case, [])
-    expected_status = "completed" if case in {"vulnerable", "corrected"} else "failed"
+    selected = ["http-security-headers"] + (
+        ["broken"] if case == "plugin-failure" else []
+    )
+    expected_status = "failed" if case == "plugin-failure" else "completed"
     aid = None
     try:
         with TestClient(app) as client:
-
-            def post(endpoint, payload):
-                response = client.post("/api/v1/" + endpoint, json=payload)
-                response.raise_for_status()
-                return response.json()
-
-            project = post("projects", {"name": "Lifecycle acceptance"})
-            target = post(
-                "targets",
-                {
-                    "project_id": project["id"],
-                    "name": "controlled fixture",
-                    "image": "seireth/demo-app:local",
-                    "url": "http://demo-app:8080/",
-                },
-            )
-            assessment = post(
-                "assessments",
-                {
-                    "project_id": project["id"],
-                    "target_id": target["id"],
-                    "url": target["url"] + path.lstrip("/"),
-                    "plugins": selected,
-                },
-            )
+            target, assessment = submit_docker_assessment(client, path, selected)
             aid = assessment["id"]
             for _ in range(5):
                 worker.dispatcher.submit(aid)
-            result = wait_until(
-                lambda: client.get(f"/api/v1/assessments/{aid}/results").json(),
-                lambda value: value["status"] in {"completed", "failed"},
-                description=f"{case} real assessment",
-                timeout=assessment["plan_snapshot"]["timeout_seconds"]
-                + assessment["plan_snapshot"]["cleanup_seconds"]
-                + 5,
-            )
-            assert result["status"] == expected_status, (result["result"], timings)
+            result, report = finish(client, aid, wait_until)
+            assert result["status"] == expected_status, result["result"]
             assert (
                 result["result"]["cleanup_verified"] and not result["cleanup_pending"]
             )
@@ -274,20 +188,11 @@ def test_acceptance_run_persists_provenance_and_survives_restart(
                     result["findings"][0]["title"]
                     == "Missing or ineffective X-Content-Type-Options"
                 )
-            if case in {"plugin-failure", "analyzer-overrun"}:
-                assert (
-                    result["result"]["error_kind"]
-                    == {
-                        "plugin-failure": "plugin_error",
-                        "analyzer-overrun": "timeout",
-                    }[case]
-                )
-                assert "synthetic crash detail" not in str(result)
             if case == "plugin-failure":
+                assert result["result"]["error_kind"] == "plugin_error"
                 assert result["result"]["failed_plugin"] == "broken"
                 assert analysis_calls == ["broken"]
-            if case == "analyzer-overrun":
-                assert analysis_calls == ["delayed"]
+                assert "synthetic crash detail" not in str(result)
             execution = result["result"]["execution"]
             assert execution["target"] == target
             assert execution["plugins"] == [
@@ -296,7 +201,7 @@ def test_acceptance_run_persists_provenance_and_survives_restart(
             assert (
                 datetime.fromisoformat(execution["deadline_at"])
                 - datetime.fromisoformat(execution["started_at"])
-            ).total_seconds() == 45
+            ).total_seconds() == assessment["plan_snapshot"]["timeout_seconds"]
             with database.SessionLocal() as db:
                 attempts = list(
                     db.scalars(
@@ -312,17 +217,15 @@ def test_acceptance_run_persists_provenance_and_survives_restart(
                     entry["state"] in {"removed", "not_requested"}
                     for entry in attempts[0].operation_journal["resources"].values()
                 )
-            report = client.get(f"/api/v1/assessments/{aid}/report").json()
             assert {entry["finding_id"] for entry in report["evidence"]} == {
                 finding["id"] for finding in report["findings"]
             }
         # A fresh API/dispatcher reads the same results, even if installed plugins change.
         newer = PluginRegistry(
             tuple(
-                Plugin(
-                    plugin.manifest.model_copy(update={"version": "9.0.0"}),
-                    plugin.analyze,
-                    rules={},
+                replace(
+                    plugin,
+                    manifest=plugin.manifest.model_copy(update={"version": "9.0.0"}),
                 )
                 for plugin in plugins
             )
@@ -355,31 +258,8 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
 
     client = api_process.client
 
-    def post(path, payload):
-        response = client.post(path, json=payload)
-        response.raise_for_status()
-        return response.json()
-
-    project = post("/api/v1/projects", {"name": "Cookie assessment"})
-    target = post(
-        "/api/v1/targets",
-        {
-            "project_id": project["id"],
-            "name": "cookies",
-            "image": "seireth/demo-app:local",
-            "url": "http://demo-app:8080/cookies",
-        },
-    )
     selection = ["http-security-headers", "cookie-security"]
-    assessment = post(
-        "/api/v1/assessments",
-        {
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "url": target["url"],
-            "plugins": selection,
-        },
-    )
+    _, assessment = submit_docker_assessment(client, "/cookies", selection)
     aid = api_process.assessment_id = assessment["id"]
     report = wait_until(
         lambda: client.get(f"/api/v1/assessments/{aid}/results").json(),

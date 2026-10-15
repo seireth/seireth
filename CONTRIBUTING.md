@@ -95,7 +95,7 @@ database checks. `python -m pytest -m database` selects them; missing
 cases; it does not enable them. Set `SEIRETH_DOCKER_TESTS=1` as shown below.
 
 For sandbox changes, run the [Docker walkthrough](docs/getting-started.md#real-docker-assessment),
-check that no assessment containers/networks remain, then run lifecycle tests.
+check that no assessment containers/networks/volumes remain, then run lifecycle tests.
 They require the built demo and bundle runner images; the demo's `/slow` path
 briefly delays responses for cancellation/crash-recovery tests.
 
@@ -109,6 +109,13 @@ python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 # macOS / Linux, with SEIRETH_TEST_ADMIN_URL already set
 SEIRETH_DOCKER_TESTS=1 python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 ```
+
+Lifecycle tests cover vulnerable/corrected responses, plugin failure, duplicate
+delivery, frozen execution metadata, and report durability across API restarts.
+They independently inspect Docker to verify resource removal. Analyzer overrun
+classification uses a deterministic clock in `tests/assessments/test_orchestrator.py`;
+synchronous analysis cannot be forcibly interrupted. Subprocess termination and
+cleanup budgets are covered in `tests/assessments/test_sandbox.py`.
 
 The integration workflow uses a disposable Docker daemon and uploads verification
 output and diagnostic logs. It selects only Docker-marked Python cases; the

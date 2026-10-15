@@ -66,7 +66,6 @@ on the API address to use the GUI.
 | [Configuration](docs/configuration.md)     | Required settings, defaults, and Compose overrides |
 | [Assessments](docs/assessments.md)         | Submit requests and interpret results              |
 | [Docker and website workflows](docs/workflows.md) | Configure staging, service bundles, route coverage, and release gates |
-| [Lifecycle acceptance](docs/lifecycle-acceptance.md) | Prove real execution, cleanup, and restart durability |
 | [Architecture](docs/architecture.md)       | Understand execution, persistence, and recovery    |
 | [Plugin development](docs/plugins.md)      | Add approved checks                                |
 | [Security model](docs/security-model.md)   | Understand boundaries and investigate cleanup      |

@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.assessments import workflows
+from app.assessments import execution, workflows
 from app.plugins.base import PluginFinding, PluginResponse
 from app.plugins.registry import PluginRegistry
 from tests.sessions import FakeSession, frozen_plan
@@ -98,6 +98,23 @@ def test_incompatible_analyzer_signature_reports_execution_error(run_plan, make_
     )
     assert outcome.error_kind == "plugin_error" and outcome.cleanup_verified
     assert saved[0]["status"] == "failed"
+
+
+def test_analyzer_overrun_discards_route_and_cleans(
+    run_plan, make_plugin, execution_context, monkeypatch
+):
+    monkeypatch.setattr(execution, "monotonic", lambda: 0)
+    execution_context.deadline = 1
+
+    def delayed(observation, context):
+        monkeypatch.setattr(execution, "monotonic", lambda: 1)
+        return PluginResponse(findings=(), checks=())
+
+    outcome, saved = run_plan([make_plugin("delayed", delayed)], routes=2)
+    assert outcome.status == outcome.execution_status == "failed"
+    assert outcome.error_kind == "timeout" and outcome.failed_plugin is None
+    assert outcome.cleanup_verified
+    assert len(saved) == 2 and all(row["status"] == "unattempted" for row in saved)
 
 
 def test_cleanup_exception_blocks_completed_route(run_plan, make_plugin):

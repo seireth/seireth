@@ -124,8 +124,8 @@ fields reflect reconciliation and may still be pending. JSON retains saved
 ISO 8601 timestamps; HTML displays them in UTC. Invalid stored timestamps fail
 validation.
 
-See [Lifecycle acceptance](lifecycle-acceptance.md) for repeatable real Docker
-tests of normal completion, plugin failure, timeout, and report durability.
+See [Contributing](../CONTRIBUTING.md#tests) for real Docker lifecycle and report
+durability tests.
 
 HTML includes expanded finding evidence and inline styles, works offline, and can
 be printed using the browser. It contains no scripts or external assets. Stored
