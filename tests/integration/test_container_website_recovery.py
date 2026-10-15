@@ -8,6 +8,8 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from tests.integration.helpers import docker
+
 pytestmark = [
     pytest.mark.docker,
     pytest.mark.skipif(
@@ -15,12 +17,6 @@ pytestmark = [
         reason="requires prepared API and demo images",
     ),
 ]
-
-
-def docker(*args, env=None):
-    return subprocess.check_output(
-        ["docker", *args], text=True, timeout=30, env=env
-    ).strip()
 
 
 def test_containerized_website_recovery_proves_old_process_exit(

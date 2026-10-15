@@ -53,16 +53,13 @@ def analyze_response(observation, plugins, context, analysis):
             PluginResult(plugin.manifest.id, response.findings, response.checks)
         )
         context.check()
-    return results
-
-
-def validate_evidence(results):
     for item in results:
         for finding in item.findings:
             try:
                 evidence_adapter.validate_python(finding.evidence, strict=True)
             except ValidationError:
                 raise PluginExecutionError(item.plugin_id, invalid=True) from None
+    return results
 
 
 def execute_plan(session, snapshot, context, persist_route):
@@ -89,7 +86,6 @@ def execute_plan(session, snapshot, context, persist_route):
                     context,
                     AnalysisContext.model_validate(route["analysis"]),
                 )
-                validate_evidence(results)
                 data.update(
                     status="completed",
                     response={

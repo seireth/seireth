@@ -30,8 +30,17 @@ def submit_docker_assessment(client, path, plugins, *, image="seireth/demo-app:l
     )
 
 
-def docker(*args):
-    return subprocess.check_output(["docker", *args], text=True, timeout=20).strip()
+def docker(*args, env=None):
+    return subprocess.check_output(
+        ["docker", *args], text=True, timeout=30, env=env
+    ).strip()
+
+
+def assert_assessment_resources_removed(assessment_id):
+    selector = f"label=seireth.assessment={assessment_id}"
+    for args in (["ps", "-aq"], ["network", "ls", "-q"], ["volume", "ls", "-q"]):
+        remaining = docker(*args, "--filter", selector)
+        assert not remaining, remaining
 
 
 def remove_assessment_resources(assessment_id):

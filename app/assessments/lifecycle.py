@@ -94,10 +94,7 @@ def terminal_result(
         result.update(
             sandbox_backend=attempt.backend,
             attempt=attempt.number,
-            execution={
-                key: attempt.execution_metadata[key]
-                for key in ("started_at", "deadline_at", "target", "plugins")
-            },
+            execution=attempt.execution_metadata,
         )
     for key, value in (
         ("error", error),

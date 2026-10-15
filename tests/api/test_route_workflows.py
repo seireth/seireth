@@ -170,3 +170,77 @@ def test_protected_html_error_page_has_required_coverage(
     assert result["coverage"]["complete"] and result["cleanup_verified"]
     assert report["findings"] == report["evidence"] == []
     assert website.handler.requests[0][0] == "/missing"
+
+
+def test_completed_html_and_json_route_set_exports_a_passing_report(
+    client, project, website, tmp_path, monkeypatch, wait_until
+):
+    configure(monkeypatch, tmp_path, website)
+    website.handler.corrected = True
+    target = register(client, project, website)
+    response = client.post(
+        "/api/v1/assessments",
+        json={
+            "project_id": project,
+            "target_id": target,
+            "routes": [
+                {
+                    "key": "html",
+                    "url": website.url,
+                    "plugins": ["http-security-headers", "csp-policy"],
+                },
+                {
+                    "key": "json",
+                    "url": website.url + "api",
+                    "plugins": ["http-security-headers"],
+                    "expected": {
+                        "statuses": [200],
+                        "media_types": ["application/json"],
+                    },
+                },
+            ],
+        },
+    )
+    assert response.status_code == 202, response.text
+    result, report = finish(client, response.json()["id"], wait_until)
+    assert result["status"] == "completed"
+    assert result["result"]["verdict"]["status"] == "pass"
+    assert report["schema_version"] == 1
+    assert len(report["assessment"]["result"]["routes"]) == 2
+    assert "response" not in report["assessment"]["result"]
+    assert report["findings"] == report["evidence"] == []
+
+
+def test_followed_login_redirect_is_incomplete_until_final_url_is_declared(
+    client, project, website, tmp_path, monkeypatch, wait_until
+):
+    path = configure(monkeypatch, tmp_path, website)
+    config = json.loads(path.read_text())
+    config["requests"]["follow"] = {"follow_redirects": True}
+    path.write_text(json.dumps(config))
+    website.handler.corrected = True
+    target = register(client, project, website)
+    identifier = submit(
+        client, project, target, website.url + "private", request_profile="follow"
+    )
+    result, report = finish(client, identifier, wait_until)
+    assert result["status"] == "completed"
+    assert result["result"]["verdict"]["status"] == "blocked"
+    assert not result["result"]["coverage"]["complete"]
+    assert result["result"]["routes"][0]["response"]["url"] == website.url + "login"
+    assert len(result["result"]["routes"][0]["response"]["redirects"]) == 1
+    assert report["findings"] == []
+    identifier = submit(
+        client,
+        project,
+        target,
+        website.url + "private",
+        request_profile="follow",
+        expected={
+            "statuses": [200],
+            "media_types": ["text/html"],
+            "final_url": website.url + "login",
+        },
+    )
+    result, _ = finish(client, identifier, wait_until)
+    assert result["result"]["verdict"]["status"] == "pass"

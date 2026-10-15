@@ -233,17 +233,6 @@ def resolve_headers(profile, config):
 def public_catalog() -> dict:
     config = load_config()
     return {
-        "requests": {
-            name: profile.model_dump(mode="json")
-            for name, profile in config.requests.items()
-        },
-        "launches": {
-            name: profile.model_dump(mode="json")
-            for name, profile in config.launches.items()
-        },
-        "networks": {
-            name: grant.model_dump(mode="json")
-            for name, grant in config.networks.items()
-        },
+        **config.model_dump(mode="json", include={"requests", "launches", "networks"}),
         "trusts": list(config.trusts),
     }

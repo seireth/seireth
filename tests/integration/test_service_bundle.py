@@ -2,13 +2,15 @@
 
 import json
 import os
-import subprocess
 
 import pytest
 
 from app.core.config import settings
 from tests.api.helpers import finish
-from tests.integration.helpers import remove_assessment_resources
+from tests.integration.helpers import (
+    assert_assessment_resources_removed,
+    remove_assessment_resources,
+)
 from tests.website import tls_certificate
 
 pytestmark = [
@@ -134,13 +136,6 @@ def test_owned_postgres_bundle_and_verified_cleanup(
         assert "fixture-session-secret" not in json.dumps(report)
         assert "fixture-db-secret" not in json.dumps(report)
         assert "BEGIN PRIVATE KEY" not in json.dumps(report)
-        selector = f"label=seireth.assessment={identifier}"
-        for args in (["ps", "-aq"], ["network", "ls", "-q"], ["volume", "ls", "-q"]):
-            assert (
-                subprocess.check_output(
-                    ["docker", *args, "--filter", selector], text=True
-                ).strip()
-                == ""
-            )
+        assert_assessment_resources_removed(identifier)
     finally:
         remove_assessment_resources(identifier)

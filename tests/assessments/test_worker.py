@@ -16,8 +16,7 @@ from app.assessments.worker import AssessmentDispatcher
 from app.assessments.workflows import published_records
 from app.core.config import settings
 from app.persistence import models
-from app.plugins import registry as registry_module
-from app.plugins.base import HttpObservation, Plugin, PluginManifest
+from app.plugins.base import HttpObservation
 from app.plugins.cookie_security import PLUGIN as COOKIE_SECURITY_PLUGIN
 from app.plugins.http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 from app.plugins.registry import PluginRegistry
@@ -371,7 +370,7 @@ def test_recovery_keeps_unverified_cleanup_pending(
 
 
 def test_plugin_failure_persists_no_findings_after_verified_cleanup(
-    database, assessment, monkeypatch, caplog, fake_session
+    database, assessment, monkeypatch, caplog, fake_session, make_plugin
 ):
     calls = []
 
@@ -379,27 +378,13 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
         calls.append(observation.url)
         raise RuntimeError("synthetic plugin failure")
 
-    monkeypatch.setattr(
-        registry_module,
-        "registry",
-        PluginRegistry(
-            (
-                SECURITY_HEADERS_PLUGIN,
-                COOKIE_SECURITY_PLUGIN,
-                Plugin(
-                    PluginManifest(
-                        id="broken", name="Broken", description="Test failure"
-                    ),
-                    broken,
-                    rules={},
-                ),
-            ),
-        ),
+    selection = PluginRegistry(
+        (SECURITY_HEADERS_PLUGIN, COOKIE_SECURITY_PLUGIN, make_plugin("broken", broken))
     )
     from app.assessments import plans, workflows
 
-    monkeypatch.setattr(plans, "registry", registry_module.registry)
-    monkeypatch.setattr(workflows, "registry", registry_module.registry)
+    for module in (plans, workflows):
+        monkeypatch.setattr(module, "registry", selection)
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
         snapshot = dict(item.plan_snapshot)

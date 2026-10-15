@@ -240,20 +240,6 @@ def freeze_plan(
         public_routes[-1]["expected"]["final_url"] = public_response_url(
             route.expected.final_url or route.url
         )
-    target_data = {
-        key: getattr(target, key)
-        for key in (
-            "id",
-            "project_id",
-            "name",
-            "kind",
-            "image",
-            "url",
-            "launch_profile",
-            "network_profile",
-            "trust_profile",
-        )
-    }
     launch = None
     pinned = {}
     limits = ContainerLimits(
@@ -329,7 +315,7 @@ def freeze_plan(
         {
             "version": 1,
             "control_endpoints": controls,
-            "target": target_data,
+            "target": FrozenTarget.model_validate(target, from_attributes=True),
             "routes": public_routes,
             "plugins": [
                 {"id": key, "version": version} for key, version in selected.items()

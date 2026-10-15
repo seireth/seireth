@@ -57,7 +57,14 @@ def test_plugins_receive_independent_observations(run_plan, make_plugin):
 
 @pytest.mark.parametrize(
     "mode",
-    ["crash", "invalid", "missing-checks", "blank-description", "blank-remediation"],
+    [
+        "crash",
+        "invalid",
+        "signature",
+        "missing-checks",
+        "blank-description",
+        "blank-remediation",
+    ],
 )
 def test_invalid_plugin_response_fails_routes_and_cleans(
     run_plan, make_plugin, mode, caplog
@@ -81,23 +88,12 @@ def test_invalid_plugin_response_fails_routes_and_cleans(
             findings=(PluginFinding.model_construct(**values),), checks=()
         )
 
-    outcome, saved = run_plan([make_plugin("broken", broken)], routes=2)
+    analyzer = (lambda: None) if mode == "signature" else broken
+    outcome, saved = run_plan([make_plugin("broken", analyzer)], routes=2)
     assert outcome.status == "failed" and outcome.cleanup_verified
     assert outcome.error_kind == "plugin_error"
     assert all(row["status"] == "failed" and "plugins" not in row for row in saved)
     assert "secret-runtime-value" not in caplog.text
-
-
-def test_incompatible_analyzer_signature_reports_execution_error(run_plan, make_plugin):
-    outcome, saved = run_plan(
-        [
-            make_plugin(
-                "invalid-signature", lambda: PluginResponse(findings=(), checks=())
-            )
-        ]
-    )
-    assert outcome.error_kind == "plugin_error" and outcome.cleanup_verified
-    assert saved[0]["status"] == "failed"
 
 
 def test_analyzer_overrun_discards_route_and_cleans(

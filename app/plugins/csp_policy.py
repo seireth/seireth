@@ -1,7 +1,6 @@
 """Bounded CSP3 header checks; no document content or header values are retained."""
 
 import re
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal
 
@@ -56,17 +55,6 @@ class _LimitExceeded(Exception):
     """Never includes untrusted input."""
 
 
-def _segments(text: str, delimiter: str) -> Iterator[str]:
-    start = 0
-    while True:
-        end = text.find(delimiter, start)
-        if end == -1:
-            yield text[start:]
-            return
-        yield text[start:end]
-        start = end + 1
-
-
 def _parse(fields: list[str]) -> list[dict[str, tuple[str, ...]]]:
     if len(fields) > MAX_CSP_FIELDS:
         raise _LimitExceeded
@@ -82,14 +70,14 @@ def _parse(fields: list[str]) -> list[dict[str, tuple[str, ...]]]:
             raise _LimitExceeded
     policies = []
     for field in fields:
-        for serialized in _segments(field, ","):
+        for serialized in field.split(","):
             if not serialized.strip(_SPACE):
                 continue
             if len(policies) == MAX_CSP_POLICIES:
                 raise _LimitExceeded
             policy = {}
             directive_count = 0
-            for directive in _segments(serialized, ";"):
+            for directive in serialized.split(";"):
                 tokens = _TOKEN.finditer(directive)
                 first = next(tokens, None)
                 if first is None:

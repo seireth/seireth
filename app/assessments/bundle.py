@@ -196,7 +196,6 @@ class BundleSession:
             if not _RESOURCE_ID.fullmatch(identity):
                 raise RuntimeError("Docker returned an invalid resource identity")
             self._record(key, "created", identity, advancing=True)
-        return identity
 
     def _labels(self):
         return [

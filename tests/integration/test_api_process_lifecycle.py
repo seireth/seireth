@@ -9,6 +9,7 @@ import pytest
 from app.persistence import models
 from tests.api.helpers import finish
 from tests.integration.helpers import (
+    assert_assessment_resources_removed,
     docker,
     remove_assessment_resources,
     submit_docker_assessment,
@@ -130,8 +131,7 @@ def test_real_api_lifecycle(
             for plugin in report["result"]["routes"][0]["plugins"]
         ] == [{"id": "http-security-headers", "finding_count": 3}]
     assert len(report["findings"]) == expected_findings
-    assert not docker("ps", "-a", "--filter", selector, "--format", "{{.Names}}")
-    assert not docker("network", "ls", "--filter", selector, "--format", "{{.Name}}")
+    assert_assessment_resources_removed(aid)
 
 
 @docker_only
@@ -241,9 +241,7 @@ def test_acceptance_run_persists_provenance_and_survives_restart(
                 client.get(f"/api/v1/assessments/{aid}").json()["status"]
                 == expected_status
             )
-        selector = f"label=seireth.assessment={aid}"
-        assert not docker("ps", "-aq", "--filter", selector)
-        assert not docker("network", "ls", "-q", "--filter", selector)
+        assert_assessment_resources_removed(aid)
     finally:
         remove_assessment_resources(aid)
 
@@ -310,6 +308,4 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
         assert secret not in evidence_response.text
         assert secret not in str([item.data for item in evidence])
         assert secret not in (tmp_path / "api.log").read_text()
-    selector = f"label=seireth.assessment={aid}"
-    assert not docker("ps", "-a", "--filter", selector, "--format", "{{.Names}}")
-    assert not docker("network", "ls", "--filter", selector, "--format", "{{.Name}}")
+    assert_assessment_resources_removed(aid)
