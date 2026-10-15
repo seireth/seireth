@@ -8,7 +8,7 @@ from tests.api.helpers import snapshot, submission
 )
 @pytest.mark.parametrize("target", ["https://example.test/app"], indirect=True)
 def test_response_url_accepts_registered_path_and_children(
-    client, assessment_payload, dispatch_calls, url
+    client, assessment_payload, dispatch_calls, url, fake_session
 ):
     response = client.post(
         "/api/v1/assessments", json={**assessment_payload, "url": url}
@@ -36,7 +36,7 @@ def test_response_url_accepts_registered_path_and_children(
 )
 @pytest.mark.parametrize("target", ["https://example.test/app"], indirect=True)
 def test_response_url_rejects_outside_or_unsafe_boundaries(
-    client, database, assessment_payload, dispatch_calls, url, status
+    client, database, assessment_payload, dispatch_calls, url, status, fake_session
 ):
     before = snapshot(database)
     response = client.post(
@@ -47,7 +47,9 @@ def test_response_url_rejects_outside_or_unsafe_boundaries(
     assert dispatch_calls["submit"] == []
 
 
-def test_submission_requires_a_url_or_route_plan(read_client, assessment_graph):
+def test_submission_requires_a_url_or_route_plan(
+    read_client, assessment_graph, fake_session
+):
     graph = assessment_graph()
     payload = submission(graph)
     del payload["url"]

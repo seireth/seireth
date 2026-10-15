@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from enum import StrEnum
+from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
@@ -10,7 +11,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from ..core.constraints import (
     FINDING_SEVERITY_MAX_LENGTH,
@@ -22,7 +23,14 @@ from ..core.constraints import (
     TARGET_IMAGE_MAX_LENGTH,
 )
 from ..core.identity import ACTOR
-from .db import Base
+
+
+class Base(DeclarativeBase):
+    """Base class for all SQLAlchemy models, independent of runtime connections."""
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
 
 
 def now() -> datetime:

@@ -1,8 +1,7 @@
 # Lifecycle acceptance
 
-These checks use the existing FastAPI dispatcher, Python Docker sandbox, and
-React/Vite dashboard. They run against disposable PostgreSQL databases and the
-owned demo image, without editing assessment rows to advance their status.
+These checks run against disposable PostgreSQL databases and real Docker
+resources. Assessment states advance through the dispatcher.
 
 ## Prepare
 
@@ -19,9 +18,7 @@ $env:PYTHONPATH = (Get-Location).Path
 uv run --no-sync --no-build python -m pytest tests/integration/test_api_process_lifecycle.py
 ```
 
-The Docker tests remain opt-in. Each assessment labels its network and containers
-with the assessment and attempt IDs. The acceptance checks verify persisted
-cleanup and independently inspect Docker for remaining resources.
+Tests inspect Docker independently of persisted cleanup outcomes.
 
 ## What is proved
 
@@ -34,39 +31,23 @@ cleanup and independently inspect Docker for remaining resources.
 | Duplicate delivery | One attempt | Repeated dispatcher submissions cannot start another active execution. The worker concurrency regression also exercises independent duplicate claims. |
 | API/worker restart | Same saved findings, evidence, and provenance | Fresh lifespans and a separate API process retrieve the report without rerunning completed work. Installed plugin versions may change without altering the saved report. |
 
-The injected crash and delay plugins exist only inside tests. Production uses the
-approved built-in registry. Plugins execute synchronously and must keep analysis
-bounded; an analyzer that never returns cannot be forcibly interrupted by the
-current worker.
+Injected crash/delay plugins are test-only. Synchronous analysis cannot be
+forcibly interrupted; the timeout case proves overrun classification.
 
-Deadline interruption is tested separately with the sandbox's actual subprocess
-reaping code: a blocked runner is killed before cleanup starts, and the test
-daemon verifies removal of every owned resource. This deterministic check needs
-no Docker daemon:
+Deterministic subprocess tests verify a blocked runner is killed before cleanup,
+without requiring Docker:
 
 ```powershell
 uv run --no-sync --no-build python -m pytest tests/assessments/test_sandbox.py -k "subprocess"
 ```
 
-The existing process tests also cover cancellation, hard process failure,
-verified cleanup before a recovery retry, and removal of the target image before
-recovery. Schema checks cover fresh creation, downgrade/recreation, and mandatory execution
-and route provenance:
+Worker, migration, and report tests cover cancellation, recovery, fresh schema
+creation, mandatory provenance, and report retrieval:
 
 ```powershell
 uv run --no-sync --no-build python -m pytest tests/assessments/test_worker.py tests/persistence/migrations/test_migrations.py tests/api/test_reports.py
 ```
 
-## Inspect the same run
-
-Start the updated API after `alembic upgrade head`, with
-the dashboard built and the current runner image prepared. Register a project and
-the fixture target at `http://demo-app:8080/`, select `http-security-headers`, and
-submit either fixture URL above. The assessment detail page polls until terminal,
-shows the execution reason and cleanup separately, and exposes evidence and JSON
-or offline HTML downloads. Reload preserves persisted results.
-
-The detail view and HTML report display the recorded start, deadline, and plugin
-versions. Failed and cancelled reports explicitly identify incomplete execution.
-Export time and later cleanup reconciliation may change between report reads;
-the executed target, versions, findings, and evidence remain persisted.
+For manual dashboard inspection and report downloads, use
+[getting started](getting-started.md#real-docker-assessment) and
+[the assessment guide](assessments.md#download-assessment-reports).

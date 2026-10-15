@@ -17,10 +17,9 @@ def test_unbuilt_gui_does_not_block_other_routes(tmp_path):
         assert (
             client.get("/", follow_redirects=False).headers["location"] == "/dashboard/"
         )
-        assert client.get("/dashboard/").status_code == 503
-        assert (
-            "app/dashboard" in client.get("/dashboard/projects/demo").json()["detail"]
-        )
+        assert client.get("/dashboard").status_code == 404
+        assert client.get("/dashboard/").status_code == 404
+        assert client.get("/dashboard/projects/demo").status_code == 404
         assert client.get("/health").status_code == 200
         assert client.get("/openapi.json").status_code == 200
         assert client.get("/docs").status_code == 200

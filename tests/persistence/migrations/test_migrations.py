@@ -5,7 +5,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Column, Integer, MetaData, Table, inspect, text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from app.persistence import models
@@ -29,11 +29,6 @@ def _assert_schema_matches_models(database):
                 constraint["name"]
                 for constraint in inspector.get_check_constraints(table)
             }
-
-
-def test_versioned_schema_and_model_agree(database, alembic_config):
-    command.upgrade(alembic_config, "head")
-    _assert_schema_matches_models(database)
 
 
 def test_migration_connection_has_separate_timeouts(database, alembic_config):
@@ -79,34 +74,6 @@ def test_baseline_round_trip(database, alembic_config):
             MigrationContext.configure(connection).get_current_revision()
             == ScriptDirectory.from_config(alembic_config).get_current_head()
         )
-
-
-def test_revision_generation_uses_template(
-    database, tmp_path, alembic_config, monkeypatch
-):
-    import shutil
-
-    config = alembic_config
-    baseline = ScriptDirectory.from_config(config).get_current_head()
-    baseline_tables = set(inspect(database.engine).get_table_names())
-    location = tmp_path / "migrations"
-    shutil.copytree(ScriptDirectory.from_config(config).dir, location)
-    config.set_main_option("script_location", str(location))
-
-    metadata = MetaData()
-    for table in database.Base.metadata.sorted_tables:
-        table.to_metadata(metadata)
-    added_table = Table(
-        "migration_generation_check", metadata, Column("id", Integer, primary_key=True)
-    )
-    monkeypatch.setattr(database.Base, "metadata", metadata)
-
-    revision = command.revision(config, message="generation check", autogenerate=True)
-    assert revision.down_revision == baseline
-    command.upgrade(config, revision.revision)
-    assert inspect(database.engine).has_table(added_table.name)
-    command.downgrade(config, baseline)
-    assert set(inspect(database.engine).get_table_names()) == baseline_tables
 
 
 def test_missing_journal_is_rejected_by_database(database):

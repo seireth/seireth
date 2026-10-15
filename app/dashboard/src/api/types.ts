@@ -30,6 +30,8 @@ export interface Plugin {
   id: string;
   name: string;
   description: string;
+  version: string;
+  rules: Record<string, "representation" | "document" | "cookie-observation" | "session" | "cookie-presence">;
 }
 export interface TargetImages {
   items: { image: string; id: string }[];
@@ -77,6 +79,25 @@ export interface Profiles {
   requests: Record<string, { headers: Record<string, string>; secret_headers: Record<string, string>; follow_redirects: boolean }>;
   launches: Record<string, unknown>; networks: Record<string, unknown>; trusts: string[];
 }
+export interface FrozenPlan {
+  version: 1;
+  target: Target & { launch_profile: string | null; network_profile: string | null; trust_profile: string | null };
+  routes: {
+    key: string; url: string; plugins: string[]; request_profile: string | null;
+    request: Profiles["requests"][string]; request_seconds: number;
+    expected: { statuses: number[]; media_types: string[]; final_url: string };
+    required_checks: string[]; required_checks_explicit: boolean;
+    analysis: { session_cookies: string[]; expected_cookies: string[] };
+  }[];
+  plugins: { id: string; version: string }[];
+  images: Record<string, string>; launch: Record<string, unknown> | null;
+  network: { url: string; cidrs: string[] } | null;
+  ca: string | null; ca_fingerprint: string | null;
+  control_endpoints: { address: string; port: number }[];
+  timeout_seconds: number; cleanup_seconds: number;
+  runner_limits: { memory: string; cpus: number; pids: number };
+  policy: "strict-v1"; baseline: string | null;
+}
 export interface Assessment {
   id: string;
   project_id: string;
@@ -87,7 +108,7 @@ export interface Assessment {
   plugins: string[];
   cleanup_pending: boolean;
   result: Result | null;
-  plan_snapshot: { target: Target; images: Record<string, string>; timeout_seconds: number };
+  plan_snapshot: FrozenPlan;
 }
 export interface Finding {
   id: string;
@@ -150,15 +171,15 @@ type CookieData = {
 export type EvidenceData =
   | HeaderData
   | CspData
-  | (CookieData & { rule: "samesite-none-without-secure"; samesite: "none" })
-  | (CookieData & { rule: "secure-prefix"; https: boolean })
+  | (CookieData & { rule_id: "samesite-none-without-secure"; samesite: "none" })
+  | (CookieData & { rule_id: "secure-prefix"; https: boolean })
   | (CookieData & {
-      rule: "host-prefix";
+      rule_id: "host-prefix";
       https: boolean;
       domain_present: boolean;
       root_path: boolean;
     })
-  | (CookieData & { rule: "session-cookie-secure" | "session-cookie-httponly"; httponly: boolean });
+  | (CookieData & { rule_id: "session-cookie-secure" | "session-cookie-httponly"; httponly: boolean });
 export interface Evidence {
   id: string;
   finding_id: string;

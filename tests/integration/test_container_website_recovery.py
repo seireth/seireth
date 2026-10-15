@@ -23,7 +23,9 @@ def docker(*args, env=None):
     ).strip()
 
 
-def test_containerized_website_recovery_proves_old_process_exit(tmp_path, wait_until):
+def test_containerized_website_recovery_proves_old_process_exit(
+    tmp_path, wait_until, postgres_image
+):
     token = uuid4().hex[:16]
     network, postgres, website, api = [
         f"seireth-process-{kind}-{token}"
@@ -49,7 +51,7 @@ def test_containerized_website_recovery_proves_old_process_exit(tmp_path, wait_u
             "--tmpfs=/var/lib/postgresql",
             "-e",
             "POSTGRES_PASSWORD",
-            "postgres:18-trixie",
+            postgres_image,
             env=environment,
         )
         created.append(("container", postgres))

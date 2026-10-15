@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app.assessments.bundle import new_bundle_journal
+from app.assessments.execution import CleanupOutcome
 from app.assessments.plans import RoutePlan, freeze_plan
-from app.assessments.sandbox import CleanupOutcome
 from app.core.identity import ACTOR
 from app.persistence import models
 from app.plugins.base import HttpObservation
@@ -92,10 +92,8 @@ def completed_route(db, assessment):
 
 
 class FakeSession:
-    def __init__(self, snapshot, *, context=None, persist_journal):
-        self.snapshot = snapshot
+    def __init__(self, snapshot, *, context, persist_journal):
         self.context = context
-        self.persist_journal = persist_journal
 
     def prepare(self):
         pass
@@ -115,5 +113,5 @@ class FakeSession:
         return CleanupOutcome(True)
 
 
-def fake_factory(attempt, *, snapshot, persist_journal, context=None):
+def fake_factory(attempt, *, snapshot, persist_journal, context):
     return FakeSession(snapshot, context=context, persist_journal=persist_journal)

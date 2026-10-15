@@ -12,7 +12,15 @@ import httpx
 import pytest
 
 from app.core.config import settings
-from tests.integration.helpers import remove_assessment_resources
+from tests.integration.helpers import docker, remove_assessment_resources
+
+
+@pytest.fixture(scope="session")
+def postgres_image():
+    """Use the same PostgreSQL image as the application stack."""
+    return os.environ.get("SEIRETH_TEST_POSTGRES_IMAGE") or docker(
+        "compose", "config", "--images", "postgres"
+    )
 
 
 @pytest.fixture
@@ -28,7 +36,7 @@ def api_process(database, tmp_path, request, wait_until):
     if backend == "http":
         env["PATH"] = str(Path(sys.executable).parent)  # Docker must not be needed.
     api = SimpleNamespace(
-        backend=backend, assessment_id=None, process=None, env=env, native_website=False
+        assessment_id=None, process=None, env=env, native_website=False
     )
     with ExitStack() as cleanup:
         log = cleanup.enter_context((tmp_path / "api.log").open("w+"))

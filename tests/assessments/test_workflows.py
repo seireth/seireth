@@ -243,7 +243,7 @@ def test_later_failure_does_not_keep_an_earlier_failed_plugin(
     monkeypatch, make_plugin, execution_context, stop
 ):
     from app.assessments import workflows
-    from app.assessments.sandbox import CleanupOutcome
+    from app.assessments.execution import CleanupOutcome
     from app.plugins.base import HttpObservation
     from app.plugins.registry import PluginRegistry
 
@@ -272,7 +272,7 @@ def test_later_failure_does_not_keep_an_earlier_failed_plugin(
         def cleanup(self):
             return CleanupOutcome(True)
 
-    def persist(data):
+    def persist(data, results):
         records.append(data)
         if stop == "cancelled":
             execution_context.cancel.set()
@@ -299,3 +299,54 @@ def test_later_failure_does_not_keep_an_earlier_failed_plugin(
     assert outcome.error_kind == (None if stop == "cancelled" else "timeout")
     assert outcome.failed_plugin is None
     assert outcome.cleanup_verified
+
+
+@pytest.mark.parametrize(
+    "status,media",
+    [
+        (200, "text/html"),
+        (401, "text/html"),
+        (404, "text/html"),
+        (500, "text/html"),
+        (200, "application/xhtml+xml"),
+        (200, "application/json"),
+        (200, "application/problem+json"),
+        (200, "application/unknown"),
+        (200, None),
+        (204, "text/html"),
+        (205, "text/html"),
+        (304, "text/html"),
+        (302, "text/html"),
+        (103, "text/html"),
+    ],
+)
+def test_admission_and_analysis_share_response_applicability(status, media):
+    from app.assessments.plans import ExpectedResponse, required_checks
+    from app.plugins.base import HttpObservation
+    from app.plugins.http_security_headers import PLUGIN
+
+    route = RoutePlan(
+        key="response",
+        url="https://fixture.test/",
+        plugins=[PLUGIN.manifest.id],
+        expected=ExpectedResponse(
+            statuses=[status], media_types=[media] if media else []
+        ),
+    )
+    checks = PLUGIN.analyze(
+        HttpObservation(
+            url=route.url,
+            status_code=status,
+            headers={"content-type": [media]} if media else {},
+        ),
+        AnalysisContext(),
+    ).checks
+    assert set(required_checks(route, [PLUGIN])) == {
+        f"{PLUGIN.manifest.id}:{check.rule_id}"
+        for check in checks
+        if check.status != "skipped"
+    }
+    assert (
+        required_checks(route.model_copy(update={"required_checks": []}), [PLUGIN])
+        == []
+    )

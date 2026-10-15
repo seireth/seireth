@@ -84,9 +84,8 @@ also identify `failed_plugin`. Failed or cancelled batches may publish clearly
 labelled results from completed routes only after verified cleanup; incomplete
 routes publish no findings. Such batches never pass the release gate.
 
-The GUI polls every second during execution and every five seconds while terminal
-cleanup remains pending, then stops. Refocus refreshes data; leaving the page
-cancels its reads. Evidence failures show a retry action without hiding findings.
+The GUI refreshes execution and pending cleanup automatically. Evidence failures
+offer a retry without hiding findings.
 
 ## Retrieve evidence
 
@@ -114,26 +113,16 @@ for a `completed`, `failed`, or `cancelled` assessment. Other states return 409
 after project authorization. The dashboard's **Download JSON** and **Download HTML**
 buttons each fetch a fresh snapshot; HTML generation happens in the browser.
 
-The report uses `schema_version: 1`, UTC `generated_at`, the public `project`
-and frozen `target`, the assessment and frozen plan, route outcomes, coverage,
-cleanup, release verdict, comparison, findings, and evidence. Response facts and
-plugin checks live under `assessment.result.routes`; there is no flat response or
-plugin summary. Findings require an originating route result and link to evidence
-by ID. Reports use persisted data and support only this current contract.
+The report uses `schema_version: 1` and includes the project, frozen plan/target,
+execution metadata, route outcomes, coverage, cleanup, verdict, comparison,
+findings, and evidence. Response facts and plugin checks live under
+`assessment.result.routes`; findings link to their route and evidence by ID.
 
-Reports do not rerun checks or change saved records. Cleanup can remain pending
-in a terminal assessment; the report states that uncertainty. Regenerating it
-reflects later reconciliation. Zero findings
-does not certify security. JSON retains saved timestamps; HTML displays them in UTC.
-Completion timestamps require an extended ISO date and time with seconds, a `T`
-separator, and `Z` or a `±HH:MM` timezone offset; up to six fractional-second digits
-are supported. Unparseable or unsupported stored timestamps fail report validation.
-
-Report target metadata comes from the frozen plan; execution identity comes from
-its saved attempt. Changing installed plugins or target registration cannot
-rewrite what ran. Restarting preserves report contents; `generated_at` records
-each export time, while cleanup fields can change through reconciliation.
-Apply the current baseline to an empty database before startup.
+Exports read persisted data without rerunning checks, so restarts or plugin/target
+changes do not rewrite what ran. `generated_at` records the export time; cleanup
+fields reflect reconciliation and may still be pending. JSON retains saved
+ISO 8601 timestamps; HTML displays them in UTC. Invalid stored timestamps fail
+validation.
 
 See [Lifecycle acceptance](lifecycle-acceptance.md) for repeatable real Docker
 tests of normal completion, plugin failure, timeout, and report durability.
@@ -171,7 +160,7 @@ return 403. CLI requests without `Origin` continue to work.
 ## Header checks
 
 Select `http-security-headers` (**HTTP security headers** in the catalog).
-The former `security-headers` ID is rejected. Applicability is based on declared
+Applicability is based on declared
 status and content type, without inspecting a body or assessing redirect
 destinations. Content types are normalized by case and stripped of parameters;
 repeated declarations must agree and be well formed.
@@ -266,8 +255,8 @@ the supported semantics independently of analyzer expectations. See the
 
 ## Cookie checks
 
-`cookie-security` analyzes every separate `Set-Cookie` field on the single assessed
-response. It emits low-severity configuration findings, not exploit claims:
+`cookie-security` inspects separate `Set-Cookie` fields. Prefix and SameSite
+findings have low severity; declared session-cookie findings have medium severity:
 
 | Check | Reported configuration |
 | --- | --- |
@@ -275,37 +264,34 @@ response. It emits low-severity configuration findings, not exploit claims:
 | `__Secure-` prefix | Missing `Secure` or an HTTP response URL |
 | `__Host-` prefix | Missing `Secure`, HTTP, a nonempty `Domain`, or missing explicit `Path=/` |
 
-Each field can produce one finding per violated rule; failed requirements for a
-prefix are combined. Attribute names, SameSite values, and prefix matching are
-case-insensitive; findings preserve the original cookie name. Repeated cookie
-names are inspected separately. The parser retains only `Secure`, `SameSite`,
-`Domain`, and `Path`. It ignores attribute values longer than 1,024 bytes after
-trimming spaces and tabs; an ignored duplicate never replaces an earlier accepted
-value. `Secure` counts by presence after this length check, and the last retained
-value wins for the other attributes. Other attributes are discarded. Malformed
-fields are skipped without failing the run, including malformed content in
-discarded attributes.
+Each field can produce one finding per violated rule; prefix failures are combined.
+Attribute names, SameSite values, and prefixes are case-insensitive; cookie names
+are preserved and repeated fields inspected separately. The parser retains
+`Secure`, `HttpOnly`, `SameSite`, `Domain`, and `Path`, ignoring attribute values
+over 1,024 bytes. Flags count by presence; other attributes use the last retained
+value. Malformed fields are skipped.
 
 Findings identify cookie names and explain remediation. Stored evidence contains
 only names, rule IDs, the response URL, and normalized requirement values or
 booleans. Cookie values and complete fields are excluded from findings, evidence,
 and diagnostics. Retrieve evidence separately using the endpoint above.
 
-There are no general warnings for absent `Secure`, `HttpOnly`, or explicit
-`SameSite`, and no login, replay, cookie-jar, newer-prefix, or full browser-policy
-validation. Zero findings does not establish cookie security. The owned demo's
+Declared `session_cookies` also require `Secure` and `HttpOnly`; use
+`expected_cookies` when absence must block coverage. Unrelated cookies receive
+no general warnings for missing flags. Login, replay, cookie-jar, newer-prefix,
+and full browser-policy validation are outside these checks. The owned demo's
 `/cookies` path emits four fields: one ordinary cookie and three violations.
 Selecting both plugins there produces six findings (three per plugin).
 
 ## Cancellation and audit
 
 `POST /api/v1/assessments/{id}/cancel` returns `id` and `status`:
-queued work cancels immediately (200; its assessment result may remain null);
+queued work cancels immediately (200 with a terminal result);
 active work returns 202 / `cancelling`. Pending repeats are idempotent; terminal
 runs return 409. Continue polling nonterminal states, including recovery.
 
 Cancellation interrupts the runner and verifies cleanup before `cancelled`.
-Execution timeout fails after cleanup. [Crash recovery](architecture.md#recovery)
+Execution timeout fails after cleanup. [Docker crash recovery](architecture.md#recovery)
 can retry once after cleanup and fresh boundary and image checks; results expose `attempt`.
 
 `GET /api/v1/projects/{id}/audit-events` returns chronological events. Normal success

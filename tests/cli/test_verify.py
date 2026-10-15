@@ -110,13 +110,13 @@ def test_direct_verification_rejects_invalid_timeout_before_http(monkeypatch, va
 def test_verification_accepts_completed_zero_findings_with_explicit_target(monkeypatch):
     import json
 
-    actions = [
-        "project.created",
-        "target.registered",
-        "assessment.queued",
-        "assessment.running",
-        "assessment.route_finished",
-        "assessment.completed",
+    events = [
+        ("project.created", "p"),
+        ("target.registered", "t"),
+        ("assessment.queued", "a"),
+        ("assessment.running", "a"),
+        ("assessment.route_finished", "a"),
+        ("assessment.completed", "a"),
     ]
 
     def respond(request):
@@ -140,6 +140,7 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
             return httpx.Response(202, json={"id": "a"})
         elif path.endswith("/results"):
             body = {
+                "assessment_id": "a",
                 "status": "completed",
                 "findings": [],
                 "result": {"cleanup_verified": True, "sandbox_backend": "docker"},
@@ -152,7 +153,10 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
                 "evidence": [],
             }
         elif path.endswith("/audit-events"):
-            body = [{"action": action} for action in actions]
+            body = [
+                {"action": action, "resource_id": resource_id}
+                for action, resource_id in events
+            ]
         else:
             pytest.fail(f"Unexpected request: {path}")
         return httpx.Response(200, json=body)
@@ -176,12 +180,19 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
 @pytest.mark.parametrize(
     "failure,message",
     [
+        ("results-assessment", "results did not match the submitted assessment"),
+        (
+            "results-missing-assessment",
+            "results did not match the submitted assessment",
+        ),
         ("failed", "assessment did not complete"),
         ("cleanup", "sandbox cleanup was not verified"),
         ("backend", "verification requires a real Docker execution"),
         ("audit", "unexpected audit trail"),
         ("audit-route", "unexpected audit trail"),
         ("audit-order", "unexpected audit trail"),
+        *[(f"audit-resource-{index}", "unexpected audit trail") for index in range(6)],
+        ("audit-missing-resource", "unexpected audit trail"),
         ("evidence-http", "500:.*stored evidence is invalid"),
         ("evidence-payload", "API returned invalid evidence"),
         ("evidence-assessment", "evidence did not match the completed assessment"),
@@ -193,6 +204,9 @@ def test_verification_accepts_completed_zero_findings_with_explicit_target(monke
 )
 def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
     results = {
+        "assessment_id": "other-assessment"
+        if failure == "results-assessment"
+        else "assessment-1",
         "status": "failed" if failure == "failed" else "completed",
         "findings": []
         if failure == "empty"
@@ -202,6 +216,8 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
             "sandbox_backend": "http" if failure == "backend" else "docker",
         },
     }
+    if failure == "results-missing-assessment":
+        results.pop("assessment_id")
     actions = [
         "project.created",
         "target.registered",
@@ -216,6 +232,21 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
         actions.remove("assessment.route_finished")
     elif failure == "audit-order":
         actions[3], actions[4] = actions[4], actions[3]
+    audit = [
+        {
+            "action": action,
+            "resource_id": "project-1"
+            if action == "project.created"
+            else "target-1"
+            if action == "target.registered"
+            else "assessment-1",
+        }
+        for action in actions
+    ]
+    if failure.startswith("audit-resource-"):
+        audit[int(failure.rsplit("-", 1)[1])]["resource_id"] = "other-resource"
+    elif failure == "audit-missing-resource":
+        audit[-1].pop("resource_id")
     evidence = {
         "assessment_id": "other-assessment"
         if failure == "evidence-assessment"
@@ -255,7 +286,7 @@ def test_verification_rejects_invalid_outcomes(monkeypatch, failure, message):
         ),
         ("GET", "/api/v1/projects/project-1/audit-events"): (
             200,
-            [{"action": action} for action in actions],
+            audit,
         ),
     }
     observed = []

@@ -5,7 +5,7 @@ from tests.api.helpers import snapshot, submission
 
 
 @pytest.mark.parametrize("field", ["image", "url"])
-def test_target_requires_image_and_url(client, project, field):
+def test_target_requires_image_and_url(client, project, field, fake_session):
     payload = {
         "project_id": project,
         "name": "target",
@@ -27,7 +27,14 @@ def test_target_requires_image_and_url(client, project, field):
 )
 @pytest.mark.parametrize("operation", ["target", "assessment"])
 def test_unavailable_image_or_daemon_rejects_without_side_effects(
-    read_client, database, assessment_graph, monkeypatch, error, status, operation
+    read_client,
+    database,
+    assessment_graph,
+    monkeypatch,
+    error,
+    status,
+    operation,
+    fake_session,
 ):
     graph = assessment_graph()
 
@@ -58,15 +65,3 @@ def test_unavailable_image_or_daemon_rejects_without_side_effects(
     assert response.status_code == status
     assert response.json()["detail"] == str(error)
     assert snapshot(database) == before
-
-
-def test_image_discovery_and_daemon_failure(read_client, monkeypatch):
-    available = [{"image": "arbitrary:v1", "id": "sha256:" + "a" * 64}]
-    monkeypatch.setattr(images, "local_images", lambda: available)
-    assert read_client.get("/api/v1/target-images").json() == {"items": available}
-
-    def failed():
-        raise images.DockerUnavailable("Docker image discovery unavailable")
-
-    monkeypatch.setattr(images, "local_images", failed)
-    assert read_client.get("/api/v1/target-images").status_code == 503

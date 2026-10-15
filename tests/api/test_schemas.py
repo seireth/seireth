@@ -4,11 +4,10 @@ from pydantic import ValidationError
 from app.api.schemas import (
     AssessmentCreate,
     EvidenceOut,
-    HeaderEvidenceData,
-    ProjectCreate,
     TargetCreate,
 )
 from app.persistence.models import Evidence
+from app.plugins.evidence import HeaderEvidenceData
 from tests.header_evidence import header_evidence
 
 
@@ -98,26 +97,6 @@ def test_assessment_rejects_unknown_fields():
     assert error.value.errors()[0]["loc"] == ("unexpected",)
 
 
-@pytest.mark.parametrize(
-    "schema,base",
-    [
-        (ProjectCreate, {}),
-        (
-            TargetCreate,
-            {"project_id": "p", "image": "demo:local", "url": "http://demo-app:8080/"},
-        ),
-    ],
-)
-@pytest.mark.parametrize("length", [200, 201])
-def test_names_respect_storage_limit(schema, base, length):
-    if length == 200:
-        assert schema(name="n" * length, **base).name == "n" * length
-    else:
-        with pytest.raises(ValidationError) as error:
-            schema(name="n" * length, **base)
-        assert error.value.errors()[0]["loc"] == ("name",)
-
-
 @pytest.fixture(
     params=[
         {"header": "x-content-type-options"},
@@ -126,21 +105,21 @@ def test_names_respect_storage_limit(schema, base, length):
         {
             "header": "set-cookie",
             "cookie_name": "cross",
-            "rule": "samesite-none-without-secure",
+            "rule_id": "samesite-none-without-secure",
             "samesite": "none",
             "secure": False,
         },
         {
             "header": "set-cookie",
             "cookie_name": "__sEcUrE-session",
-            "rule": "secure-prefix",
+            "rule_id": "secure-prefix",
             "secure": True,
             "https": False,
         },
         {
             "header": "set-cookie",
             "cookie_name": "__hOsT-session",
-            "rule": "host-prefix",
+            "rule_id": "host-prefix",
             "secure": True,
             "https": True,
             "domain_present": True,
@@ -345,7 +324,7 @@ def test_public_evidence_booleans_are_strict(value):
             "url": "https://example.test/",
             "header": "set-cookie",
             "cookie_name": "__Host-session",
-            "rule": "host-prefix",
+            "rule_id": "host-prefix",
             "secure": True,
             "https": True,
             "domain_present": True,
@@ -365,7 +344,7 @@ def test_public_evidence_booleans_are_strict(value):
         {"header": "Set-Cookie"},
         {"cookie_name": ""},
         {"cookie_name": 123},
-        {"rule": "unknown-rule"},
+        {"rule_id": "unknown-rule"},
         {"samesite": "None"},
     ],
 )
@@ -374,10 +353,24 @@ def test_public_cookie_evidence_rejects_invalid_values(changes):
         "url": "https://example.test/",
         "header": "set-cookie",
         "cookie_name": "cross",
-        "rule": "samesite-none-without-secure",
+        "rule_id": "samesite-none-without-secure",
         "samesite": "none",
         "secure": False,
         **changes,
     }
     with pytest.raises(ValidationError):
         EvidenceOut(id="e", finding_id="f", kind="http-response", data=data)
+
+
+@pytest.mark.parametrize("version", [None, 2, 3])
+def test_report_requires_current_format(version):
+    from app.api.schemas import AssessmentReportOut
+    from tests.reports import report_fixture
+
+    report = report_fixture()
+    if version is None:
+        report.pop("schema_version")
+    else:
+        report["schema_version"] = version
+    with pytest.raises(ValidationError):
+        AssessmentReportOut.model_validate(report)

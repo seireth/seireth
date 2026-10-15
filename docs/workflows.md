@@ -10,23 +10,15 @@ Register **kind: docker**, an image, and a base URL to assess a fresh applicatio
 bundle. Register **kind: website**, a base URL, and no image to request an existing
 deployment. Both use the same response fetcher and plugins.
 
-The registered target kind selects execution. Website execution runs natively
-and does not require a Docker daemon. Apply migrations before startup.
-
-Docker images must exist locally. The docker-up command builds the API and
-seireth/runner:local. Native API users prepare the runner explicitly:
-
-~~~sh
-python -m app migrate
-docker build --target runner -t seireth/runner:local .
-~~~
+Websites need no Docker daemon; Docker images must exist locally. Follow
+[getting started](getting-started.md) to prepare the API and runner.
 
 ## Operator configuration and credentials
 
 Point SEIRETH_OPERATOR_CONFIG_FILE at an operator-owned JSON file. Its sections
 are requests, launches, networks, trusts, and secrets. Inspect sanitized profile
 metadata at GET /api/v1/runtime/profiles and rule IDs/applicability at
-GET /api/v1/plugin-rules.
+GET /api/v1/plugins.
 
 ~~~json
 {
@@ -52,11 +44,9 @@ or environment entries.
 
 Public HTTP(S) destinations are allowed within the target boundary. Private
 staging requires a matching network_profile and approved address range.
-Addresses are validated and pinned before connecting; metadata, link-local, and
-Seireth/Docker control endpoints are blocked. Requests ignore environment proxies.
 Certificate verification remains enabled; trust_profile adds the configured CA.
 For a containerized API, mount operator files read-only and explicitly forward
-the required secret environment variables.
+the required secret environment variables. See [connection boundaries](security-model.md#enforced-boundaries).
 
 Submission freezes public profile contents, reference names, plugin versions,
 CA contents, and Docker image IDs. Editing a request profile does not change a
@@ -99,19 +89,22 @@ Save this as routes.json, using URLs inside the registered target:
 ~~~
 
 ~~~sh
-python -m app assess --project-id PROJECT --target-id TARGET --plan routes.json --output report.json
+python -m app.cli.commands assess --project-id PROJECT --target-id TARGET --plan routes.json --output report.json
 ~~~
 
 POST /api/v1/assessments accepts the same routes with project_id, target_id, and
-optional baseline. Existing url-plus-plugins submissions normalize to a route
+optional baseline. Single-URL submissions normalize to a route
 named response.
 
 Defaults are HTTP 200 and HTML. Declare JSON explicitly. An intentional redirect
-uses its expected status and an empty media_types list; declare an expected
-response cookie when cookie coverage is intended. Redirect following is off by
+uses its expected status, `media_types: []`, and `required_checks: []` to check only
+the response expectation. Declare expected cookies when their presence matters.
+Redirect following is off by
 default. A request profile can enable at most five hops within the registered
 origin and path. Reports show the chain and final response; observed URL query
 values are omitted from evidence.
+Redirect requests reuse the profile's headers, including an explicitly supplied
+Cookie header. Cookies received in responses are never added to subsequent requests.
 The expected final URL defaults to the requested URL. Set expected.final_url
 explicitly for an intentional destination; a followed login redirect otherwise
 blocks the gate even when the login page has good security headers.
@@ -197,13 +190,9 @@ launch_profile fixture and trust_profile fixture-ca. Use request profile fixture
 /before and /after demonstrate a finding and its correction. Set the two
 referenced variables in the API process before starting a run.
 
-One bundle serves every route in an attempt. Host/TLS use the original hostname
-while connections route internally. Services have explicit users, read-only
-roots, declared volumes/tmpfs, limits, and readiness. A restricted journaled
-helper initializes fresh volume ownership. Host binds, shared/external volumes,
-and undeclared image volumes are rejected. Credentials must match this freshly
-seeded instance; sessions from another deployment are not transferred.
-No browser login is run.
+One bundle serves every route. Services declare users, volumes/tmpfs, limits, and
+readiness; [sandbox restrictions](security-model.md#enforced-boundaries) apply.
+Credentials must match this freshly seeded instance. No browser login is run.
 
 Readiness supports `tcp`, `http` and `https`. HTTPS probes use the bundle's
 configured trust and preserve the target's registered Host/SNI; companion probes
@@ -213,31 +202,19 @@ isolation does not provide encryption.
 
 ## Failures, recovery, and reports
 
-Routes commit only after all selected plugins succeed. Route-local failures let
-later routes run. Cancellation, ownership loss, the overall deadline, or
-preparation failure stop the plan. Complete routes from a failed batch remain
-clearly partial and become public only after verified cleanup.
+Route-local failures allow later routes to run; cancellation, ownership loss,
+the overall deadline, or preparation failure stop the plan. Findings from complete
+routes become public after verified cleanup and are labelled partial when the
+batch fails. Docker can retry an interrupted attempt once after cleanup; websites
+never replay interrupted requests. See [recovery](architecture.md#recovery).
 
-Execution outcome, coverage, cleanup, and verdict are separate. Reconciliation
-can release valid evidence without turning a failed run into a pass. Unknown
-Docker creation/removal stays pending; elapsed time cannot certify cleanup.
-Native HTTP recovery requires socket closure acknowledgement or confirmed process
-exit and never automatically replays website requests. Docker retains one crash
-retry using a fresh bundle after verified cleanup. Attempts are never merged.
-
-Reports use the single current schema, version 1. Reports come from
-persisted results and remain available after restart. The dashboard shows source,
-routes, coverage, partial execution, cleanup, verdict, comparison, findings,
-evidence, and JSON/HTML downloads.
+The dashboard and [JSON/HTML reports](assessments.md#download-assessment-reports)
+show persisted routes, findings, evidence, coverage, cleanup, and verdict.
 
 Use --baseline ASSESSMENT to compare complete runs with identical route
 expectations, request/analysis context, and plugin versions. Image IDs may differ.
 Incomplete or incompatible comparisons are unavailable; baselines never suppress
 findings.
 
-Limits are 20 routes, eight companion services, and 16 owned volumes. Requests
-default to 10 seconds. Plans receive startup budget plus 15 seconds per route,
-capped at 900 seconds; single-URL requests retain their configured deadline.
-Cleanup gets a separate 60-second foreground budget and continues through
-reconciliation when needed. Analyzers remain trusted, bounded, cooperative
-built-ins.
+Limits are 20 routes, eight companion services, and 16 owned volumes.
+See [timeout configuration](configuration.md#timeouts) for execution and cleanup budgets.

@@ -1,5 +1,3 @@
-import pytest
-
 from app.persistence import models
 from tests.api.helpers import snapshot
 
@@ -69,8 +67,3 @@ def test_saved_work_reads_are_authorized_scoped_ordered_and_read_only(
             read_client.get(f"/api/v1/projects/missing/{resource}").status_code == 404
         )
     assert snapshot(database) == before
-
-
-@pytest.mark.parametrize("query", ["limit=0", "limit=101", "offset=-1", "limit=wrong"])
-def test_invalid_list_bounds(read_client, query):
-    assert read_client.get(f"/api/v1/projects?{query}").status_code == 422

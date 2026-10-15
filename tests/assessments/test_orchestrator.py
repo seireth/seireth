@@ -23,7 +23,10 @@ def run_plan(monkeypatch, mock_images, execution_context):
             session.cleanup = cleanup
         saved = []
         outcome = workflows.execute_plan(
-            session, snapshot, execution_context, saved.append
+            session,
+            snapshot,
+            execution_context,
+            lambda data, results: saved.append(data),
         )
         return outcome, saved
 

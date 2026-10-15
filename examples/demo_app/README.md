@@ -16,7 +16,7 @@ From the repository root:
 
 ```bash
 docker compose -f examples/demo_app/compose.yml up -d --build --wait
-python -m app docker-up
+python -m app.cli.commands docker-up
 ```
 
 Open [Northstar Workspace](http://127.0.0.1:8081/) and its
@@ -48,7 +48,7 @@ and plugins in the GUI. For a smaller run:
 
 ```bash
 python -m examples.demo_app.verify --case / --case /cookies --case /cookies/protected
-python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies/protected --plugins http-security-headers cookie-security
+python -m app.cli.commands verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies/protected --plugins http-security-headers cookie-security
 ```
 
 `--base-url` chooses the API address. `--skip-resource-check` supports an API using
@@ -69,9 +69,9 @@ pulls are explicit operator actions; assessments use `--pull=never`.
 
 JSON and asset responses skip CSP/framing; redirects skip every header rule
 without following the destination. Each assessment inspects one response using
-declared response metadata. The ticket workflow is covered separately
-by browser tests. Zero findings means no covered violations were found; none of the
-plugins certifies the application or fully validates CSP or browser cookie policy.
+declared response metadata. Zero findings means no covered violations were found;
+none of the plugins certifies the application or fully validates CSP or browser
+cookie policy.
 
 ## Validate and stop
 

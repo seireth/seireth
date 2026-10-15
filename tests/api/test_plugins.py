@@ -1,4 +1,6 @@
-def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monkeypatch):
+def test_plugin_catalog_and_explicit_selection(
+    client, assessment_payload, monkeypatch, fake_session
+):
     from app.assessments.worker import dispatcher
 
     catalog = (client.get("/api/v1/plugins")).json()
@@ -7,7 +9,10 @@ def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monke
         "cookie-security",
         "csp-policy",
     ]
-    assert all(set(item) == {"id", "name", "description"} for item in catalog)
+    assert all(
+        set(item) == {"id", "name", "description", "version", "rules"}
+        for item in catalog
+    )
     assert all(item["name"].strip() and item["description"].strip() for item in catalog)
     monkeypatch.setattr(dispatcher, "submit", lambda assessment_id: None)
     response = client.post(
@@ -21,7 +26,7 @@ def test_plugin_catalog_and_explicit_selection(client, assessment_payload, monke
 
 
 def test_unregistered_plugin_id_is_rejected_without_records(
-    client, assessment_payload, database
+    client, assessment_payload, database, fake_session
 ):
     from tests.api.helpers import snapshot
 

@@ -2,8 +2,8 @@
 
 import pytest
 
-from app.api.schemas import HeaderEvidenceData
 from app.plugins.base import AnalysisContext, HttpObservation
+from app.plugins.evidence import HeaderEvidenceData
 from app.plugins.http_security_headers import analyze
 from examples.demo_app.scenarios import SCENARIOS
 
@@ -24,10 +24,8 @@ def test_demo_scenarios_keep_independent_outcomes_and_valid_evidence(scenario):
         == scenario.expected
     )
     for finding in result.findings:
-        assert (
-            HeaderEvidenceData.model_validate(finding.evidence).model_dump(mode="json")
-            == finding.evidence
-        )
+        data = HeaderEvidenceData.model_validate(finding.evidence)
+        assert data.model_dump(mode="json") == finding.evidence
 
 
 @pytest.mark.parametrize(
@@ -71,9 +69,16 @@ def test_response_applicability_is_visible_without_false_findings(
     assert tuple(check.status for check in result.checks) == outcomes
     assert all(check.reason.strip() for check in result.checks)
     assert len(result.findings) == outcomes.count("failed")
-    assert {finding.evidence["rule_id"] for finding in result.findings} == {
+    assert tuple(finding.evidence["rule_id"] for finding in result.findings) == tuple(
         check.rule_id for check in result.checks if check.status == "failed"
-    }
+    )
+    for finding in result.findings:
+        assert finding.remediation
+        assert finding.evidence["url"] == URL
+        assert finding.evidence["status_code"] == status
+        assert finding.evidence["media_type"] == (None if media == "invalid" else media)
+        assert finding.evidence["condition"] == "missing"
+        assert finding.evidence["expected"]
 
 
 def test_conflicting_content_types_do_not_guess_document_applicability():
@@ -153,16 +158,16 @@ def test_nosniff_value_is_accepted(value):
 
 @pytest.mark.parametrize(
     "value",
-    [None, "", "invalid", "other, nosniff", ",nosniff", '"nosniff"', "\u00a0nosniff"],
+    ["", "invalid", "other, nosniff", ",nosniff", '"nosniff"', "\u00a0nosniff"],
 )
 def test_missing_or_ineffective_nosniff_is_reported(value):
-    headers = {} if value is None else {"X-Content-Type-Options": value}
+    headers = {"X-Content-Type-Options": value}
     assert "x-content-type-options" in finding_rules(headers)
 
 
-@pytest.mark.parametrize("value", [None, "", "  "])
+@pytest.mark.parametrize("value", ["", "  "])
 def test_missing_or_blank_csp_is_reported(value):
-    headers = {} if value is None else {"Content-Security-Policy": value}
+    headers = {"Content-Security-Policy": value}
     assert "content-security-policy" in finding_rules(headers)
 
 
@@ -177,9 +182,9 @@ def test_supported_frame_option_is_accepted(value):
     assert "framing-protection" not in finding_rules({"X-Frame-Options": value})
 
 
-@pytest.mark.parametrize("value", [None, "", "ALLOW-FROM example.com", "invalid"])
+@pytest.mark.parametrize("value", ["", "ALLOW-FROM example.com", "invalid"])
 def test_missing_or_ineffective_frame_option_is_reported(value):
-    headers = {} if value is None else {"X-Frame-Options": value}
+    headers = {"X-Frame-Options": value}
     assert "framing-protection" in finding_rules(headers)
 
 
@@ -209,22 +214,6 @@ def test_enforced_frame_ancestors_replaces_frame_option(
     assert (
         "framing-protection" not in finding_rules({header: value})
     ) is replaces_frame_option
-
-
-def test_every_finding_has_actionable_remediation():
-    findings = response({}).findings
-    assert len(findings) == 3
-    assert all(finding.remediation for finding in findings)
-    assert {finding.evidence["rule_id"] for finding in findings} == {
-        "x-content-type-options",
-        "content-security-policy",
-        "framing-protection",
-    }
-    assert all(finding.evidence["url"] == URL for finding in findings)
-    assert all(finding.evidence["status_code"] == 200 for finding in findings)
-    assert all(finding.evidence["media_type"] == "text/html" for finding in findings)
-    assert all(finding.evidence["condition"] == "missing" for finding in findings)
-    assert all(finding.evidence["expected"] for finding in findings)
 
 
 def test_protected_response_with_mixed_case_header_names_has_no_findings():

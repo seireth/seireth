@@ -27,22 +27,20 @@ together, using URL-safe credentials without unescaped URL delimiters.
 Target registration requires a base URL and source kind. Docker targets require
 an image; website targets reject images and use the existing deployment.
 Docker registration and submission require local images; submission freezes their
-IDs for execution and retries. Removing a mutable tag does not change that identity.
+IDs for execution and retries.
 `GET /api/v1/target-images` discovers tagged images; callers may supply another
 local reference directly. Build or pull images explicitly; both target and runner
-containers use `--pull=never`. Website assessments do not inspect Docker images. Cleanup uses persisted resource ownership and
-continues when an image is unavailable.
+containers use `--pull=never`. Websites need no Docker daemon. Cleanup remains
+possible when an image is unavailable.
 
 ## Timeouts
 
 Single-URL submissions retain the configured assessment timeout. Route plans
-default to startup budget plus 15 seconds per route, capped at 900 seconds.
-Checks are cooperative: Docker operations check interruption, but synchronous
-Python analyzers cannot be forcibly preempted and are checked between calls.
-
-Requests default to 10 seconds and are bounded by the overall deadline.
-Bundle cleanup has its own 60-second foreground budget. Unresolved cleanup
-remains pending for reconciliation.
+default to the startup budget plus each route's request budget and five seconds
+for analysis, capped at 900 seconds. Requests default to 10 seconds and are bounded
+by the overall deadline. Synchronous analyzers are checked between calls and
+cannot be forcibly preempted. Cleanup has a separate 60-second foreground budget;
+unresolved resources remain pending for reconciliation.
 
 See [workflows](workflows.md) for public/private website grants, custom CAs,
 runtime authentication, launch profiles, and supplied-session requirements.
@@ -51,9 +49,6 @@ runtime authentication, launch profiles, and supplied-session requirements.
 
 Compose requires `POSTGRES_PASSWORD`, also reflected in the native connection URL.
 It overrides the API database URL with its bundled `postgres:5432` connection.
-The target kind selects Docker or website execution; the bundle runner uses its
-configured image or the application default.
-
 Compose loads API settings from `.env` through `env_file`. Shell variables override
 values used in Compose interpolation, such as the published API host/port and
 database password. They are not automatically forwarded into the API container:
@@ -83,22 +78,14 @@ see [Contributing](../CONTRIBUTING.md#tests).
 
 ## Reset to the current schema
 
-This unpublished, single-operator system has one fresh Alembic baseline,
-`0001_current_schema`. Previous databases and reports are unsupported. There is
-no automatic conversion and no startup revision guard. Apply migrations before
-starting the API. Do not stamp an older database as the new baseline.
+Apply baseline `0001_current_schema` to an empty database; do not stamp an
+existing incompatible database. To reset disposable Compose data:
 
-To reset a disposable Compose deployment:
+1. Stop the API gracefully and [verify owned-resource cleanup](security-model.md#cleanup-and-failure)
+   before discarding its journal. Resolve pending cleanup first.
+2. Run `docker compose down --volumes` from this repository. This deletes the
+   deployment's PostgreSQL data.
+3. Run `python -m app.cli.commands docker-up` to recreate the database, migrate, and start.
 
-1. Stop the old API gracefully and verify that its assessments released their
-   owned resources. Inspect containers, networks, and volumes with the
-   `seireth.assessment` label. If cleanup remains uncertain, use the old version's
-   reconciliation before discarding its ownership journal.
-2. From this repository, run `docker compose down --volumes`. This discards this
-   Compose deployment's PostgreSQL data; do it only when those records are disposable.
-3. Run `python -m app docker-up`. It creates the empty database, applies the new
-   baseline, builds the current runner, and starts the API.
-
-For native startup, recreate only the disposable database named in your configured
-connection, run `python -m app migrate`, then start the API. The implementation's
-tests use separate databases and never reset the operator database.
+For native startup, recreate only the configured disposable database, run
+`python -m app.cli.commands migrate`, then start the API. Tests use separate databases.

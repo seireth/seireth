@@ -7,10 +7,11 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.api.schemas import CspEvidenceData, EvidenceOut
+from app.api.schemas import EvidenceOut
 from app.assessments.worker import AssessmentDispatcher
 from app.persistence import models
 from app.plugins.base import HttpObservation
+from app.plugins.evidence import CspEvidenceData
 from tests.sessions import FakeSession
 
 PERMISSIVE = "script-src https: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'"
@@ -136,7 +137,14 @@ def test_coverage_is_complete_for_each_context_and_has_no_duplicates():
 )
 @pytest.mark.parametrize("nonce", [False, True])
 def test_worker_persists_selected_csp_checks_and_safe_report_evidence(
-    read_client, database, assessment_graph, monkeypatch, caplog, plugins, nonce
+    read_client,
+    database,
+    assessment_graph,
+    monkeypatch,
+    caplog,
+    plugins,
+    nonce,
+    fake_session,
 ):
     graph = assessment_graph(plugins=plugins)
     calls = []
@@ -221,7 +229,7 @@ def test_worker_persists_selected_csp_checks_and_safe_report_evidence(
 
 @pytest.mark.parametrize("suffix", ["/evidence", "/report"])
 def test_corrupt_stored_csp_evidence_returns_a_generic_error(
-    read_client, assessment_graph, evidence_row, caplog, suffix
+    read_client, assessment_graph, evidence_row, caplog, suffix, fake_session
 ):
     graph = assessment_graph()
     AssessmentDispatcher()._run(graph.assessment.id, Event())

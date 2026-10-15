@@ -22,8 +22,10 @@ function show() {
     let data: unknown;
     if (options?.method === "POST") data = { id: path.endsWith("/targets") ? "created" : "assessment" };
     else if (path.endsWith("/runtime/profiles")) data = { requests: {}, launches: {}, networks: {}, trusts: [] };
-    else if (path.endsWith("/plugins")) data = [{ id: "http-security-headers", name: "HTTP security headers", description: "Inspect response protections." }];
-    else if (path.endsWith("/plugin-rules")) data = {};
+    else if (path.endsWith("/plugins")) data = [
+      { id: "http-security-headers", name: "HTTP security headers", description: "Inspect response protections.", version: "1.0.0", rules: { "x-content-type-options": "representation" } },
+      { id: "csp-policy", name: "CSP policy", description: "Inspect script permissions.", version: "1.0.0", rules: { "csp-eval": "document" } },
+    ];
     else if (path.endsWith("/projects/p")) data = { id: "p", name: "Project" };
     else if (path.includes("/projects/p/targets?")) data = { items: [targets.t], has_more: false };
     else if (path.includes("/assessments?")) data = { items: [], has_more: false };
@@ -80,7 +82,7 @@ it("uses the catalog and target URL, blocks duplicate submissions, and preserves
     id: "t",
     project_id: "p",
     name: "Demo",
-    image: "allowed",
+    image: "allowed", kind: "docker",
     url: "http://demo.test/",
   };
   const json = (data: unknown) => new Response(JSON.stringify(data));
@@ -95,16 +97,17 @@ it("uses the catalog and target URL, blocks duplicate submissions, and preserves
           {
             id: "catalog-check",
             name: "Catalog supplied check",
-            description: "Passive observation",
+            description: "Passive observation", version: "1.0.0", rules: {},
           },
         ]),
       );
     if (path.includes("/targets?"))
       return Promise.resolve(json({ items: [target], has_more: false }));
     if (path.endsWith("/targets/t")) return Promise.resolve(json(target));
-    return Promise.resolve(
-      json({ id: "p", name: "Project", created_at: new Date().toISOString() }),
-    );
+    if (path.endsWith("/runtime/profiles")) return Promise.resolve(json({ requests: {}, launches: {}, networks: {}, trusts: [] }));
+    if (path.includes("/assessments?")) return Promise.resolve(json({ items: [], has_more: false }));
+    if (path.endsWith("/projects/p")) return Promise.resolve(json({ id: "p", name: "Project", created_at: new Date().toISOString() }));
+    throw new Error("Unexpected request: " + path);
   });
   vi.stubGlobal("fetch", fetcher);
   renderPage();
@@ -144,4 +147,36 @@ it("uses the catalog and target URL, blocks duplicate submissions, and preserves
   expect(
     screen.getByRole("checkbox", { name: /Catalog supplied check/ }),
   ).toBeChecked();
+});
+
+
+it("prunes inherited required checks while retaining explicit route plugin overrides", async () => {
+  const fetcher = show();
+  const user = userEvent.setup();
+  await screen.findByRole("option", { name: /Original/ });
+  await user.selectOptions(screen.getByLabelText("Registered target"), "t");
+  const global = within(screen.getByRole("group", { name: "Select at least one plugin" }));
+  await user.click(global.getByRole("checkbox", { name: /HTTP security headers/ }));
+  await user.click(global.getByRole("checkbox", { name: /CSP policy/ }));
+  await user.click(screen.getByRole("checkbox", { name: /Use a route plan/ }));
+  await user.click(screen.getByRole("button", { name: "Add route" }));
+  const groups = screen.getAllByRole("group", { name: /^Route [12]$/ });
+  for (const group of groups) {
+    const route = within(group);
+    await user.click(route.getByText("Route checks"));
+    await user.click(route.getByRole("checkbox", { name: "Customize required checks" }));
+    await user.click(route.getByRole("checkbox", { name: "http-security-headers:x-content-type-options (representation)" }));
+  }
+  const explicit = within(groups[1]);
+  await user.type(explicit.getByLabelText("Response URL"), "https://original.test/second");
+  await user.click(explicit.getByRole("checkbox", { name: "CSP policy" }));
+  await user.click(global.getByRole("checkbox", { name: /HTTP security headers/ }));
+  expect(within(groups[0]).queryByRole("checkbox", { name: /http-security-headers:x-content-type-options/ })).not.toBeInTheDocument();
+  expect(explicit.getByRole("checkbox", { name: /http-security-headers:x-content-type-options/ })).toBeChecked();
+  await user.click(screen.getByRole("button", { name: "Run assessment" }));
+  await screen.findByText("Assessment submitted");
+  const request = fetcher.mock.calls.find(([path, options]) => path.endsWith("/assessments") && options?.method === "POST");
+  const body = JSON.parse(String(request?.[1]?.body));
+  expect(body.routes[0]).toMatchObject({ plugins: ["csp-policy"], required_checks: [] });
+  expect(body.routes[1]).toMatchObject({ plugins: ["http-security-headers"], required_checks: ["http-security-headers:x-content-type-options"] });
 });

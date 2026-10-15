@@ -124,3 +124,24 @@ def test_baseline_with_missing_evidence_cannot_claim_findings_resolved(
         "status": "unavailable",
         "reason": "stable finding identities are unavailable",
     }
+
+
+def test_protected_html_error_page_has_required_coverage(
+    client, project, website, monkeypatch, tmp_path, wait_until
+):
+    configure(monkeypatch, tmp_path, website)
+    website.handler.corrected = True
+    target = register(client, project, website)
+    identifier = submit(
+        client,
+        project,
+        target,
+        website.url + "missing",
+        expected={"statuses": [404], "media_types": ["text/html"]},
+    )
+    _, report = finish(client, identifier, wait_until)
+    result = report["assessment"]["result"]
+    assert result["verdict"]["status"] == "pass"
+    assert result["coverage"]["complete"] and result["cleanup_verified"]
+    assert report["findings"] == report["evidence"] == []
+    assert website.handler.requests[0][0] == "/missing"

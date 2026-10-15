@@ -12,7 +12,7 @@ import type {
 } from "../api/types";
 import { ErrorMessage, FieldError, More } from "../components/common";
 import TargetForm from "../components/TargetForm";
-import { RoutePlanEditor, newRoute, routeRequest } from "../components/RoutePlanEditor";
+import { RoutePlanEditor, newRoute, routeRequest, selectRoutePlugins } from "../components/RoutePlanEditor";
 import type { RouteDraft } from "../components/RoutePlanEditor";
 
 export default function NewAssessmentPage() {
@@ -33,7 +33,6 @@ export default function NewAssessmentPage() {
     setRoutes([]);
   };
   const profiles = useResource<Profiles>("/runtime/profiles");
-  const rules = useResource<Record<string, { version: string; rules: Record<string, string> }>>("/plugin-rules");
   const history = useList<Assessment>("/projects/" + projectId + "/assessments");
   const project = useResource<Project>(`/projects/${projectId}`);
   const plugins = useResource<Plugin[]>("/plugins");
@@ -133,7 +132,7 @@ export default function NewAssessmentPage() {
         </label>}
         <p className="hint">Responses must stay within the registered target's origin and path.</p>
       </section>
-      {usePlan && <RoutePlanEditor routes={routes} onChange={setRoutes} profiles={profiles.data} plugins={plugins.data} selectedPlugins={selectedPlugins} rules={rules.data} />}
+      {usePlan && <RoutePlanEditor routes={routes} onChange={setRoutes} profiles={profiles.data} plugins={plugins.data} selectedPlugins={selectedPlugins} />}
       {usePlan && <label>Baseline assessment<select value={baseline} onChange={e => setBaseline(e.target.value)}>
         <option value="">No comparison</option>{history.data?.pages.flatMap(page => page.items).filter(item => item.status === "completed")
           .map(item => <option key={item.id} value={item.id}>{item.id.slice(0, 8)} · {item.created_at}</option>)}
@@ -149,13 +148,11 @@ export default function NewAssessmentPage() {
               <input
                 type="checkbox"
                 checked={selectedPlugins.includes(plugin.id)}
-                onChange={(e) =>
-                  setPlugins(
-                    e.target.checked
-                      ? [...selectedPlugins, plugin.id]
-                      : selectedPlugins.filter((p) => p !== plugin.id),
-                  )
-                }
+                onChange={(e) => {
+                  const chosen = e.target.checked ? [...selectedPlugins, plugin.id] : selectedPlugins.filter(p => p !== plugin.id);
+                  setPlugins(chosen);
+                  setRoutes(current => current.map(route => route.plugins === undefined ? selectRoutePlugins(route, chosen, true) : route));
+                }}
               />
               <span>
                 {plugin.name}

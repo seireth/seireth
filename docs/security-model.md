@@ -91,6 +91,7 @@ Inspect exact labels/names and API logs:
 ```bash
 docker ps -a --filter label=seireth.assessment=ASSESSMENT_ID
 docker network ls --filter label=seireth.assessment=ASSESSMENT_ID
+docker volume ls --filter label=seireth.assessment=ASSESSMENT_ID
 docker compose logs api
 ```
 

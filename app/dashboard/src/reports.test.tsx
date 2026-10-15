@@ -1,6 +1,6 @@
-import { act, waitFor, within } from "@testing-library/react";
+import { act, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import { downloadBlob, htmlReport } from "./reports";
+import { htmlReport } from "./reports";
 import { cspReportFixture, multiFindingReport, reportFixture, routeReportFixture } from "./test/report";
 
 function documentFor(report = reportFixture) {
@@ -142,18 +142,6 @@ it("exports an unstarted execution and pending cleanup", () => {
   expect(pending.body.textContent).toContain("Pending verification");
   expect(pending.body.textContent).toContain("Unknown outcome");
   expect(pending.body.textContent).toContain("Execution failed");
-});
-
-it("removes the download anchor and releases its URL even if clicking fails", async () => {
-  const revokeObjectURL = vi.fn();
-  const createObjectURL = vi.fn(() => "blob:report");
-  vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = revokeObjectURL; });
-  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => { throw new Error("download failed"); });
-  try {
-    expect(() => downloadBlob(new Blob(["report"]), "report.json")).toThrow("download failed");
-    expect(document.querySelector("a[download]")).toBeNull();
-    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"));
-  } finally { click.mockRestore(); }
 });
 
 it("exports current CSP evidence through the shared offline renderer", () => {

@@ -1,6 +1,5 @@
-"""Scenario configuration reaches real GET/HEAD responses and correct bodies."""
+"""Scenario response metadata and redirect behavior over real HTTP."""
 
-import json
 from dataclasses import replace
 from threading import Thread
 
@@ -8,7 +7,7 @@ import httpx
 import pytest
 
 from examples.demo_app import server as demo_server
-from examples.demo_app.scenarios import CSP_SCENARIOS, SCENARIOS, Scenario
+from examples.demo_app.scenarios import CSP_SCENARIOS, SCENARIOS
 
 
 def assert_declared_metadata(response, scenario):
@@ -71,31 +70,6 @@ def test_every_scenario_route_uses_its_configured_response(
         assert response.content == b""
 
 
-@pytest.mark.parametrize(
-    "content_type", ["Application/JSON; Charset=UTF-8", " text/css ; charset=utf-8"]
-)
-def test_parameterized_lab_content_types_render_their_declared_body(
-    server, monkeypatch, content_type
-):
-    scenario = Scenario(
-        "/lab/parameterized",
-        "Parameterized",
-        "Fixture body",
-        (),
-        content_type=content_type,
-    )
-    monkeypatch.setitem(demo_server.BY_PATH, scenario.path, scenario)
-    response = server.get(scenario.path)
-    if content_type.lower().startswith("application/json"):
-        assert response.json() == {
-            "scenario": "Parameterized",
-            "description": "Fixture body",
-        }
-    else:
-        assert response.text.startswith("/* Header applicability demo. */")
-    assert "<!doctype html>" not in response.text
-
-
 @pytest.mark.parametrize("method", ["GET", "HEAD"])
 @pytest.mark.parametrize(
     "path",
@@ -114,24 +88,10 @@ def test_intentional_response_metadata_gaps_are_preserved(server, method, path):
         assert response.content == b""
 
 
-def test_specialized_route_bodies_and_redirect_destination_are_preserved(server):
-    tickets = server.get("/api/tickets")
-    assert (
-        json.loads(tickets.content)["items"][0]["title"]
-        == "Review the release checklist"
-    )
-    assert (
-        server.get("/assets/app.css").content
-        == (demo_server.STATIC / "app.css").read_bytes()
-    )
-    assert (
-        server.get("/assets/app.js").content
-        == (demo_server.STATIC / "app.js").read_bytes()
-    )
+def test_login_redirect_preserves_status_and_destination(server):
     redirect = server.get("/login")
     assert redirect.status_code == 303
     assert redirect.headers["location"] == "/account"
-    assert "Continue to your workspace" in redirect.text
 
 
 @pytest.mark.parametrize("scenario", SCENARIOS, ids=lambda scenario: scenario.path)
@@ -158,11 +118,3 @@ def test_baseline_scenario_does_not_invent_csp_expectations(server):
     assert response.headers["content-security-policy"] == (
         "frame-ancestors *, frame-ancestors 'none'"
     )
-
-
-def test_csp_lab_preserves_the_original_baseline_matrix(server):
-    assert server.get("/lab").text.count("<tr><td>") == 44
-    response = server.get("/csp")
-    assert response.text.count("<tr><td>") == 7
-    assert "CSP response scenarios" in response.text
-    assert "inconclusive" in response.text

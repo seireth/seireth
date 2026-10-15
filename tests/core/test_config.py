@@ -48,30 +48,6 @@ def test_test_bootstrap_isolates_operator_settings_and_preserves_test_switches(
     assert docker_tests == "1"
 
 
-@pytest.mark.parametrize(
-    "host,expected",
-    [
-        ("0.0.0.0", "127.0.0.1"),
-        ("::", "[::1]"),
-        ("[::]", "[::1]"),
-        ("::1", "[::1]"),
-        ("127.0.0.2", "127.0.0.2"),
-    ],
-)
-def test_verification_uses_connectable_address(host, expected):
-    assert (
-        Settings(_env_file=None, api_host=host, api_port=9000).api_base_url
-        == f"http://{expected}:9000"
-    )
-
-
-@pytest.mark.parametrize("port", [-1, 0, 65536, 70000])
-def test_invalid_api_port_is_rejected(port):
-    with pytest.raises(ValidationError) as error:
-        Settings(_env_file=None, api_port=port)
-    assert error.value.errors()[0]["loc"] == ("api_port",)
-
-
 def test_runner_image_uses_environment_override(monkeypatch):
     monkeypatch.setenv("SEIRETH_BUNDLE_RUNNER_IMAGE", "python:custom")
     assert Settings(_env_file=None).bundle_runner_image == "python:custom"

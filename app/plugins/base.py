@@ -24,6 +24,9 @@ from ..core.constraints import (
 )
 
 _PLUGIN_ID_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+RuleApplicability = Literal[
+    "representation", "document", "cookie-observation", "session", "cookie-presence"
+]
 _TOKEN = r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
 _MEDIA_TYPE = re.compile(
     rf"[ \t]*(?P<media>(?ai:{MEDIA_TYPE_PATTERN}))[ \t]*"
@@ -146,7 +149,7 @@ class PluginResponse(ContractModel):
 class Plugin:
     manifest: PluginManifest
     analyze: Callable[[HttpObservation, AnalysisContext], PluginResponse]
-    rules: Mapping[str, str]
+    rules: Mapping[str, RuleApplicability]
 
 
 @dataclass(frozen=True)

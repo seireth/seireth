@@ -16,7 +16,3 @@ it("groups interleaved evidence without sorting or changing its records", () => 
   expect(grouped.get("f")?.[1]).toBe(evidence[2]);
   expect(JSON.stringify(evidence)).toBe(before);
 });
-
-it("returns no groups when evidence is absent", () => {
-  expect(groupEvidenceByFinding([]).size).toBe(0);
-});

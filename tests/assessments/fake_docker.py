@@ -107,10 +107,10 @@ class FakeDocker:
         return subprocess.CompletedProcess(args, 0, output, "")
 
     def install(self, monkeypatch):
-        from app.assessments.sandbox import DockerCommands
+        from app.assessments.bundle import BundleSession
 
         monkeypatch.setattr(
-            DockerCommands,
+            BundleSession,
             "_run",
             lambda sandbox, *args, **kwargs: self.run(sandbox, *args, **kwargs),
         )

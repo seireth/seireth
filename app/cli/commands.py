@@ -73,7 +73,7 @@ def _docker_up(timeout_seconds: float) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m app",
+        prog="python -m app.cli.commands",
         description="Run Seireth development commands.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -111,13 +111,17 @@ def main() -> int:
         return _docker_up(args.api_ready_timeout_seconds)
     if args.command == "migrate":
         return run(["alembic", "upgrade", "head"])
-    from ..core.config import settings
+    if args.command == "serve" or args.base_url is None:
+        from ..core.config import settings
+
+    if args.command != "serve":
+        base_url = args.base_url if args.base_url is not None else settings.api_base_url
 
     if args.command == "assess":
         from .assess import assess
 
         return assess(
-            args.base_url or settings.api_base_url,
+            base_url,
             project_id=args.project_id,
             target_id=args.target_id,
             plan=args.plan,
@@ -143,9 +147,7 @@ def main() -> int:
         print(
             json.dumps(
                 verify(
-                    args.base_url
-                    if args.base_url is not None
-                    else settings.api_base_url,
+                    base_url,
                     timeout_seconds=args.timeout_seconds,
                     image=args.image,
                     target_url=args.target_url,
@@ -159,3 +161,7 @@ def main() -> int:
         print(f"verification failed: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

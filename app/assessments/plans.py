@@ -8,7 +8,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ..core.config import settings
 from ..core.constraints import (
     NormalizedMediaType,
     PluginVersion,
@@ -200,6 +199,8 @@ def freeze_plan(
     baseline=None,
     control_endpoint=None,
 ) -> dict:
+    from ..core.config import settings
+
     if not 1 <= len(routes) <= 20 or len({route.key for route in routes}) != len(
         routes
     ):

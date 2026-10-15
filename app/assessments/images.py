@@ -4,8 +4,6 @@ import json
 import re
 import subprocess
 
-from ..core.config import settings
-
 
 class ImageUnavailable(ValueError):
     """The operator must prepare the requested image on this daemon."""
@@ -16,6 +14,8 @@ class DockerUnavailable(RuntimeError):
 
 
 def _command(args):
+    from ..core.config import settings
+
     try:
         return subprocess.run(
             ["docker", *args],

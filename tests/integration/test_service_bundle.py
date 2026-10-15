@@ -22,7 +22,7 @@ pytestmark = [
 
 @pytest.mark.parametrize("mode", ["completed", "timeout", "startup-failure"])
 def test_owned_postgres_bundle_and_verified_cleanup(
-    client, project, tmp_path, monkeypatch, wait_until, mode
+    client, project, tmp_path, monkeypatch, wait_until, mode, postgres_image
 ):
     certificate, private_key = tls_certificate(tmp_path)
     path = tmp_path / "operator.json"
@@ -54,7 +54,7 @@ def test_owned_postgres_bundle_and_verified_cleanup(
                         },
                         "services": {
                             "postgres": {
-                                "image": "postgres:18-trixie",
+                                "image": postgres_image,
                                 "uid": 999,
                                 "gid": 999,
                                 "environment": {

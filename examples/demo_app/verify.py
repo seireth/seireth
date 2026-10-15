@@ -126,7 +126,7 @@ def validate_outcome(
         raise RuntimeError(f"{scenario.path}: evidence response context does not match")
     for plugin in plugins:
         observed = Counter(
-            entry.data.rule if plugin == "cookie-security" else entry.data.rule_id
+            entry.data.rule_id
             for entry in evidence.evidence
             if by_id[entry.finding_id]["plugin"] == plugin
         )

@@ -10,10 +10,10 @@ import pytest
 from sqlalchemy import event, func, select, text
 
 from app.assessments import execution, policy, worker
-from app.assessments.execution import ExecutionContext, Interrupted
-from app.assessments.sandbox import CleanupOutcome
+from app.assessments.bundle import BundleSession
+from app.assessments.execution import CleanupOutcome, ExecutionContext, Interrupted
 from app.assessments.worker import AssessmentDispatcher
-from app.assessments.workflows import public_findings
+from app.assessments.workflows import published_records
 from app.core.config import settings
 from app.persistence import models
 from app.plugins import registry as registry_module
@@ -31,7 +31,7 @@ def assessment(assessment_graph):
 
 @pytest.fixture
 def execution_clock(monkeypatch):
-    clock = SimpleNamespace(wall=models.now(), elapsed=0.0)
+    clock = SimpleNamespace(elapsed=0.0)
 
     monkeypatch.setattr(worker, "monotonic", lambda: clock.elapsed)
     monkeypatch.setattr(execution, "monotonic", lambda: clock.elapsed)
@@ -101,6 +101,7 @@ def test_failed_submission_can_be_retried():
 
     assert dispatcher._events == {}
     dispatcher.submit("queued-assessment")
+    dispatcher.submit("queued-assessment")
     assert executor.submit.call_count == 2
     assert "queued-assessment" in dispatcher._events
 
@@ -132,7 +133,9 @@ def test_initial_claim_rejects_lost_ownership_before_policy_or_writes(monkeypatc
 
 
 @pytest.mark.parametrize("change", ["url", "malformed-url", "image", "relationship"])
-def test_execution_revalidates_policy(database, assessment, monkeypatch, change):
+def test_execution_revalidates_policy(
+    database, assessment, monkeypatch, change, fake_session
+):
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
         if change == "url":
@@ -159,7 +162,7 @@ def test_execution_revalidates_policy(database, assessment, monkeypatch, change)
 
 
 def test_running_visible_duplicate_claims_and_terminal_redispatch(
-    database, assessment, monkeypatch
+    database, assessment, monkeypatch, fake_session
 ):
     entered, release = Event(), Event()
     original = FakeSession.fetch
@@ -182,6 +185,8 @@ def test_running_visible_duplicate_claims_and_terminal_redispatch(
         thread.join(5)
         assert not thread.is_alive()
     dispatcher._run(assessment, Event())
+    # Recovery may select the ID before another worker completes the assessment.
+    dispatcher._recover_assessment(assessment)
     assert read(database, assessment).status == "completed"
     with database.SessionLocal() as db:
         assert (
@@ -204,7 +209,7 @@ def test_running_visible_duplicate_claims_and_terminal_redispatch(
 
 @pytest.mark.parametrize("reason", ["cancel", "timeout", "shutdown"])
 def test_active_execution_stops_and_cleans(
-    database, assessment, monkeypatch, reason, execution_clock
+    database, assessment, monkeypatch, reason, execution_clock, fake_session
 ):
     entered, cleaned = Event(), Event()
 
@@ -243,7 +248,6 @@ def test_active_execution_stops_and_cleans(
             == {
                 "cancel": "cancelled",
                 "timeout": "failed",
-                "expiry": "failed",
                 "shutdown": "recovering",
             }[reason]
         )
@@ -277,7 +281,9 @@ def interrupted(database, assessment, number=1, status="running"):
         db.commit()
 
 
-def test_corrupt_journal_cannot_authorize_cleanup_or_retry(database, assessment):
+def test_corrupt_journal_cannot_authorize_cleanup_or_retry(
+    database, assessment, fake_session
+):
     interrupted(database, assessment)
     with database.SessionLocal() as db:
         attempt = db.scalar(
@@ -292,7 +298,7 @@ def test_corrupt_journal_cannot_authorize_cleanup_or_retry(database, assessment)
     assert item.result["cleanup_reason"] == "invalid operation journal"
 
 
-def test_recovery_retries_after_verified_cleanup(database, assessment):
+def test_recovery_retries_after_verified_cleanup(database, assessment, fake_session):
     interrupted(database, assessment)
     dispatcher = AssessmentDispatcher()
     dispatcher.recover()
@@ -311,7 +317,7 @@ def test_recovery_retries_after_verified_cleanup(database, assessment):
     ] == [{"id": "http-security-headers", "finding_count": 3}]
 
 
-def test_recovery_enforces_retry_limit(database, assessment):
+def test_recovery_enforces_retry_limit(database, assessment, fake_session):
     interrupted(database, assessment, number=2)
     AssessmentDispatcher().recover()
     item = read(database, assessment)
@@ -320,7 +326,7 @@ def test_recovery_enforces_retry_limit(database, assessment):
     assert item.result["cleanup_verified"]
 
 
-def test_recovery_preserves_cancellation(database, assessment):
+def test_recovery_preserves_cancellation(database, assessment, fake_session):
     interrupted(database, assessment, status="cancelling")
     AssessmentDispatcher().recover()
     item = read(database, assessment)
@@ -329,7 +335,7 @@ def test_recovery_preserves_cancellation(database, assessment):
     assert item.result["cleanup_verified"]
 
 
-def test_recovery_rejects_changed_url_boundary(database, assessment):
+def test_recovery_rejects_changed_url_boundary(database, assessment, fake_session):
     interrupted(database, assessment)
     with database.SessionLocal() as db:
         item = db.get(models.Assessment, assessment)
@@ -342,10 +348,12 @@ def test_recovery_rejects_changed_url_boundary(database, assessment):
     assert item.result["cleanup_verified"]
 
 
-def test_recovery_keeps_unverified_cleanup_pending(database, assessment, monkeypatch):
+def test_recovery_keeps_unverified_cleanup_pending(
+    database, assessment, monkeypatch, fake_session
+):
     interrupted(database, assessment)
     monkeypatch.setattr(
-        FakeSession,
+        BundleSession,
         "cleanup",
         lambda self: CleanupOutcome(False, "daemon unavailable"),
     )
@@ -355,7 +363,7 @@ def test_recovery_keeps_unverified_cleanup_pending(database, assessment, monkeyp
     assert item.status == "failed" and item.cleanup_pending
     assert item.result["error"] == "sandbox cleanup could not be verified"
     assert item.result["cleanup_reason"] == "daemon unavailable"
-    monkeypatch.setattr(FakeSession, "cleanup", lambda self: CleanupOutcome(True))
+    monkeypatch.setattr(BundleSession, "cleanup", lambda self: CleanupOutcome(True))
     dispatcher.recover(include_failed_cleanup=True)
     item = read(database, assessment)
     assert item.status == "failed" and not item.cleanup_pending
@@ -363,7 +371,7 @@ def test_recovery_keeps_unverified_cleanup_pending(database, assessment, monkeyp
 
 
 def test_plugin_failure_persists_no_findings_after_verified_cleanup(
-    database, assessment, monkeypatch, caplog
+    database, assessment, monkeypatch, caplog, fake_session
 ):
     calls = []
 
@@ -438,7 +446,7 @@ def test_plugin_failure_persists_no_findings_after_verified_cleanup(
 
 
 def test_running_dispatcher_recovers_transient_finalization_failure(
-    database, assessment, monkeypatch, wait_until
+    database, assessment, monkeypatch, wait_until, fake_session
 ):
     original_finish = worker.finish
     calls = 0
@@ -472,7 +480,7 @@ def test_running_dispatcher_recovers_transient_finalization_failure(
 
 
 def test_finalization_flush_failure_rolls_back_before_retry(
-    database, assessment, caplog
+    database, assessment, caplog, fake_session
 ):
     staged = []
 
@@ -510,7 +518,7 @@ def test_finalization_flush_failure_rolls_back_before_retry(
         item = db.get(models.Assessment, assessment)
         assert item.status == "running" and item.result is None
         assert rows(db, models.Finding) == rows(db, models.Evidence) == 3
-        assert public_findings(db, item) == []
+        assert published_records(db, item)[0] == []
         assert list(
             db.scalars(
                 select(models.AuditEvent.action).where(
@@ -524,7 +532,7 @@ def test_finalization_flush_failure_rolls_back_before_retry(
         item = db.get(models.Assessment, assessment)
         assert item.status == "completed" and item.result["attempt"] == 2
         assert rows(db, models.Finding) == rows(db, models.Evidence) == 6
-        assert len(public_findings(db, item)) == 3
+        assert len(published_records(db, item)[0]) == 3
         assert rows(db, models.Attempt) == 2
         assert list(
             db.scalars(
@@ -536,7 +544,7 @@ def test_finalization_flush_failure_rolls_back_before_retry(
         ) == ["assessment.completed"]
 
 
-def test_only_one_dispatcher_and_lock_loss_stops_work(database):
+def test_only_one_dispatcher_and_lock_loss_stops_work(database, fake_session):
     first, second = AssessmentDispatcher(), AssessmentDispatcher()
     first.start()
     try:
@@ -561,7 +569,7 @@ def test_only_one_dispatcher_and_lock_loss_stops_work(database):
 
 
 def test_recovery_does_not_requeue_after_ownership_loss(
-    database, assessment, monkeypatch
+    database, assessment, monkeypatch, fake_session
 ):
     dispatcher = AssessmentDispatcher()
     interrupted(database, assessment)
@@ -570,7 +578,7 @@ def test_recovery_does_not_requeue_after_ownership_loss(
         dispatcher._lost.set()
         return CleanupOutcome(True)
 
-    monkeypatch.setattr(FakeSession, "cleanup", lose_ownership)
+    monkeypatch.setattr(BundleSession, "cleanup", lose_ownership)
     with pytest.raises(RuntimeError, match="ownership lost"):
         dispatcher.recover()
     item = read(database, assessment)

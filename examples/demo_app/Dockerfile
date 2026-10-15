@@ -1,4 +1,4 @@
-FROM python:3.14-alpine
+FROM python:3.14.8-alpine
 WORKDIR /srv
 ENV PYTHONDONTWRITEBYTECODE=1
 COPY scenarios.py server.py ./examples/demo_app/

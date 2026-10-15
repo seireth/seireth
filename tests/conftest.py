@@ -251,22 +251,10 @@ def mock_images(monkeypatch):
     monkeypatch.setattr(worker, "require_local_image", lambda image: None)
 
 
-@pytest.fixture(autouse=True)
-def current_execution_doubles(request, monkeypatch):
-    if (
-        request.node.get_closest_marker("docker")
-        or "integration" in request.node.nodeid
-    ):
-        return
-    if "database" in request.fixturenames:
-        request.getfixturevalue("mock_images")
-    if request.node.nodeid.startswith(
-        ("tests/api/", "tests/assessments/test_worker")
-    ) and not any(
-        name in request.fixturenames
-        for name in ("website", "fake_docker", "pending_docker")
-    ):
-        from app.assessments import worker
-        from tests.sessions import fake_factory
+@pytest.fixture
+def fake_session(mock_images, monkeypatch):
+    """Opt into current execution doubles; real HTTP/Docker tests omit this."""
+    from app.assessments import worker
+    from tests.sessions import fake_factory
 
-        monkeypatch.setattr(worker, "sandbox_for", fake_factory)
+    monkeypatch.setattr(worker, "sandbox_for", fake_factory)

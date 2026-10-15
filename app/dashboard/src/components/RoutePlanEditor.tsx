@@ -13,6 +13,14 @@ export const newRoute = (url = "", key = "response"): RouteDraft => ({
 
 const commaSeparated = (value: string) => value.split(",").map(item => item.trim()).filter(Boolean);
 
+export function selectRoutePlugins(route: RouteDraft, plugins: string[], inherited = false): RouteDraft {
+  return {
+    ...route,
+    plugins: inherited ? undefined : plugins,
+    requiredChecks: route.requiredChecks?.filter(rule => plugins.includes(rule.split(":")[0])),
+  };
+}
+
 export function routeRequest(route: RouteDraft, selectedPlugins: string[]) {
   return {
     key: route.key, url: route.url, plugins: route.plugins ?? selectedPlugins,
@@ -30,10 +38,9 @@ export function routeRequest(route: RouteDraft, selectedPlugins: string[]) {
   };
 }
 
-export function RoutePlanEditor({ routes, onChange, profiles, plugins, selectedPlugins, rules }: {
+export function RoutePlanEditor({ routes, onChange, profiles, plugins, selectedPlugins }: {
   routes: RouteDraft[]; onChange: (routes: RouteDraft[]) => void; profiles?: Profiles;
   plugins?: Plugin[]; selectedPlugins: string[];
-  rules?: Record<string, { version: string; rules: Record<string, string> }>;
 }) {
   const update = (index: number, changes: Partial<RouteDraft>) =>
     onChange(routes.map((route, position) => position === index ? { ...route, ...changes } : route));
@@ -63,9 +70,7 @@ export function RoutePlanEditor({ routes, onChange, profiles, plugins, selectedP
           <input type="checkbox" checked={(route.plugins ?? selectedPlugins).includes(plugin.id)} onChange={e => {
             const current = route.plugins ?? selectedPlugins;
             const chosen = e.target.checked ? [...current, plugin.id] : current.filter(id => id !== plugin.id);
-            update(index, { plugins: chosen,
-              requiredChecks: route.requiredChecks?.filter(rule => chosen.includes(rule.split(":")[0])),
-            });
+            update(index, selectRoutePlugins(route, chosen));
           }} />{plugin.name}
         </label>)}
         <label><input type="checkbox" checked={route.requiredChecks !== undefined} onChange={e =>
@@ -73,7 +78,7 @@ export function RoutePlanEditor({ routes, onChange, profiles, plugins, selectedP
         } />Customize required checks</label>
         {route.requiredChecks !== undefined && <>
           <p>An empty selection requires only the response expectation.</p>
-          {(route.plugins ?? selectedPlugins).flatMap(plugin => Object.entries(rules?.[plugin]?.rules ?? {}).map(([rule, applicability]) => {
+          {(route.plugins ?? selectedPlugins).flatMap(plugin => Object.entries(plugins?.find(item => item.id === plugin)?.rules ?? {}).map(([rule, applicability]) => {
             const id = plugin + ":" + rule;
             return <label key={id}><input type="checkbox" checked={route.requiredChecks?.includes(id)} onChange={e =>
               update(index, {

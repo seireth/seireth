@@ -6,7 +6,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..core.config import settings
 from ..core.constraints import TargetImage
 from .policy import PolicyError, bounded_url
 
@@ -190,6 +189,8 @@ class OperatorConfig(ConfigModel):
 
 
 def load_config() -> OperatorConfig:
+    from ..core.config import settings
+
     if not settings.operator_config_file:
         return OperatorConfig()
     try:

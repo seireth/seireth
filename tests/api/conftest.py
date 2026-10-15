@@ -19,7 +19,7 @@ def read_client(database):
 
 
 @pytest.fixture
-def target(client, project, request):
+def target(client, project, request, mock_images):
     response = client.post(
         "/api/v1/targets",
         json={

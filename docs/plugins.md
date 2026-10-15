@@ -1,21 +1,36 @@
 # Plugin development
 
-Plugins are executable code. Only reviewed, explicitly registered modules bundled
-with SEIRETH load; copying files into `app/plugins` is insufficient. External
-execution and dynamic installation await isolation from API Docker-socket and
-database access. For catalog-driven client selection, see
-[Assessments](assessments.md#authorize-and-select).
+Only reviewed, explicitly registered modules bundled with SEIRETH load. Plugins
+are trusted executable code with API process privileges. See
+[Assessments](assessments.md#register-and-select) for client selection.
 
 ## Add a bundled plugin
 
 Create a behavior-specific module under `app/plugins` exporting `PLUGIN`:
 
 ```python
-from .base import HttpObservation, Plugin, PluginManifest, PluginResponse
+from app.plugins.base import (
+    AnalysisContext,
+    CheckOutcome,
+    HttpObservation,
+    Plugin,
+    PluginManifest,
+    PluginResponse,
+)
 
 
 def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginResponse:
-    return PluginResponse(findings=())
+    # Replace this placeholder with a bounded check of the observation.
+    return PluginResponse(
+        findings=(),
+        checks=(
+            CheckOutcome(
+                rule_id="example-rule",
+                status="inconclusive",
+                reason="Example analysis has not been implemented.",
+            ),
+        ),
+    )
 
 
 PLUGIN = Plugin(
@@ -25,6 +40,7 @@ PLUGIN = Plugin(
         description="Explain the response behavior this plugin checks.",
     ),
     analyze=analyze,
+    rules={"example-rule": "representation"},
 )
 ```
 
@@ -33,23 +49,22 @@ Import it in `app/plugins/registry.py` and add it to the registry's ordered
 execution. Startup rejects duplicate IDs and invalid manifests.
 
 Declare implemented rule IDs and applicability in `Plugin.rules`; the registered
-metadata supplies `/api/v1/plugin-rules` and route coverage. Derive IDs from the
+metadata supplies `/api/v1/plugins` and route coverage. Derive IDs from the
 plugin's existing evidence contract where possible. Applicability is
 `representation`, `document`, `cookie-observation`, `session`, or `cookie-presence`.
-A plugin without rule metadata cannot satisfy default required coverage.
 
 ## Contract and tests
 
 Observation `headers` is a `dict[str, list[str]]`: names are lowercased,
 differently cased names merge, and values retain response order. Do not join
 repeated `Set-Cookie` fields or split them on commas, which also occur in cookie
-expiry dates. Each sandbox validates and returns an `HttpObservation` containing
+expiry dates. Each executor returns an `HttpObservation` containing
 the original authorized URL and a required integer `status_code` (100–599).
 `media_type` is derived from the ordered `Content-Type` fields: parameters and
 case are ignored, while missing, malformed, or conflicting declarations return
 `None`. Docker's internal `target` alias is only used for the runner request.
-Redirects default to disabled. Request profiles may enable up to five hops within
-the registered origin and path; response bodies are not read or retained. Both executors request real responses.
+Response bodies are not read or retained. For redirects and request configuration,
+see [workflows](workflows.md#declare-the-release-coverage).
 
 See the [header checks](assessments.md#header-checks) and
 [cookie checks](assessments.md#cookie-checks) and
@@ -57,14 +72,11 @@ See the [header checks](assessments.md#header-checks) and
 [implementations](../app/plugins/) and [tests](../tests/plugins/) cover exact parsing
 and boundary cases.
 
-Each analyzer receives an independent copy of the shared HTTP observation and
-returns `PluginResponse`. Its required `checks` tuple contains unique stable
-`rule_id` values, a `passed`, `failed`, `skipped`, or `inconclusive` status, and a
-short nonblank reason. The header and CSP policy plugins report every check, including those
-that produce no finding. Every plugin implements
-`analyze(observation: HttpObservation, context: AnalysisContext) -> PluginResponse`.
-The response requires explicit `findings` and `checks` collections. Analyzers that
-do not need cookie declarations still receive the same immutable context.
+Use the analyzer signature shown above. Each plugin receives an independent
+observation copy and an immutable context, and returns explicit `findings` and
+`checks` tuples. Checks require unique stable rule IDs, a `passed`, `failed`,
+`skipped`, or `inconclusive` status, and a short nonblank reason. Include outcomes
+for rules that produce no finding.
 
 Never put cookie values, complete cookie fields, raw CSP policies, nonces,
 hashes, allowlist hosts, reporting destinations, or arbitrary attribute values in
@@ -73,13 +85,13 @@ validation suppresses raw exception chains.
 
 For a new evidence format, update these together:
 
-- The payload models accepted by `EvidenceOut` in `app/api/schemas.py` and API
-  retrieval tests in `tests/api/test_assessments.py`.
+- The models in `app/plugins/evidence.py` and API retrieval tests in
+  `tests/api/test_assessments.py`.
 - `EvidenceData` in `app/dashboard/src/api/types.ts` and rendering in
   `app/dashboard/src/components/EvidenceDetails.tsx`, with component tests.
 
 The [evidence endpoint](assessments.md#retrieve-evidence) rejects fields outside its
-accepted models; registration alone does not extend that contract.
+accepted models. All evidence uses `rule_id`; registration alone does not extend that contract.
 
 Analyzers run synchronously. Cancellation and deadline checks occur between
 calls; a blocking analyzer delays interruption and cleanup. Keep analysis bounded.

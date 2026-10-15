@@ -166,13 +166,13 @@ def test_acceptance_run_persists_provenance_and_survives_restart(
     from app.assessments import plans as assessment_plans
     from app.assessments import worker
     from app.assessments import workflows as assessment_workflows
-    from app.assessments.sandbox import DockerCommands
+    from app.assessments.bundle import BundleSession
     from app.main import app
     from app.plugins.base import Plugin, PluginManifest, PluginResponse
     from app.plugins.registry import PluginRegistry, registry
 
     timings = []
-    command_run = DockerCommands._run
+    command_run = BundleSession._run
 
     def timed_run(self, args, timeout, **kwargs):
         before = monotonic()
@@ -186,7 +186,7 @@ def test_acceptance_run_persists_provenance_and_survives_restart(
             )
             raise
 
-    monkeypatch.setattr(DockerCommands, "_run", timed_run)
+    monkeypatch.setattr(BundleSession, "_run", timed_run)
 
     analysis_calls = []
 

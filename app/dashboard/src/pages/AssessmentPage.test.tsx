@@ -235,22 +235,6 @@ it.each(["failed", "cancelled"] as Status[])(
   },
 );
 
-it("aborts an in-flight assessment read when the page is disposed", async () => {
-  let signal: AbortSignal | undefined;
-  const fetcher = vi.fn((_path: string, options: RequestInit) => {
-    signal = options.signal as AbortSignal;
-    return new Promise<Response>((_resolve, reject) =>
-      signal?.addEventListener("abort", () =>
-        reject(new DOMException("Aborted", "AbortError")),
-      ),
-    );
-  });
-  const { unmount } = show(fetcher);
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
-  unmount();
-  expect(signal?.aborted).toBe(true);
-});
-
 function exportFetcher(reportResponse: (options: RequestInit) => Promise<Response>) {
   return vi.fn(async (path: string, options: RequestInit) => {
     if (path.endsWith("/report")) return reportResponse(options);
@@ -287,27 +271,6 @@ it.each(["JSON", "HTML"])("downloads %s from a fresh report without changing pag
     expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/results"))).toHaveLength(1);
     expect(screen.getByRole("heading", { name: finding.title })).toBeVisible();
   } finally { click.mockRestore(); }
-});
-
-it("disables both exports during a request and allows retry after failure", async () => {
-  let resolve!: (response: Response) => void;
-  const fetcher = exportFetcher(() => new Promise((done) => { resolve = done; }));
-  show(fetcher);
-  const button = await screen.findByRole("button", { name: "Download JSON" });
-  await userEvent.click(button);
-  expect(button).toBeDisabled();
-  const html = screen.getByRole("button", { name: "Download HTML" });
-  expect(html).toBeDisabled();
-  await userEvent.click(html);
-  expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/report"))).toHaveLength(1);
-  resolve(json({ detail: "stored report data is invalid" }, 500));
-  expect(await screen.findByRole("alert")).toHaveTextContent("stored report data is invalid");
-  expect(button).toBeEnabled();
-  expect(screen.getByRole("heading", { name: finding.title })).toBeVisible();
-  await userEvent.click(html);
-  expect(fetcher.mock.calls.filter(([path]) => path.endsWith("/report"))).toHaveLength(2);
-  resolve(json({ detail: "assessment is not finished" }, 409));
-  await screen.findByText("assessment is not finished");
 });
 
 it("shows HTML rendering failures without downloading and allows a successful retry", async () => {

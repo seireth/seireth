@@ -12,7 +12,7 @@ from tests.api.helpers import snapshot
 
 
 @pytest.fixture
-def completed(database, assessment_graph):
+def completed(database, assessment_graph, fake_session):
     graph = assessment_graph()
     AssessmentDispatcher()._run(graph.assessment.id, __import__("threading").Event())
     with database.SessionLocal() as db:
@@ -213,23 +213,6 @@ def test_terminal_report_requires_current_outcome_fields(
     )
 
 
-@pytest.mark.parametrize("version", [None, 2, 3])
-def test_report_requires_current_format(read_client, completed, version):
-    from pydantic import ValidationError
-
-    from app.api.schemas import AssessmentReportOut
-
-    report = read_client.get(
-        f"/api/v1/assessments/{completed.assessment.id}/report"
-    ).json()
-    if version is None:
-        report.pop("schema_version")
-    else:
-        report["schema_version"] = version
-    with pytest.raises(ValidationError):
-        AssessmentReportOut.model_validate(report)
-
-
 def test_cleanup_reconciliation_cannot_turn_failure_into_pass(
     read_client, database, completed
 ):
@@ -264,3 +247,25 @@ def test_unknown_and_unauthorized_reports(read_client, database, assessment_grap
         read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report").status_code
         == 403
     )
+
+
+def test_route_storage_contains_no_duplicate_finding_payload(database, completed):
+    with database.SessionLocal() as db:
+        row = db.scalar(
+            select(models.RouteResult).where(
+                models.RouteResult.assessment_id == completed.assessment.id
+            )
+        )
+        assert all(set(plugin) == {"id", "checks"} for plugin in row.data["plugins"])
+        findings = list(
+            db.scalars(
+                select(models.Finding).where(models.Finding.route_result_id == row.id)
+            )
+        )
+        assert len(findings) == 3 and all(finding.evidence for finding in findings)
+        result = db.get(models.Assessment, completed.assessment.id).result
+        assert (
+            result["finding_count"]
+            == result["routes"][0]["finding_count"]
+            == len(findings)
+        )

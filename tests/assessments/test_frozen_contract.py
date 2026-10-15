@@ -6,7 +6,7 @@ from threading import Event
 import pytest
 from pydantic import ValidationError
 
-from app.assessments.plans import FrozenPlan
+from app.assessments.plans import FrozenPlan, read_snapshot, verify_snapshot
 from app.assessments.worker import AssessmentDispatcher
 from app.persistence import models
 from tests.sessions import frozen_plan
@@ -75,3 +75,28 @@ def test_invalid_stored_plan_fails_without_execution(
         assert item.status == "failed" and not item.cleanup_pending
         assert item.result["execution_outcome"] == "not_started"
         assert item.result["verdict"]["status"] == "blocked"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("timeout_seconds", "15.0"),
+        ("timeout_seconds", True),
+        ("timeout_seconds", float("nan")),
+        ("cleanup_seconds", "60"),
+        ("version", True),
+    ],
+)
+def test_stored_plan_rejects_coercion(mock_images, field, value):
+    plan = frozen_plan()
+    plan[field] = value
+    with pytest.raises(ValidationError):
+        read_snapshot(plan)
+
+
+def test_verified_snapshot_is_canonical_and_independent(mock_images):
+    plan = frozen_plan()
+    canonical = verify_snapshot(plan)
+    assert canonical == plan and canonical is not plan
+    canonical["routes"][0]["analysis"]["expected_cookies"].append("session")
+    assert plan["routes"][0]["analysis"]["expected_cookies"] == []

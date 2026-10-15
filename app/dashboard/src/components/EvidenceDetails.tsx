@@ -26,9 +26,9 @@ export function EvidenceDetails({ evidence }: { evidence: Evidence[] }) {
             <dd>{data.url}</dd>
             <dt>Header</dt>
             <dd><code>{data.header}</code></dd>
-            {"rule_id" in data && (
+            <dt>Rule</dt><dd>{data.rule_id}</dd>
+            {"status_code" in data && (
               <>
-                <dt>Rule</dt><dd>{data.rule_id}</dd>
                 <dt>HTTP status</dt><dd>{data.status_code}</dd>
                 <dt>Declared media type</dt><dd>{data.media_type ?? "Unknown"}</dd>
               </>
@@ -59,7 +59,6 @@ export function EvidenceDetails({ evidence }: { evidence: Evidence[] }) {
             {data.header === "set-cookie" && (
               <>
                 <dt>Cookie name</dt><dd>{data.cookie_name}</dd>
-                <dt>Rule</dt><dd>{data.rule}</dd>
                 <dt>Secure present</dt><dd>{data.secure ? "Yes" : "No"}</dd>
                 {"httponly" in data && <><dt>HttpOnly present</dt><dd>{data.httponly ? "Yes" : "No"}</dd></>}
                 {"samesite" in data && (

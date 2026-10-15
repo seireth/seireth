@@ -4,13 +4,14 @@ import json
 import subprocess
 import sys
 from copy import deepcopy
+from time import monotonic
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
-from app.assessments.bundle import BundleSession
+from app.assessments.bundle import BundleSession, validate_journal
 from app.assessments.execution import Cancelled
-from app.assessments.sandbox import DockerCommands, validate_journal
 from app.assessments.workflows import execute_plan
 from app.core.config import settings
 from tests.sessions import attempt_record, frozen_plan
@@ -28,7 +29,12 @@ def sandbox(mock_images, execution_context):
 
 def test_owned_restricted_bundle_is_reused_and_cleaned(sandbox, fake_docker):
     saved = []
-    outcome = execute_plan(sandbox, sandbox.snapshot, sandbox.context, saved.append)
+    outcome = execute_plan(
+        sandbox,
+        sandbox.snapshot,
+        sandbox.context,
+        lambda data, results: saved.append(data),
+    )
     assert outcome.status == "completed" and outcome.cleanup_verified
     assert saved[0]["response"]["url"] == "http://demo-app:8080/"
     creates = [args for args in fake_docker.calls if args[0] == "create"]
@@ -169,7 +175,7 @@ def test_known_identity_cannot_be_replaced(sandbox, fake_docker):
     assert sandbox.resources["target"] in fake_docker.live
 
 
-@pytest.mark.parametrize("reason", ["cancel", "timeout"])
+@pytest.mark.parametrize("reason", ["cancel", "timeout", "cleanup-timeout"])
 def test_real_subprocess_is_killed_and_reaped(sandbox, monkeypatch, reason):
     actual = subprocess.Popen
     processes = []
@@ -184,9 +190,30 @@ def test_real_subprocess_is_killed_and_reaped(sandbox, monkeypatch, reason):
         return process
 
     monkeypatch.setattr(subprocess, "Popen", launch)
+    if reason == "cleanup-timeout":
+        sandbox.context.cancel.set()
+        sandbox._cleanup_deadline = monotonic() + 0.1
+    started = monotonic()
     with pytest.raises(Cancelled if reason == "cancel" else TimeoutError):
-        DockerCommands._run(sandbox, ["info"], 0.1)
+        sandbox._run(
+            ["info"],
+            5 if reason == "cleanup-timeout" else 0.1,
+            interruptible=reason != "cleanup-timeout",
+        )
     assert len(processes) == 1 and processes[0].poll() is not None
+    if reason == "cleanup-timeout":
+        assert monotonic() - started < 4
+
+
+def test_expired_cleanup_budget_does_not_start_a_command(sandbox, monkeypatch):
+    sandbox._cleanup_deadline = monotonic() - 1
+    launch = Mock()
+    monkeypatch.setattr(subprocess, "Popen", launch)
+
+    with pytest.raises(TimeoutError, match="cleanup budget exceeded"):
+        sandbox._run(["info"], 5, interruptible=False)
+
+    launch.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -202,6 +229,32 @@ def test_current_journal_rejects_invalid_fields(sandbox, changes):
     journal = {**deepcopy(sandbox.journal), **changes}
     with pytest.raises(ValueError, match="invalid operation journal"):
         validate_journal(journal)
+
+
+@pytest.mark.parametrize(
+    "change", [None, "missing", "unexpected", "kind", "name", "attempt"]
+)
+def test_journal_resources_must_match_the_attempt_bundle(sandbox, change):
+    journal = deepcopy(sandbox.journal)
+    attempt_id = sandbox.attempt_id
+    resources = journal["resources"]
+    if change == "missing":
+        del resources["target"]
+    elif change == "unexpected":
+        resources["unexpected"] = deepcopy(resources["target"])
+    elif change == "kind":
+        resources["target"]["kind"] = "network"
+    elif change == "name":
+        resources["target"]["name"] = "seireth-other-target"
+    elif change == "attempt":
+        attempt_id = "other-attempt"
+    # Every case is structurally valid; only bundle ownership distinguishes them.
+    validate_journal(journal)
+    if change is None:
+        validate_journal(journal, snapshot=sandbox.snapshot, attempt_id=attempt_id)
+    else:
+        with pytest.raises(ValueError, match="invalid operation journal"):
+            validate_journal(journal, snapshot=sandbox.snapshot, attempt_id=attempt_id)
 
 
 @pytest.mark.parametrize("created_at", [None, "", " "])

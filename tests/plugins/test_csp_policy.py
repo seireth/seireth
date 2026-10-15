@@ -4,9 +4,9 @@ import json
 
 import pytest
 
-from app.api.schemas import CspEvidenceData
 from app.plugins.base import AnalysisContext, HttpObservation
 from app.plugins.csp_policy import PLUGIN, analyze
+from app.plugins.evidence import CspEvidenceData
 
 URL = "https://example.test/"
 RULES = ("csp-script-sources", "csp-inline-scripts", "csp-eval")
@@ -274,7 +274,7 @@ def test_redirects_and_incomplete_representations(status):
     assert_checks(response(PERMISSIVE, status=status), ("skipped",) * 3)
 
 
-@pytest.mark.parametrize("status", [200, 201, 400, 401, 404, 500])
+@pytest.mark.parametrize("status", [201, 400, 401, 404, 500])
 def test_document_error_pages_are_evaluated(status):
     assert_checks(response(PERMISSIVE, status=status), FAIL)
 

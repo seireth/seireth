@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.cli.assess import assess
-from tests.sessions import frozen_plan
+from tests.reports import report_fixture
 
 
 @pytest.mark.parametrize(
@@ -20,7 +20,7 @@ from tests.sessions import frozen_plan
     ],
 )
 def test_cli_persists_terminal_report_before_returning_exit_code(
-    monkeypatch, tmp_path, mock_images, status, verdict, pending, exit_code
+    monkeypatch, tmp_path, status, verdict, pending, exit_code
 ):
     plan = tmp_path / "routes.json"
     plan.write_text(
@@ -36,40 +36,8 @@ def test_cli_persists_terminal_report_before_returning_exit_code(
             }
         )
     )
-    snapshot = frozen_plan()
-    report = {
-        "schema_version": 1,
-        "generated_at": "2026-10-12T10:00:00Z",
-        "project": {
-            "id": "project",
-            "name": "Test",
-            "created_at": "2026-10-12T10:00:00Z",
-        },
-        "target": snapshot["target"],
-        "assessment": {
-            "id": "assessment",
-            "project_id": "project",
-            "target_id": "target",
-            "url": snapshot["routes"][0]["url"],
-            "plugins": ["http-security-headers"],
-            "created_at": "2026-10-12T10:00:00Z",
-            "status": status,
-            "cleanup_pending": pending,
-            "plan_snapshot": snapshot,
-            "result": {
-                "execution_outcome": status,
-                "cleanup_verified": not pending,
-                "finding_count": 0,
-                "routes": [],
-                "coverage": {"complete": verdict == "pass"},
-                "partial": False,
-                "comparison": {"status": "not_requested"},
-                "verdict": {"status": verdict, "policy": "strict-v1", "reasons": []},
-            },
-        },
-        "findings": [],
-        "evidence": [],
-    }
+    report = report_fixture(status=status, verdict=verdict, pending=pending)
+    snapshot = report["assessment"]["plan_snapshot"]
 
     def respond(request):
         if request.method == "POST":
@@ -87,6 +55,7 @@ def test_cli_persists_terminal_report_before_returning_exit_code(
                     "result": {"verdict": {"status": verdict}},
                 },
             )
+        assert request.url.path.endswith("/report")
         return httpx.Response(200, json=report)
 
     factory = httpx.Client

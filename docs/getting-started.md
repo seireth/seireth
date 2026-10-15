@@ -19,7 +19,7 @@ npm --prefix app/dashboard run build
 verification.
 
 `docker-up` builds the GUI automatically. Native API startup works without assets,
-but `/dashboard/` returns 503. Build the assets and restart the native API to enable it.
+but `/dashboard/` returns 404. Build the assets and restart the native API to enable it.
 
 ## Windows PowerShell
 
@@ -61,8 +61,8 @@ the API:
 
 ```bash
 docker compose up -d --wait postgres
-python -m app migrate
-python -m app serve
+python -m app.cli.commands migrate
+python -m app.cli.commands serve
 ```
 
 For later starts, activate the existing `.venv` for your OS and repeat these three
@@ -84,7 +84,7 @@ Then run:
 ```bash
 docker build -t seireth/demo-app:local examples/demo_app
 docker build --target runner -t seireth/runner:local .
-python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/ --plugins http-security-headers
+python -m app.cli.commands verify --image seireth/demo-app:local --target-url http://demo-app:8080/ --plugins http-security-headers
 ```
 
 Stop the API with Ctrl+C. `docker compose down` stops the database and retains its
@@ -92,19 +92,13 @@ volume. See [Assessments](assessments.md) for individual requests.
 
 ## Real Docker assessment
 
-Stop the native API with Ctrl+C first. In an activated terminal, prepare the demo
-and runner images once (rebuild the demo after changing its source):
+Stop the native API with Ctrl+C first. Build the demo, then start and verify the
+stack; `docker-up` builds the runner:
 
 ```bash
 docker build -t seireth/demo-app:local examples/demo_app
-docker build --target runner -t seireth/runner:local .
-```
-
-Then start and verify the Docker stack:
-
-```bash
-python -m app docker-up
-python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security
+python -m app.cli.commands docker-up
+python -m app.cli.commands verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security
 ```
 
 Verification checks findings, evidence associations, cleanup, and the audit trail;
@@ -125,21 +119,15 @@ JSON, static assets, redirects, and errors, use the
 one saved project and target, and checks 36 header cases plus cookie cases with
 individual and combined plugin selections through real Docker assessments.
 
-## Fresh database baseline
-
-The current schema is `0001_current_schema`. Previous schemas are unsupported.
-Follow the [reset procedure](configuration.md#reset-to-the-current-schema) for
-disposable older databases, after verified assessment cleanup. Migrate an empty
-database before starting the API; do not stamp an older schema to the new revision.
-
 ## After pulling changes
 
 Stop the API first. If dependencies changed, run `uv sync --locked --python 3.14`.
 Both [native startup](#native-startup) and `docker-up` apply pending migrations.
+For an incompatible disposable database, follow the [reset procedure](configuration.md#reset-to-the-current-schema).
 If the frontend lockfile changed, run `npm --prefix app/dashboard ci --ignore-scripts`
 first. After frontend changes, run `npm --prefix app/dashboard run typecheck`, then
 `npm --prefix app/dashboard run build` for native startup or `docker-up` for Docker.
-Contributors should use `--all-extras` for Python setup and updates; see
+Contributors should use `--all-extras --group quality` for Python setup and updates; see
 [Contributing](../CONTRIBUTING.md) for tests, audits, and dependency updates.
 
 ## Frontend development

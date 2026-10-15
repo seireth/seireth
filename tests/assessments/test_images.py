@@ -1,6 +1,5 @@
-"""Local image discovery and error classification without a Docker installation."""
+"""Local image availability and error classification without Docker."""
 
-import json
 import subprocess
 from unittest.mock import Mock
 
@@ -53,43 +52,5 @@ def test_cli_unavailable_or_timeout_is_service_failure(monkeypatch, error):
     monkeypatch.setattr(images.subprocess, "run", Mock(side_effect=error))
     with pytest.raises(images.DockerUnavailable):
         images.require_local_image("app:local")
-    with pytest.raises(images.DockerUnavailable):
-        images.local_images()
-
-
-def test_discovery_returns_sorted_unique_tagged_images(monkeypatch):
-    identity = "sha256:" + "a" * 64
-    rows = [
-        {"Repository": repository, "Tag": tag, "ID": identity}
-        for repository, tag in [
-            ("z/app", "v2"),
-            ("a/app", "local"),
-            ("a/app", "local"),
-            ("<none>", "<none>"),
-            ("app", "<none>"),
-        ]
-    ]
-    run = Mock(
-        return_value=subprocess.CompletedProcess(
-            [], 0, "\n".join(map(json.dumps, rows)), ""
-        )
-    )
-    monkeypatch.setattr(images.subprocess, "run", run)
-    assert images.local_images() == [
-        {"image": "a/app:local", "id": identity},
-        {"image": "z/app:v2", "id": identity},
-    ]
-    assert "--no-trunc" in run.call_args.args[0]
-
-
-@pytest.mark.parametrize("status,output", [(1, ""), (0, "not-json"), (0, "{}")])
-def test_failed_or_malformed_discovery_returns_service_failure(
-    monkeypatch, status, output
-):
-    monkeypatch.setattr(
-        images.subprocess,
-        "run",
-        Mock(return_value=subprocess.CompletedProcess([], status, output, "")),
-    )
     with pytest.raises(images.DockerUnavailable):
         images.local_images()

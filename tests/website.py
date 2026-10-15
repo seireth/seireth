@@ -63,7 +63,7 @@ def website():
                 self.send_response(302)
                 self.send_header("Location", "/login")
             else:
-                self.send_response(200)
+                self.send_response(404 if self.path == "/missing" else 200)
                 self.send_header(
                     "Content-Type",
                     "application/json" if self.path == "/api" else "text/html",
@@ -79,8 +79,6 @@ def website():
                         "Content-Security-Policy",
                         "script-src https: 'unsafe-inline' 'unsafe-eval'",
                     )
-                if self.path == "/session":
-                    self.send_header("Set-Cookie", "session=response-secret; Path=/")
             self.end_headers()
 
         def log_message(self, *args):

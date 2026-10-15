@@ -51,7 +51,7 @@ def test_foreign_project_access_is_denied_without_side_effects(
     ],
 )
 def test_missing_resources_return_404_without_side_effects(
-    client, database, dispatch_calls, method, path
+    client, database, dispatch_calls, method, path, fake_session
 ):
     payload = {
         "project_id": "missing",
@@ -89,7 +89,9 @@ def test_missing_resources_return_404_without_side_effects(
         "http://testserver\n",
     ],
 )
-def test_cross_origin_writes_fail_before_side_effects(read_client, database, origin):
+def test_cross_origin_writes_fail_before_side_effects(
+    read_client, database, origin, fake_session
+):
     before = snapshot(database)
     assert (
         read_client.post(
@@ -107,7 +109,7 @@ def test_cross_origin_writes_fail_before_side_effects(read_client, database, ori
 
 
 @pytest.mark.parametrize("origin", [None, "http://testserver", "http://testserver:80"])
-def test_same_origin_and_cli_writes(read_client, origin):
+def test_same_origin_and_cli_writes(read_client, origin, fake_session):
     headers = {} if origin is None else {"Origin": origin}
     assert (
         read_client.post(

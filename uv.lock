@@ -576,14 +576,16 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-quality = [
-    { name = "ruff" },
-]
 test = [
     { name = "coverage" },
     { name = "httpx2" },
     { name = "pytest" },
     { name = "pytest-cov" },
+]
+
+[package.dev-dependencies]
+quality = [
+    { name = "ruff" },
 ]
 
 [package.metadata]
@@ -600,11 +602,13 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=7,<8" },
-    { name = "ruff", marker = "extra == 'quality'", specifier = ">=0.15,<0.17" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
-provides-extras = ["test", "quality"]
+provides-extras = ["test"]
+
+[package.metadata.requires-dev]
+quality = [{ name = "ruff", specifier = ">=0.15,<0.17" }]
 
 [[package]]
 name = "sqlalchemy"

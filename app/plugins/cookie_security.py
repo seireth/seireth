@@ -69,7 +69,7 @@ def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginRes
                                 "url": url,
                                 "header": "set-cookie",
                                 "cookie_name": name,
-                                "rule": f"session-cookie-{attribute}",
+                                "rule_id": f"session-cookie-{attribute}",
                                 "secure": "secure" in attributes,
                                 "httponly": "httponly" in attributes,
                             },
@@ -87,7 +87,7 @@ def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginRes
                     remediation="Add Secure and serve the cookie over HTTPS, or choose SameSite=Lax or Strict if cross-site use is unnecessary.",
                     evidence={
                         **evidence,
-                        "rule": "samesite-none-without-secure",
+                        "rule_id": "samesite-none-without-secure",
                         "samesite": "none",
                         "secure": False,
                     },
@@ -102,7 +102,7 @@ def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginRes
                     remediation="Set Secure and emit this cookie from an HTTPS response.",
                     evidence={
                         **evidence,
-                        "rule": "secure-prefix",
+                        "rule_id": "secure-prefix",
                         "secure": secure,
                         "https": https,
                     },
@@ -121,7 +121,7 @@ def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginRes
                     remediation="Emit this cookie over HTTPS with Secure and explicit Path=/, and omit Domain.",
                     evidence={
                         **evidence,
-                        "rule": "host-prefix",
+                        "rule_id": "host-prefix",
                         "secure": secure,
                         "https": https,
                         "domain_present": domain,
@@ -135,7 +135,7 @@ def analyze(observation: HttpObservation, context: AnalysisContext) -> PluginRes
             CheckOutcome(
                 rule_id=rule,
                 status="failed"
-                if any(item.evidence.get("rule") == rule for item in findings)
+                if any(item.evidence.get("rule_id") == rule for item in findings)
                 else "passed"
                 if observed
                 else "skipped",

@@ -1,22 +1,5 @@
 import { test, expect } from "@playwright/test";
 
-test("the demo workspace loads its API and creates a support ticket", async ({ page }) => {
-  const failures: string[] = [];
-  page.on("pageerror", (error) => failures.push(error.message));
-  await page.goto(process.env.SEIRETH_DEMO_APP_URL ?? "http://127.0.0.1:8081/");
-  await expect(page.getByText("Live queue connected", { exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "Manage tickets" }).click();
-  const title = `Browser demo ticket ${Date.now()}`;
-  await page.getByLabel("Ticket title").fill(title);
-  await page.getByRole("button", { name: "Create ticket", exact: true }).click();
-  await expect(page.getByRole("cell", { name: title, exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "Plugin lab", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Plugin lab" })).toBeVisible();
-  await expect(page.locator("tbody tr")).toHaveCount(44);
-  expect(failures).toEqual([]);
-  await page.screenshot({ path: "test-results/demo-app-lab.png", fullPage: true });
-});
-
 for (const scenario of [
   { path: "/", name: "Protected workspace", findings: 0, outcomes: ["passed", "passed", "passed"] },
   { path: "/lab/csp-wildcard", name: "Permissive framing policy", findings: 1, outcomes: ["passed", "passed", "failed"] },

@@ -271,14 +271,13 @@ def test_csp_policy_is_catalogued_and_independently_selectable():
 
 
 def test_rule_catalogue_uses_registered_contracts_and_cannot_be_mutated():
-    from app.api.plugins import plugin_rules
     from app.plugins.csp_policy_contract import RULE_CONTEXTS
     from app.plugins.http_security_headers_contract import RULE_REQUIREMENTS
 
-    catalogue = plugin_rules()
+    catalogue = {item["id"]: item for item in registry.catalog()}
     assert set(catalogue["http-security-headers"]["rules"]) == set(RULE_REQUIREMENTS)
     assert set(catalogue["csp-policy"]["rules"]) == set(RULE_CONTEXTS)
     catalogue["http-security-headers"]["rules"].clear()
-    assert plugin_rules()["http-security-headers"]["rules"]
+    assert registry.catalog()[0]["rules"]
     with pytest.raises(TypeError):
         registry.select(["http-security-headers"])[0].rules["extra"] = "document"
