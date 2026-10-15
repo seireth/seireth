@@ -65,7 +65,7 @@ jobs:
           echo "SEIRETH_OPERATOR_CONFIG_FILE=$CI_OPERATOR_CONFIG_FILE" >> .env
           docker build -t seireth/demo-app:local examples/demo_app
           docker compose -p "$CI_DEMO_PROJECT_NAME" -f examples/demo_app/compose.yml up -d --wait
-          uv run --no-sync --no-build python -m app docker-up --api-ready-timeout-seconds 120
+          uv run --no-sync --no-build python -m app.cli.commands docker-up --api-ready-timeout-seconds 120
           postgres_image=$(docker compose config --images postgres)
           echo "SEIRETH_TEST_POSTGRES_IMAGE=$postgres_image" >> "$GITHUB_ENV"
           docker build -t seireth/service-fixture:local examples/service_bundle
@@ -110,7 +110,7 @@ jobs:
       - name: Verify real assessment
         run: |
           set -euo pipefail
-          uv run --no-sync --no-build python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security --timeout-seconds 120 | tee artifacts/verification.json
+          uv run --no-sync --no-build python -m app.cli.commands verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security --timeout-seconds 120 | tee artifacts/verification.json
       - name: Verify application plugin scenarios
         run: uv run --no-sync --no-build python -m examples.demo_app.verify --base-url http://127.0.0.1:18080 --output artifacts/demo-app.json
       - name: Verify real cancellation and crash recovery

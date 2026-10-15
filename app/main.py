@@ -57,23 +57,6 @@ def serve_frontend(application: FastAPI, directory: Path):
             check_dir=True,
         )
         application.include_router(frontend)
-    else:
-
-        @application.get(
-            "/dashboard",
-            include_in_schema=False,
-            responses={503: {"description": "GUI is not built"}},
-        )
-        @application.get(
-            "/dashboard/{path:path}",
-            include_in_schema=False,
-            responses={503: {"description": "GUI is not built"}},
-        )
-        def missing_frontend(path: str = ""):
-            raise HTTPException(
-                503,
-                "GUI is not built. Run npm --prefix app/dashboard ci and npm --prefix app/dashboard run build, then restart the API.",
-            )
 
 
 serve_frontend(app, Path(__file__).parent / "dashboard" / "dist")
