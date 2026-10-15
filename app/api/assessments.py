@@ -6,11 +6,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..assessments import images
-from ..assessments.lifecycle import attempt_result, audit, latest_attempt, transition
+from ..assessments.lifecycle import audit, latest_attempt, terminal_result, transition
 from ..assessments.plans import RoutePlan, freeze_plan
 from ..assessments.policy import PolicyError
 from ..assessments.worker import dispatcher
-from ..assessments.workflows import public_findings, refresh_result
+from ..assessments.workflows import (
+    published_evidence,
+    published_findings,
+    published_records,
+    refresh_result,
+)
 from ..core.config import settings
 from ..persistence import models
 from ..persistence.db import get_db
@@ -41,30 +46,26 @@ def load_assessment(
     return item, project
 
 
-def load_evidence(db: Session, item: models.Assessment) -> list[EvidenceOut]:
+def validated_evidence(item, rows) -> list[EvidenceOut]:
     evidence = []
-    findings = public_findings(db, item)
-    if findings:
-        rows = db.scalars(
-            select(models.Evidence)
-            .join(models.Finding)
-            .where(models.Finding.id.in_([finding.id for finding in findings]))
-            .order_by(models.Evidence.id)
-        )
-        for row in rows:
-            try:
-                evidence.append(EvidenceOut.model_validate(row, from_attributes=True))
-            except ValidationError:
-                logger.error(
-                    "Invalid stored evidence for assessment %s, evidence %s",
-                    item.id,
-                    row.id,
-                )
-                raise HTTPException(500, "stored evidence is invalid") from None
+    for row in rows:
+        try:
+            evidence.append(EvidenceOut.model_validate(row, from_attributes=True))
+        except ValidationError:
+            logger.error(
+                "Invalid stored evidence for assessment %s, evidence %s",
+                item.id,
+                row.id,
+            )
+            raise HTTPException(500, "stored evidence is invalid") from None
     return evidence
 
 
-@router.get("/projects/{project_id}/assessments", response_model=PageOut[AssessmentOut])
+@router.get(
+    "/projects/{project_id}/assessments",
+    response_model=PageOut[AssessmentOut],
+    response_model_exclude_unset=True,
+)
 def list_assessments(
     project_id: str, db: Session = Depends(get_db), bounds=Depends(pagination)
 ):
@@ -81,6 +82,7 @@ def list_assessments(
 @router.post(
     "/assessments",
     response_model=AssessmentOut,
+    response_model_exclude_unset=True,
     status_code=202,
     responses={
         400: {
@@ -149,6 +151,7 @@ def create_assessment(
 @router.get(
     "/assessments/{assessment_id}",
     response_model=AssessmentOut,
+    response_model_exclude_unset=True,
     responses={404: _ASSESSMENT_NOT_FOUND_RESPONSE},
 )
 def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
@@ -161,18 +164,20 @@ def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/assessments/{assessment_id}/results",
     response_model=AssessmentResultsOut,
+    response_model_exclude_unset=True,
     responses={404: _ASSESSMENT_NOT_FOUND_RESPONSE},
 )
 def get_results(assessment_id: str, db: Session = Depends(get_db)):
     """Return the assessment status, JSON result, and normalized findings."""
 
     item, _ = load_assessment(db, assessment_id)
+    findings = published_findings(db, item)
     return {
         "assessment_id": item.id,
         "status": item.status,
         "cleanup_pending": item.cleanup_pending,
         "result": item.result,
-        "findings": public_findings(db, item),
+        "findings": findings,
     }
 
 
@@ -187,11 +192,12 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
 def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
     """Return validated evidence for an authorized, completed assessment."""
     item, _ = load_assessment(db, assessment_id)
+    rows = published_evidence(db, item)
     return AssessmentEvidenceOut(
         assessment_id=item.id,
         status=item.status,
         cleanup_pending=item.cleanup_pending,
-        evidence=load_evidence(db, item),
+        evidence=validated_evidence(item, rows),
     )
 
 
@@ -213,14 +219,15 @@ def get_report(assessment_id: str, response: Response, db: Session = Depends(get
     # Capture scalar state once; cleanup reconciliation can update future reports.
     try:
         assessment = ReportAssessmentOut.model_validate(item)
+        findings, rows = published_records(db, item)
         report = AssessmentReportOut(
             schema_version=1,
             generated_at=models.now(),
             project=project,
             target=item.plan_snapshot["target"],
             assessment=assessment,
-            findings=public_findings(db, item),
-            evidence=load_evidence(db, item),
+            findings=findings,
+            evidence=validated_evidence(item, rows),
         )
     except ValidationError:
         logger.error("Invalid stored report data for assessment %s", item.id)
@@ -248,20 +255,13 @@ def cancel_assessment(
     if item.status == "queued":
         transition(db, item, "cancelled")
         attempt = latest_attempt(db, item.id)
-        item.result = {
-            "error": "assessment cancelled before execution",
-            "execution_outcome": "not_started",
-            "cleanup_verified": True,
-            "cleanup_reason": None,
-            "completed_at": models.now().isoformat(),
-        }
-        if attempt:
-            item.result = {
-                **item.result,
-                **attempt_result(attempt),
-                "cleanup_verified": attempt.cleanup_verified,
-            }
-            item.cleanup_pending = not attempt.cleanup_verified
+        item.cleanup_pending = bool(attempt and not attempt.cleanup_verified)
+        item.result = terminal_result(
+            attempt=attempt,
+            execution_outcome="not_started",
+            cleanup_verified=not item.cleanup_pending,
+            error="assessment cancelled before execution",
+        )
         refresh_result(db, item, attempt)
     else:
         if item.status != "cancelling":

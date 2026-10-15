@@ -117,7 +117,7 @@ jobs:
         env:
           SEIRETH_DOCKER_TESTS: "1"
         run: uv run --no-sync --no-build python -m pytest -m docker tests/integration --basetemp artifacts/api-process
-      - name: Verify GUI image selection, demo actions, and packaged assets
+      - name: Verify GUI assessments and packaged assets
         env:
           SEIRETH_UI_URL: http://127.0.0.1:18080
         run: |
