@@ -90,6 +90,9 @@ def test_containerized_website_recovery_proves_old_process_exit(
                 }
             )
         )
+        # This synthetic public grant must be readable by the image's UID 65532,
+        # including on hosts whose default file permissions are owner-only.
+        config.chmod(0o644)
         environment.update(
             SEIRETH_DATABASE_URL="postgresql+psycopg://postgres:controlled-process-db@db:5432/postgres",
             SEIRETH_API_HOST="0.0.0.0",
@@ -113,7 +116,7 @@ def test_containerized_website_recovery_proves_old_process_exit(
             image,
             "python",
             "-m",
-            "app",
+            "app.cli.commands",
             "migrate",
             env=environment,
         )
@@ -163,7 +166,7 @@ def test_containerized_website_recovery_proves_old_process_exit(
             project = client.post(
                 "/api/v1/projects", json={"name": "process identity"}
             ).json()
-            target = client.post(
+            target_response = client.post(
                 "/api/v1/targets",
                 json={
                     "project_id": project["id"],
@@ -172,7 +175,9 @@ def test_containerized_website_recovery_proves_old_process_exit(
                     "url": "http://website:8080/",
                     "network_profile": "fixture",
                 },
-            ).json()
+            )
+            assert target_response.status_code == 200, target_response.text
+            target = target_response.json()
             response = client.post(
                 "/api/v1/assessments",
                 json={

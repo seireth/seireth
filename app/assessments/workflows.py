@@ -177,6 +177,14 @@ def execute_plan(session, snapshot, context, persist_route):
                             )
                         except Interrupted:
                             break
+                        except Exception:
+                            # Recording placeholders must not discard socket
+                            # closure proof when route persistence is unavailable.
+                            outcome.status = outcome.execution_status = "failed"
+                            outcome.error = "route results could not be recorded"
+                            outcome.error_kind = "execution_error"
+                            outcome.failed_plugin = None
+                            break
         finally:
             try:
                 cleanup = session.cleanup()
@@ -351,7 +359,8 @@ def refresh_result(db, assessment, attempt=None):
                 "key": route["key"],
                 "url": route["url"],
                 "plugins": [
-                    item | {"finding_count": plugin_counts[item["id"]] if cleaned else 0}
+                    item
+                    | {"finding_count": plugin_counts[item["id"]] if cleaned else 0}
                     for item in plugins
                 ],
                 "finding_count": count if cleaned else 0,

@@ -144,14 +144,6 @@ def public_evidence(request):
     }
 
 
-def test_public_evidence_payloads_round_trip_without_changing_fields(public_evidence):
-    evidence = EvidenceOut(**public_evidence)
-    assert evidence.model_dump(mode="json") == public_evidence
-    assert EvidenceOut.model_validate_json(evidence.model_dump_json()) == evidence
-    row = Evidence(**public_evidence)
-    assert EvidenceOut.model_validate(row, from_attributes=True) == evidence
-
-
 @pytest.mark.parametrize(
     "changes",
     [
@@ -174,58 +166,6 @@ def test_header_evidence_rejects_unvalidated_metadata(changes):
     with pytest.raises(ValidationError) as error:
         EvidenceOut(id="e", finding_id="f", kind="http-response", data=data)
     assert "raw-secret" not in str(error.value)
-
-
-@pytest.mark.parametrize(
-    "rule,header,condition,expected",
-    [
-        (rule, header, condition, expected)
-        for rule, header, conditions, expected in [
-            (
-                "x-content-type-options",
-                "x-content-type-options",
-                ("missing", "blank", "unrecognized"),
-                "nosniff",
-            ),
-            (
-                "content-security-policy",
-                "content-security-policy",
-                ("missing", "blank", "unrecognized"),
-                "nonblank enforced CSP",
-            ),
-            (
-                "framing-protection",
-                "x-frame-options",
-                ("missing", "blank", "unrecognized"),
-                "recognized restrictive framing protection",
-            ),
-            (
-                "framing-protection",
-                "content-security-policy",
-                ("unrecognized", "unrestricted"),
-                "recognized restrictive framing protection",
-            ),
-        ]
-        for condition in conditions
-    ],
-)
-def test_consistent_header_evidence_preserves_its_wire_fields(
-    rule, header, condition, expected
-):
-    data = {
-        "url": "http://demo-app:8080/",
-        "rule_id": rule,
-        "header": header,
-        "condition": condition,
-        "expected": expected,
-        "status_code": 404,
-        "media_type": "text/html",
-    }
-    evidence = HeaderEvidenceData.model_validate(data)
-    assert evidence.model_dump(mode="json") == data
-    assert (
-        HeaderEvidenceData.model_validate_json(evidence.model_dump_json()) == evidence
-    )
 
 
 @pytest.mark.parametrize(

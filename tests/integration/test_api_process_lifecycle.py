@@ -95,18 +95,18 @@ def test_real_api_lifecycle(
         timeout=30,
         interval=0.05,
     )
+    # Verified cancellation and recovery require recorded resource identities.
+    # Interrupting an in-flight create may correctly leave cleanup pending.
+    wait_until(
+        lambda: (
+            "seireth-target-"
+            in docker("ps", "--filter", selector, "--format", "{{.Names}}")
+        ),
+        description="Docker target startup after identity persistence",
+        timeout=30,
+        interval=0.05,
+    )
     if action in {"crash", "image-removed"}:
-        # Creation must have a recorded identity before testing recoverable
-        # interruption. Killing an in-flight create may correctly remain pending.
-        wait_until(
-            lambda: (
-                "seireth-target-"
-                in docker("ps", "--filter", selector, "--format", "{{.Names}}")
-            ),
-            description="Docker target startup after identity persistence",
-            timeout=30,
-            interval=0.05,
-        )
         api_process.process.kill()
         api_process.process.wait(timeout=10)
         if action == "image-removed":
@@ -128,6 +128,7 @@ def test_real_api_lifecycle(
     )
     assert report["status"] == expected_status, (
         report["result"].get("error"),
+        report["result"].get("cleanup_reason"),
         report["result"].get("routes"),
     )
     assert report["result"]["cleanup_verified"]

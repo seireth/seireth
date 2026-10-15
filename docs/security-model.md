@@ -44,7 +44,10 @@ a non-root numeric user, dropped capabilities, no-new-privileges, read-only
 filesystems, and CPU/memory/PID limits. Execution timeouts and cancellation interrupt
 runner operations; cleanup independently verifies each resource. Declared writable
 volumes are owned by the attempt. A journaled helper with only CHOWN and no
-network initializes volume ownership; it is the sole root helper.
+network initializes volume ownership; it is the sole root helper. Volume and tmpfs
+paths reject traversal, mount-option delimiters, control characters, the root
+filesystem, and kernel paths (`/proc`, `/sys`, `/dev`), including aliases containing
+repeated separators or `.` segments.
 
 ## Privileged and remaining boundaries
 

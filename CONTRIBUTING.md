@@ -55,6 +55,13 @@ in `tests/integration/`. Frontend tests stay alongside the dashboard source.
 Shared fixtures stay in `tests/conftest.py`; HTTP-specific fixtures live in
 `tests/api/conftest.py`.
 
+Keep regression cases focused on critical behavior: authorization and request
+boundaries, sandbox isolation, execution and recovery, cleanup, release verdicts,
+evidence integrity and redaction, report safety, and CLI failure status. Exercise
+those behaviors through their public workflows where practical. Avoid redundant
+serialization checks, tests of test fixtures, simple command forwarding, and
+presentation checks for the synthetic demo application.
+
 Tests set their own environment. Each database-backed test creates and drops only
 its uniquely named database. Explicitly configure `SEIRETH_TEST_ADMIN_URL` with
 create-database permissions on a local/disposable PostgreSQL server, never an

@@ -1,13 +1,14 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, Route, Routes } from "react-router";
+import { Link, MemoryRouter, Route, Routes } from "react-router";
 import { expect, it, vi } from "vitest";
 import NewAssessmentPage from "./NewAssessmentPage";
 
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={["/projects/p/assessments/new"]}>
+    <Link to="/projects/q/assessments/new">Switch project</Link>
     <Routes><Route path="/projects/:projectId/assessments/new" element={<NewAssessmentPage />} />
       <Route path="/assessments/:id" element={<p>Assessment submitted</p>} /></Routes>
   </MemoryRouter></QueryClientProvider>);
@@ -26,8 +27,8 @@ function show() {
       { id: "http-security-headers", name: "HTTP security headers", description: "Inspect response protections.", version: "1.0.0", rules: { "x-content-type-options": "representation" } },
       { id: "csp-policy", name: "CSP policy", description: "Inspect script permissions.", version: "1.0.0", rules: { "csp-eval": "document" } },
     ];
-    else if (path.endsWith("/projects/p")) data = { id: "p", name: "Project" };
-    else if (path.includes("/projects/p/targets?")) data = { items: [targets.t], has_more: false };
+    else if (/\/projects\/[pq]$/.test(path)) data = { id: path.at(-1), name: "Project " + path.at(-1) };
+    else if (/\/projects\/[pq]\/targets\?/.test(path)) data = { items: path.includes("/projects/p/") ? [targets.t] : [], has_more: false };
     else if (path.includes("/assessments?")) data = { items: [], has_more: false };
     else if (path.endsWith("/targets/t")) data = targets.t;
     else if (path.endsWith("/targets/created")) data = targets.created;
@@ -39,6 +40,26 @@ function show() {
   renderPage();
   return fetcher;
 }
+
+it("clears the assessment and registration drafts when switching projects", async () => {
+  const fetcher = show();
+  const user = userEvent.setup();
+  await screen.findByRole("option", { name: /Original/ });
+  await user.selectOptions(screen.getByLabelText("Registered target"), "t");
+  await waitFor(() => expect(screen.getByLabelText("Assessment URL")).toHaveValue("https://original.test/"));
+  await user.click(screen.getByRole("checkbox", { name: /Use a route plan/ }));
+  await user.click(screen.getByRole("button", { name: "Register a new target" }));
+  await user.type(screen.getByLabelText("Target name"), "Project p draft");
+  await user.click(screen.getByRole("link", { name: "Switch project" }));
+
+  await screen.findByRole("link", { name: /Project q/ });
+  expect(screen.getByLabelText("Registered target")).toHaveValue("");
+  expect(screen.getByLabelText("Assessment URL")).toHaveValue("");
+  expect(screen.getByRole("checkbox", { name: /Use a route plan/ })).not.toBeChecked();
+  expect(screen.queryByLabelText("Target name")).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Run assessment" })).toBeDisabled();
+  expect(fetcher.mock.calls.some(([, options]) => options?.method === "POST")).toBe(false);
+});
 
 it("submits route-specific plugins without requiring a global selection", async () => {
   const fetcher = show();

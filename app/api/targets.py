@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from ..assessments import images
 from ..assessments.lifecycle import audit
-from ..assessments.policy import bounded_url
+from ..assessments.policy import PolicyError, bounded_url
 from ..assessments.profiles import load_config
 from ..persistence import models
 from ..persistence.db import get_db
@@ -58,7 +58,9 @@ def get_target(target_id: str, db: Session = Depends(get_db)):
     response_model=TargetOut,
     responses={
         400: {"description": "Target URL or local image is unavailable"},
-        503: {"description": "Docker image inspection unavailable"},
+        503: {
+            "description": "Docker image inspection or operator configuration unavailable"
+        },
     },
 )
 def create_target(payload: TargetCreate, db: Session = Depends(get_db)):
@@ -70,7 +72,10 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_db)):
     if not bounded_url(target_url, target_url):
         raise HTTPException(400, "invalid target URL boundary")
     if payload.launch_profile or payload.network_profile or payload.trust_profile:
-        config = load_config()
+        try:
+            config = load_config()
+        except PolicyError as exc:
+            raise HTTPException(503, str(exc)) from None
         for name, entries in (
             (payload.launch_profile, config.launches),
             (payload.network_profile, config.networks),

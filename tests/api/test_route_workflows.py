@@ -5,9 +5,34 @@ import json
 from sqlalchemy import select
 
 from app.assessments import images
+from app.assessments.worker import dispatcher
 from app.persistence import models
 from tests.api.helpers import finish, register, submit
 from tests.website import configure
+
+
+def test_route_storage_failure_still_acknowledges_http_cleanup(
+    client, project, website, tmp_path, monkeypatch, wait_until
+):
+    configure(monkeypatch, tmp_path, website)
+    target = register(client, project, website)
+
+    def writer(*args):
+        def persist(data, results):
+            raise RuntimeError("private storage diagnostic")
+
+        return persist
+
+    monkeypatch.setattr(dispatcher, "_route_writer", writer)
+    identifier = submit(client, project, target, website.url)
+    result, report = finish(client, identifier, wait_until)
+    assert result["status"] == "failed"
+    assert result["result"]["cleanup_verified"] and not result["cleanup_pending"]
+    assert result["result"]["verdict"]["status"] == "blocked"
+    assert not result["result"]["coverage"]["complete"]
+    assert report["findings"] == report["evidence"] == []
+    assert "private storage diagnostic" not in json.dumps(report)
+    assert len(website.handler.requests) == 1
 
 
 def test_real_website_before_after_and_compatible_baseline(

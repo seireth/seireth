@@ -65,3 +65,36 @@ def test_unavailable_image_or_daemon_rejects_without_side_effects(
     assert response.status_code == status
     assert response.json()["detail"] == str(error)
     assert snapshot(database) == before
+
+
+@pytest.mark.parametrize("configuration", [None, '{"synthetic-secret":'])
+@pytest.mark.parametrize("endpoint", ["/targets", "/runtime/profiles"])
+def test_unavailable_operator_configuration_fails_closed_without_records(
+    read_client, project, database, monkeypatch, tmp_path, configuration, endpoint
+):
+    from app.core.config import settings
+
+    path = tmp_path / "operator.json"
+    if configuration is not None:
+        path.write_text(configuration)
+    monkeypatch.setattr(settings, "operator_config_file", str(path))
+    before = snapshot(database)
+    response = (
+        read_client.get("/api/v1" + endpoint)
+        if endpoint == "/runtime/profiles"
+        else read_client.post(
+            "/api/v1/targets",
+            json={
+                "project_id": project,
+                "name": "owned website",
+                "kind": "website",
+                "url": "https://fixture.test/",
+                "network_profile": "fixture",
+            },
+        )
+    )
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "operator configuration is invalid or unavailable"
+    }
+    assert snapshot(database) == before

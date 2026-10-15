@@ -1,10 +1,10 @@
 """Operator-owned configuration. Public snapshots contain references, never secrets."""
 
 import os
-from pathlib import Path
-from typing import Literal
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from ..core.constraints import TargetImage
 from .policy import PolicyError, bounded_url
@@ -68,25 +68,26 @@ class TrustRef(ConfigModel):
     file: str
 
 
+def validate_container_path(value: str) -> str:
+    path = PurePosixPath(value)
+    if (
+        not value.startswith("/")
+        or any(character in value for character in ",:\\")
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        or ".." in path.parts
+        or len(path.parts) == 1
+        or path.parts[1] in {"proc", "sys", "dev"}
+    ):
+        raise ValueError("unsafe container mount path")
+    return "/" + "/".join(path.parts[1:])
+
+
+ContainerPath = Annotated[str, AfterValidator(validate_container_path)]
+
+
 class VolumeSpec(ConfigModel):
     name: str = Field(pattern=r"^[a-z][a-z0-9-]{0,39}$")
-    path: str = Field(pattern=r"^/[^\x00:]+$")
-
-    @field_validator("path")
-    @classmethod
-    def safe_path(cls, value):
-        from pathlib import PurePosixPath
-
-        if (
-            not value.startswith("/")
-            or "," in value
-            or "\\" in value
-            or ".." in PurePosixPath(value).parts
-            or value == "/"
-            or value.startswith(("/proc", "/sys", "/dev"))
-        ):
-            raise ValueError("unsafe container mount path")
-        return value
+    path: ContainerPath
 
 
 class Readiness(ConfigModel):
@@ -116,10 +117,10 @@ class ContainerSpec(ContainerLimits):
     volumes: list[VolumeSpec] = Field(default_factory=list)
     depends_on: list[str] = Field(default_factory=list)
     readiness: Readiness | None = None
-    tmpfs: list[str] = Field(default_factory=list, max_length=8)
+    tmpfs: list[ContainerPath] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
-    def valid_environment_and_mounts(self):
+    def valid_environment(self):
         import re
 
         if any(
@@ -129,8 +130,6 @@ class ContainerSpec(ContainerLimits):
             raise ValueError("invalid environment variable name")
         if set(self.environment) & self.secret_environment.keys():
             raise ValueError("environment variable definitions must be unique")
-        for path in self.tmpfs:
-            VolumeSpec.safe_path(path)
         return self
 
 

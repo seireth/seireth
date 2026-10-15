@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
+from ..assessments.policy import PolicyError
 from ..assessments.profiles import public_catalog
 from ..plugins.registry import registry as plugin_registry
 from . import assessments, projects, targets
@@ -17,6 +18,12 @@ def list_plugins():
     return plugin_registry.catalog()
 
 
-@router.get("/runtime/profiles")
+@router.get(
+    "/runtime/profiles",
+    responses={503: {"description": "Operator configuration unavailable"}},
+)
 def profiles():
-    return public_catalog()
+    try:
+        return public_catalog()
+    except PolicyError as exc:
+        raise HTTPException(503, str(exc)) from None

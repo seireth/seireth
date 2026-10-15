@@ -17,6 +17,10 @@ import type { RouteDraft } from "../components/RoutePlanEditor";
 
 export default function NewAssessmentPage() {
   const { projectId = "" } = useParams();
+  return <AssessmentForm key={projectId} projectId={projectId} />;
+}
+
+function AssessmentForm({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
   const client = useQueryClient();
   const [targetId, setTargetId] = useState("");

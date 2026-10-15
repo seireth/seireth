@@ -27,11 +27,33 @@ def test_service_names_cannot_collide_with_lifecycle_resources(name):
 
 @pytest.mark.parametrize(
     "path",
-    ["/", "/../etc", "relative", "/foo,source=/host", "/proc/foo", "/dev", "/sys"],
+    [
+        "/",
+        "/../etc",
+        "relative",
+        "/foo,source=/host",
+        "/proc/foo",
+        "/dev",
+        "/sys",
+        "/.",
+        "/./",
+        "//",
+        "/./proc",
+        "//proc/self",
+        "/./sys/kernel",
+        "/./dev/pts",
+        "/data:exec",
+        "/data\x00",
+        "/data\n",
+    ],
 )
-def test_mounts_cannot_change_docker_mount_options_or_kernel_paths(path):
+@pytest.mark.parametrize("mount", ["volume", "tmpfs"])
+def test_mounts_cannot_change_docker_mount_options_or_kernel_paths(path, mount):
     with pytest.raises(ValidationError):
-        VolumeSpec(name="data", path=path)
+        if mount == "volume":
+            VolumeSpec(name="data", path=path)
+        else:
+            ContainerSpec(tmpfs=[path])
 
 
 def test_launch_requires_acyclic_declared_dependencies_and_unique_volumes():

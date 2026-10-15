@@ -1,56 +1,7 @@
-import json
-import os
-import subprocess
-import sys
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
-
-
-def test_test_bootstrap_isolates_operator_settings_and_preserves_test_switches(
-    tmp_path,
-):
-    (tmp_path / ".env").write_text(
-        "SEIRETH_DOCKER_PIDS_LIMIT=0\nSEIRETH_BUNDLE_RUNNER_IMAGE=operator:custom\n"
-    )
-    admin_url = "postgresql+psycopg://unused:unused@127.0.0.1/test-admin"
-    env = {
-        **os.environ,
-        "SEIRETH_DOCKER_CPUS": "0",
-        "SEIRETH_TEST_ADMIN_URL": admin_url,
-        "SEIRETH_DOCKER_TESTS": "1",
-    }
-    root = Path(__file__).resolve().parents[2]
-    env["PYTHONPATH"] = str(root)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import json, os, runpy, sys; runpy.run_path(sys.argv[1]); "
-            "from app.core.config import Settings; "
-            "print(json.dumps([Settings().model_dump(), "
-            "os.environ['SEIRETH_TEST_ADMIN_URL'], os.environ['SEIRETH_DOCKER_TESTS']]))",
-            str(root / "tests" / "conftest.py"),
-        ],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    assert result.returncode == 0, result.stderr
-    settings, actual_admin_url, docker_tests = json.loads(result.stdout)
-    assert settings == Settings(_env_file=None).model_dump()
-    assert actual_admin_url == admin_url
-    assert docker_tests == "1"
-
-
-def test_runner_image_uses_environment_override(monkeypatch):
-    monkeypatch.setenv("SEIRETH_BUNDLE_RUNNER_IMAGE", "python:custom")
-    assert Settings(_env_file=None).bundle_runner_image == "python:custom"
 
 
 @pytest.mark.parametrize(
@@ -81,10 +32,3 @@ def test_docker_pids_limit_must_be_positive(value):
     with pytest.raises(ValidationError) as error:
         Settings(_env_file=None, docker_pids_limit=value)
     assert error.value.errors()[0]["loc"] == ("docker_pids_limit",)
-
-
-@pytest.mark.parametrize(
-    "field,value", [("docker_cpus", 0.25), ("docker_pids_limit", 1)]
-)
-def test_valid_docker_resource_limits_are_accepted(field, value):
-    assert getattr(Settings(_env_file=None, **{field: value}), field) == value
