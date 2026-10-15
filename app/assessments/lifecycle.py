@@ -3,6 +3,7 @@
 from sqlalchemy import select
 
 from ..persistence import models
+from .results import AssessmentResult
 
 ALLOWED = {
     "queued": {"running", "cancelled", "failed"},
@@ -42,21 +43,6 @@ def audit(db, project_id, action, resource_id, details=None):
     )
 
 
-def attempt_result(attempt):
-    """Project persisted execution identity for finalization and failed recovery."""
-    result = {
-        "sandbox_backend": attempt.backend,
-        "attempt": attempt.number,
-    }
-    if attempt.finished_at is not None:
-        result["completed_at"] = attempt.finished_at.isoformat()
-    result["execution"] = {
-        key: attempt.execution_metadata[key]
-        for key in ("started_at", "deadline_at", "target", "plugins")
-    }
-    return result
-
-
 def finding_record(assessment_id, plugin, finding, *, route_result_id):
     """Build the normalized finding/evidence record for its originating route."""
     return models.Finding(
@@ -71,25 +57,72 @@ def finding_record(assessment_id, plugin, finding, *, route_result_id):
     )
 
 
+def terminal_result(
+    *,
+    execution_outcome,
+    cleanup_verified,
+    attempt=None,
+    cleanup_reason=None,
+    error=None,
+    error_kind=None,
+    failed_plugin=None,
+    previous=None,
+):
+    """Build one validated terminal shape before route/comparison projection."""
+    result = {
+        "routes": [],
+        "finding_count": 0,
+        "coverage": {"complete": False},
+        "verdict": {
+            "policy": "strict-v1",
+            "status": "blocked",
+            "reasons": [error or "execution did not complete"],
+        },
+        "comparison": {"status": "not_requested"},
+        "partial": False,
+        **(previous or {}),
+        "completed_at": (
+            attempt.finished_at if attempt and attempt.finished_at else models.now()
+        ).isoformat(),
+        "execution_outcome": "interrupted"
+        if execution_outcome == "recovering"
+        else execution_outcome,
+        "cleanup_verified": cleanup_verified,
+        "cleanup_reason": cleanup_reason,
+    }
+    if attempt:
+        result.update(
+            sandbox_backend=attempt.backend,
+            attempt=attempt.number,
+            execution={
+                key: attempt.execution_metadata[key]
+                for key in ("started_at", "deadline_at", "target", "plugins")
+            },
+        )
+    for key, value in (
+        ("error", error),
+        ("error_kind", error_kind),
+        ("failed_plugin", failed_plugin),
+    ):
+        if value is not None:
+            result[key] = value
+    return AssessmentResult.model_validate(result).model_dump(
+        mode="json", exclude_unset=True
+    )
+
+
 def finish(db, assessment, attempt, outcome):
     attempt.finished_at = models.now()
     attempt.cleanup_verified = outcome.cleanup_verified
     attempt.error = outcome.error
     assessment.cleanup_pending = not outcome.cleanup_verified
-    result = {
-        **attempt_result(attempt),
-        "cleanup_verified": outcome.cleanup_verified,
-        "cleanup_reason": outcome.cleanup_reason,
-    }
-    execution_status = outcome.execution_status or outcome.status
-    result["execution_outcome"] = (
-        "interrupted" if execution_status == "recovering" else execution_status
+    assessment.result = terminal_result(
+        attempt=attempt,
+        execution_outcome=outcome.execution_status or outcome.status,
+        cleanup_verified=outcome.cleanup_verified,
+        cleanup_reason=outcome.cleanup_reason,
+        error=outcome.error,
+        error_kind=outcome.error_kind,
+        failed_plugin=outcome.failed_plugin,
     )
-    if outcome.error:
-        result["error"] = outcome.error
-    if outcome.error_kind:
-        result["error_kind"] = outcome.error_kind
-    if outcome.failed_plugin:
-        result["failed_plugin"] = outcome.failed_plugin
-    assessment.result = result
     transition(db, assessment, outcome.status, {"attempt": attempt.number})

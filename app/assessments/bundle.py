@@ -1,22 +1,65 @@
-"""Owned Docker service bundles using the existing command/ownership guards."""
+"""Owned Docker bundles, durable journals, and bounded lifecycle commands."""
 
 import json
+import os
+import re
+import subprocess
 from copy import deepcopy
 from time import monotonic, sleep
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 
 from ..core.config import settings
 from ..plugins.base import HttpObservation
+from .execution import CleanupOutcome
 from .profiles import (
     dependency_order,
     load_config,
     resolve_headers,
     resolve_secret,
 )
-from .sandbox import _RESOURCE_ID, CleanupOutcome, DockerCommands
+
+_RESOURCE_ID = re.compile(r"[a-f0-9]{64}")
+
+
+def validate_journal(journal, *, snapshot=None, attempt_id=None):
+    """Reject corrupt ownership data rather than inventing cleanup history."""
+    try:
+        UUID(journal["owner"])
+        if journal["version"] != 1 or set(journal) != {"version", "owner", "resources"}:
+            raise ValueError("invalid journal fields")
+        for entry in journal["resources"].values():
+            if entry["kind"] not in {"container", "network", "volume"} or entry[
+                "state"
+            ] not in {"not_requested", "uncertain", "created", "removed"}:
+                raise ValueError("invalid resource journal")
+            if not re.fullmatch(r"seireth-[a-z0-9-]+", entry["name"]):
+                raise ValueError("invalid resource name")
+            if entry["state"] in {"not_requested", "uncertain"}:
+                if entry["id"] is not None:
+                    raise ValueError("invalid uncertain resource identity")
+            elif entry["kind"] == "volume":
+                if (
+                    entry["id"] != entry["name"]
+                    or not isinstance(entry.get("created_at"), str)
+                    or not entry["created_at"].strip()
+                ):
+                    raise ValueError("invalid volume identity")
+            elif not _RESOURCE_ID.fullmatch(entry["id"] or ""):
+                raise ValueError("invalid Docker identity")
+        if snapshot is not None:
+            expected = new_bundle_journal(snapshot, attempt_id)["resources"]
+            actual = journal["resources"]
+            if expected.keys() != actual.keys() or any(
+                expected[key]["kind"] != actual[key]["kind"]
+                or expected[key]["name"] != actual[key]["name"]
+                for key in expected
+            ):
+                raise ValueError("invalid operation journal")
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("invalid operation journal") from exc
 
 
 def new_bundle_journal(snapshot, attempt_id):
@@ -47,7 +90,7 @@ def new_bundle_journal(snapshot, attempt_id):
     }
 
 
-class BundleSession(DockerCommands):
+class BundleSession:
     def __init__(self, snapshot, attempt, *, persist_journal, context=None):
         self.snapshot = snapshot
         self.context = context
@@ -59,14 +102,68 @@ class BundleSession(DockerCommands):
         self.persist_journal = persist_journal
         self.command_timeout = settings.docker_timeout_seconds
 
-    def _run(self, args, timeout, **kwargs):
-        deadline = getattr(self, "_cleanup_deadline", None)
-        if deadline is not None:
-            remaining = deadline - monotonic()
+    @property
+    def labels(self):
+        return {
+            "seireth.assessment": self.assessment_id,
+            "seireth.attempt": self.attempt_id,
+        }
+
+    def _guard(self, advancing=False):
+        if advancing and self.context:
+            self.context.check()
+        self.persist_journal(deepcopy(self.journal), advancing=advancing)
+
+    def _run(
+        self,
+        args: list[str],
+        timeout: float,
+        *,
+        interruptible=True,
+        input_data=None,
+        extra_env=None,
+    ):
+        """Bound the real CLI process and reap it before attempting resource cleanup."""
+        cleanup_deadline = getattr(self, "_cleanup_deadline", None)
+        if cleanup_deadline is not None:
+            remaining = cleanup_deadline - monotonic()
             if remaining <= 0:
                 raise TimeoutError("cleanup budget exceeded")
             timeout = min(timeout, remaining)
-        return super()._run(args, timeout, **kwargs)
+        deadline = monotonic() + timeout
+        context = self.context if interruptible else None
+        self._guard(advancing=interruptible)
+        if context:
+            context.check()
+        with subprocess.Popen(
+            ["docker", *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE if input_data is not None else None,
+            text=True,
+            env={**os.environ, **extra_env} if extra_env else None,
+        ) as process:
+            try:
+                while True:
+                    if context:
+                        context.check()
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("Docker command timed out")
+                    try:
+                        stdout, stderr = process.communicate(
+                            input=input_data, timeout=min(0.1, remaining)
+                        )
+                        return subprocess.CompletedProcess(
+                            args, process.returncode, stdout, stderr
+                        )
+                    except subprocess.TimeoutExpired:
+                        input_data = None
+                        continue
+            except BaseException:
+                process.kill()
+                process.communicate()
+                raise
 
     def _record(self, key, state, identity=None, *, advancing=False, created_at=None):
         journal = deepcopy(self.journal)
@@ -412,7 +509,6 @@ class BundleSession(DockerCommands):
                 reasons.append(f"{key}: cleanup budget exceeded")
                 continue
             try:
-                self._guard()
                 record = self._inspect(key)
                 if record:
                     identity = (
@@ -420,16 +516,17 @@ class BundleSession(DockerCommands):
                         if entry["kind"] == "volume"
                         else record.get("Id")
                     )
-                    self._record(
-                        key, "created", identity, created_at=record.get("CreatedAt")
-                    )
+                    if entry["state"] != "created" or entry["id"] != identity:
+                        self._record(
+                            key, "created", identity, created_at=record.get("CreatedAt")
+                        )
                     args = (
                         ["rm", "-f", identity]
                         if entry["kind"] == "container"
                         else [entry["kind"], "rm", identity]
                     )
                     self._run(args, self.command_timeout, interruptible=False)
-                if self._inspect(key):
+                if record and self._inspect(key):
                     reasons.append(f"{key}: removal not verified")
                 elif self.journal["resources"][key]["state"] == "uncertain":
                     reasons.append(f"{key}: creation outcome unknown")

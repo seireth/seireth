@@ -1,10 +1,12 @@
 """Admission-time normalization and immutable, sanitized execution plans."""
 
 import hashlib
+import json
+from functools import cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..core.config import settings
 from ..core.constraints import (
@@ -15,6 +17,7 @@ from ..core.constraints import (
 )
 from ..plugins.base import AnalysisContext
 from ..plugins.registry import registry
+from ..plugins.response_context import response_applicability
 from . import images
 from .policy import PolicyError, ResponseUrl, bounded_url, public_response_url, validate
 from .profiles import (
@@ -95,6 +98,13 @@ class FrozenPlan(ConfigModel):
     policy: Literal["strict-v1"]
     baseline: str | None
 
+    @field_validator("version", mode="before")
+    @classmethod
+    def integer_version(cls, value):
+        if type(value) is not int:
+            raise ValueError("plan version requires an integer")
+        return value
+
     @model_validator(mode="after")
     def complete_snapshot(self):
         def check(value):
@@ -147,20 +157,23 @@ def required_checks(route: RoutePlan, plugins) -> list[str]:
                 "required checks must be unique rules from the selected plugins"
             )
         return route.required_checks
-    document = any(
-        media in {"text/html", "application/xhtml+xml"}
-        for media in route.expected.media_types
-    )
-    representation = any(
-        200 <= status < 300 and status not in {204, 205}
-        for status in route.expected.statuses
-    )
+
+    def potentially_applicable(applicability):
+        for status in route.expected.statuses:
+            for media in route.expected.media_types or [None]:
+                result = response_applicability(applicability, status, media)
+                if result is None or result[0] == "inconclusive":
+                    return True
+        return False
+
     return [
         f"{plugin.manifest.id}:{rule}"
         for plugin in plugins
         for rule, applicability in plugin.rules.items()
-        if (applicability == "document" and document and representation)
-        or (applicability == "representation" and representation)
+        if (
+            applicability in {"document", "representation"}
+            and potentially_applicable(applicability)
+        )
         or (
             applicability == "session"
             and bool(
@@ -253,6 +266,11 @@ def freeze_plan(
         pids=settings.docker_pids_limit,
     ).model_dump()
     if target.kind == "docker":
+
+        @cache
+        def inspect_image(image):
+            return images.inspect_image(image)
+
         if target.launch_profile and target.launch_profile not in config.launches:
             raise PolicyError("launch profile is unavailable")
         launch_model = config.launches.get(target.launch_profile, LaunchProfile())
@@ -277,14 +295,14 @@ def freeze_plan(
         for name, spec in specs.items():
             if set(spec["secret_environment"].values()) - config.secrets.keys():
                 raise PolicyError("launch profile contains unknown secret references")
-            metadata = images.inspect_image(spec["image"])
+            metadata = inspect_image(spec["image"])
             declared = {volume["path"] for volume in spec["volumes"]}
             if set(metadata.get("Config", {}).get("Volumes") or {}) - declared:
                 raise PolicyError(
                     "image declares an anonymous volume; declare every writable volume in the launch profile"
                 )
             pinned[name] = metadata["Id"]
-        pinned["runner"] = images.inspect_image(settings.bundle_runner_image)["Id"]
+        pinned["runner"] = inspect_image(settings.bundle_runner_image)["Id"]
     network = None
     if target.network_profile:
         if target.network_profile not in config.networks:
@@ -334,8 +352,13 @@ def freeze_plan(
     ).model_dump(mode="json")
 
 
-def verify_snapshot(snapshot: dict) -> None:
-    FrozenPlan.model_validate(snapshot)
+def read_snapshot(snapshot: dict) -> FrozenPlan:
+    """Validate stored JSON strictly, without reconstructing missing defaults."""
+    return FrozenPlan.model_validate_json(json.dumps(snapshot), strict=True)
+
+
+def verify_snapshot(snapshot: dict) -> dict:
+    snapshot = read_snapshot(snapshot).model_dump(mode="json")
     try:
         plugins = registry.select([entry["id"] for entry in snapshot["plugins"]])
     except ValueError:
@@ -344,3 +367,4 @@ def verify_snapshot(snapshot: dict) -> None:
         entry["id"]: entry["version"] for entry in snapshot["plugins"]
     }:
         raise PolicyError("installed plugin versions differ from the queued plan")
+    return snapshot

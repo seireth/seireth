@@ -14,27 +14,44 @@ from sqlalchemy import select, text, update
 from ..core.constraints import MAX_ASSESSMENT_ATTEMPTS
 from ..persistence import db as database
 from ..persistence import models
-from .execution import Cancelled, ExecutionContext, Interrupted
+from .bundle import validate_journal
+from .execution import Cancelled, CleanupOutcome, ExecutionContext, Interrupted
 from .images import DockerUnavailable, ImageUnavailable, require_local_image
 from .lifecycle import (
-    attempt_result,
     audit,
     finding_record,
     finish,
     latest_attempt,
+    terminal_result,
     transition,
 )
-from .orchestrator import Outcome, sandbox_for
-from .plans import verify_snapshot
+from .plans import read_snapshot, verify_snapshot
 from .policy import PolicyError, validate
-from .sandbox import validate_journal
-from .workflows import execute_plan, refresh_result
+from .workflows import Outcome, execute_plan, refresh_result
 
 logger = logging.getLogger(__name__)
 OWNER_LOCK = 7342101
 RECONCILE_INTERVAL_SECONDS = 30
 _OWNERSHIP_LOST = "dispatcher ownership lost"
 _ASSESSMENT_CANCELLED = "assessment cancelled"
+
+
+def sandbox_for(attempt, *, snapshot, persist_journal, context):
+    if attempt.backend == "docker":
+        from .bundle import BundleSession
+
+        return BundleSession(
+            snapshot, attempt, persist_journal=persist_journal, context=context
+        )
+    if attempt.backend == "http":
+        from .website import WebsiteSession
+
+        return WebsiteSession(
+            snapshot,
+            context,
+            attempt.execution_metadata["process_identity"].get("addresses", ()),
+        )
+    raise ValueError("unsupported execution backend")
 
 
 class AssessmentDispatcher:
@@ -149,16 +166,15 @@ class AssessmentDispatcher:
     def _policy(self, db, assessment):
         project = db.get(models.Project, assessment.project_id)
         target = db.get(models.Target, assessment.target_id)
-        snapshot = assessment.plan_snapshot
-        verify_snapshot(snapshot)
+        snapshot = verify_snapshot(assessment.plan_snapshot)
         if not target or target.kind != snapshot["target"]["kind"]:
             raise PolicyError("target kind differs from the queued plan")
         for route in snapshot["routes"]:
             validate(project, target, route["url"])
         if target.kind == "docker":
-            for image in snapshot["images"].values():
+            for image in dict.fromkeys(snapshot["images"].values()):
                 require_local_image(image)
-        return target
+        return target, snapshot
 
     def _assert_owner(self, db):
         if self._lost.is_set():
@@ -206,7 +222,7 @@ class AssessmentDispatcher:
         return persist
 
     def _route_writer(self, assessment_id, attempt_id, token):
-        def persist(data):
+        def persist(data, results):
 
             with database.SessionLocal() as db:
                 item = db.get(models.Assessment, assessment_id, with_for_update=True)
@@ -236,13 +252,13 @@ class AssessmentDispatcher:
                 )
                 db.add(row)
                 db.flush()
-                for plugin in data.get("plugins", []):
-                    for finding in plugin["findings"]:
+                for plugin in results:
+                    for finding in plugin.findings:
                         db.add(
                             finding_record(
                                 assessment_id,
-                                plugin["id"],
-                                finding,
+                                plugin.plugin_id,
+                                finding.model_dump(mode="json"),
                                 route_result_id=row.id,
                             )
                         )
@@ -282,7 +298,7 @@ class AssessmentDispatcher:
                 if not item or item.status != "queued":
                     return
                 try:
-                    target = self._policy(db, item)
+                    target, snapshot = self._policy(db, item)
                     previous = latest_attempt(db, item.id)
                     number = previous.number + 1 if previous else 1
                     if number > MAX_ASSESSMENT_ATTEMPTS:
@@ -293,48 +309,27 @@ class AssessmentDispatcher:
                     DockerUnavailable,
                     ValidationError,
                 ) as exc:
-                    item.result = {
-                        "error": "queued plan is invalid"
-                        if isinstance(exc, ValidationError)
-                        else str(exc),
-                        "execution_outcome": "not_started",
-                        "cleanup_verified": True,
-                        "cleanup_reason": None,
-                        "completed_at": models.now().isoformat(),
-                    }
-                    transition(db, item, "failed")
                     previous = latest_attempt(db, item.id)
-                    if previous:
-                        item.result = {
-                            **item.result,
-                            **attempt_result(previous),
-                            "cleanup_verified": previous.cleanup_verified,
-                            "execution_outcome": "interrupted",
-                        }
-                        item.cleanup_pending = not previous.cleanup_verified
-                    if isinstance(exc, ValidationError):
-                        item.result = dict(
-                            item.result,
-                            routes=[],
-                            finding_count=0,
-                            coverage={"complete": False},
-                            verdict={
-                                "policy": "strict-v1",
-                                "status": "blocked",
-                                "reasons": ["queued plan is invalid"],
-                            },
-                            comparison={
-                                "status": "unavailable",
-                                "reason": "queued plan is invalid",
-                            },
-                            partial=False,
-                        )
-                    else:
+                    error = (
+                        "queued plan is invalid"
+                        if isinstance(exc, ValidationError)
+                        else str(exc)
+                    )
+                    item.cleanup_pending = bool(
+                        previous and not previous.cleanup_verified
+                    )
+                    item.result = terminal_result(
+                        attempt=previous,
+                        execution_outcome="interrupted" if previous else "not_started",
+                        cleanup_verified=not item.cleanup_pending,
+                        error=error,
+                    )
+                    transition(db, item, "failed")
+                    if not isinstance(exc, ValidationError):
                         refresh_result(db, item, previous)
                     db.commit()
                     return
                 started_at = models.now()
-                snapshot = item.plan_snapshot
                 timeout = snapshot["timeout_seconds"]
                 deadline = monotonic() + timeout
                 attempt = models.Attempt(
@@ -383,13 +378,12 @@ class AssessmentDispatcher:
                 transition(db, item, "running", {"attempt": number})
                 db.commit()
                 attempt_id = attempt.id
+                token = attempt.operation_journal["owner"]
             outcome = execute_plan(
                 sandbox,
                 snapshot,
                 context,
-                self._route_writer(
-                    assessment_id, attempt_id, attempt.operation_journal["owner"]
-                ),
+                self._route_writer(assessment_id, attempt_id, token),
             )
             if attempt.backend == "http" and outcome.cleanup_verified:
                 # This acknowledgement only proves that this attempt's sockets
@@ -415,10 +409,7 @@ class AssessmentDispatcher:
                 ):
                     return
                 self._assert_owner(db)
-                if (
-                    hasattr(sandbox, "journal")
-                    and attempt.operation_journal["owner"] != sandbox.journal["owner"]
-                ):
+                if attempt.operation_journal["owner"] != token:
                     return
                 if item.status == "cancelling" and outcome.cleanup_verified:
                     outcome.status, outcome.error = "cancelled", _ASSESSMENT_CANCELLED
@@ -477,41 +468,38 @@ class AssessmentDispatcher:
             return None
         attempt = latest_attempt(db, item.id)
         try:
+            snapshot = read_snapshot(item.plan_snapshot).model_dump(mode="json")
             if not attempt:
                 raise ValueError("execution attempt missing")
-            validate_journal(attempt.operation_journal)
-            if attempt.backend == "docker":
-                from .bundle import new_bundle_journal
-
-                expected = new_bundle_journal(item.plan_snapshot, attempt.id)[
-                    "resources"
-                ]
-                actual = attempt.operation_journal["resources"]
-                if expected.keys() != actual.keys() or any(
-                    expected[key]["kind"] != actual[key]["kind"]
-                    or expected[key]["name"] != actual[key]["name"]
-                    for key in expected
-                ):
-                    raise ValueError("invalid operation journal")
+            validate_journal(
+                attempt.operation_journal,
+                snapshot=snapshot if attempt.backend == "docker" else None,
+                attempt_id=attempt.id,
+            )
         except ValueError as exc:
+            error = (
+                "queued plan is invalid"
+                if isinstance(exc, ValidationError)
+                else str(exc)
+            )
             if item.status != "failed":
-                transition(db, item, "failed", {"error": str(exc)})
+                transition(db, item, "failed", {"error": error})
             item.cleanup_pending = True
             result = item.result or {}
             if attempt:
                 attempt.cleanup_verified = False
                 attempt.finished_at = attempt.finished_at or models.now()
-                attempt.error = result.get("error") or attempt.error or str(exc)
-                result = {**attempt_result(attempt), **result}
-            item.result = {
-                **result,
-                "error": result.get("error")
-                or (attempt.error if attempt else str(exc)),
-                "cleanup_verified": False,
-                "cleanup_reason": str(exc),
-                "execution_outcome": result.get("execution_outcome", "failed"),
-            }
-            refresh_result(db, item, attempt)
+                attempt.error = result.get("error") or attempt.error or error
+            item.result = terminal_result(
+                attempt=attempt,
+                previous=result,
+                error=result.get("error") or (attempt.error if attempt else error),
+                cleanup_verified=False,
+                cleanup_reason=error,
+                execution_outcome=result.get("execution_outcome", "interrupted"),
+            )
+            if not isinstance(exc, ValidationError):
+                refresh_result(db, item, attempt)
             db.commit()
             return None
         if item.status == "running":
@@ -520,27 +508,20 @@ class AssessmentDispatcher:
         journal["owner"] = str(uuid4())
         attempt.operation_journal = journal
         db.commit()
-        return attempt
+        return attempt, snapshot
 
     def _recover_assessment(self, assessment_id):
         with database.SessionLocal() as db:
             item = db.get(models.Assessment, assessment_id, with_for_update=True)
             self._assert_owner(db)
             original_status = item.status
-            attempt = self._prepare_recovery(db, item)
-            if attempt is None:
+            prepared = self._prepare_recovery(db, item)
+            if prepared is None:
                 return
+            attempt, snapshot = prepared
             attempt_id, token = attempt.id, attempt.operation_journal["owner"]
-            sandbox = sandbox_for(
-                attempt,
-                persist_journal=self._journal_writer(
-                    item.id, attempt.id, token, recovery=True
-                ),
-                snapshot=item.plan_snapshot,
-            )
             if attempt.backend == "http":
                 from .processes import identity_exited
-                from .sandbox import CleanupOutcome
 
                 cleanup = CleanupOutcome(
                     bool(
@@ -554,6 +535,15 @@ class AssessmentDispatcher:
                 if cleanup.verified:
                     cleanup = CleanupOutcome(True)
             else:
+                from .bundle import BundleSession
+
+                sandbox = BundleSession(
+                    snapshot,
+                    attempt,
+                    persist_journal=self._journal_writer(
+                        item.id, attempt.id, token, recovery=True
+                    ),
+                )
                 cleanup = None
         cleanup = cleanup or sandbox.cleanup()
         with database.SessionLocal() as db:
@@ -577,11 +567,13 @@ class AssessmentDispatcher:
         attempt.finished_at = attempt.finished_at or models.now()
         item.cleanup_pending = not cleaned
         if original_status == "failed":
-            item.result = {
-                **(item.result or {}),
-                "cleanup_verified": cleaned,
-                "cleanup_reason": cleanup.reason,
-            }
+            item.result = terminal_result(
+                attempt=attempt,
+                previous=item.result,
+                execution_outcome=item.result["execution_outcome"],
+                cleanup_verified=cleaned,
+                cleanup_reason=cleanup.reason,
+            )
             if cleaned:
                 audit(db, item.project_id, "assessment.cleanup_verified", item.id)
         elif not cleaned:

@@ -4,10 +4,10 @@ import asyncio
 from urllib.parse import urlsplit
 
 from ..core.config import settings
+from .execution import CleanupOutcome
 from .http_fetch import fetch, website_authorizer
 from .policy import http_origin
 from .profiles import load_config, resolve_headers
-from .sandbox import CleanupOutcome
 
 
 class WebsiteSession:

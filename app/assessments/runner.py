@@ -17,25 +17,27 @@ async def command(payload):
     from .http_fetch import fetch, resolve
     from .policy import PolicyError
 
-    mapping = payload["mapping"]
-    allowed = {
-        address for name in set(mapping.values()) for address in await resolve(name)
-    }
+    async with asyncio.timeout(payload["timeout"]):
+        mapping = payload["mapping"]
+        resolved = {name: await resolve(name) for name in set(mapping.values())}
+        pinned_addresses = {host: resolved[name] for host, name in mapping.items()}
 
-    def authorize(host, port, addresses):
-        if host not in mapping or set(addresses) - allowed:
-            raise PolicyError("connection is outside the owned Docker bundle")
+        def authorize(host, port, addresses):
+            if host not in pinned_addresses or set(addresses) - set(
+                pinned_addresses[host]
+            ):
+                raise PolicyError("connection is outside the owned Docker bundle")
 
-    result = await fetch(
-        payload["url"],
-        registered=payload["registered"],
-        headers=payload["headers"],
-        follow_redirects=payload["follow_redirects"],
-        timeout=payload["timeout"],
-        authorize=authorize,
-        mapping=mapping,
-        ca=payload["ca"],
-    )
+        result = await fetch(
+            payload["url"],
+            registered=payload["registered"],
+            headers=payload["headers"],
+            follow_redirects=payload["follow_redirects"],
+            timeout=payload["timeout"],
+            authorize=authorize,
+            pinned_addresses=pinned_addresses,
+            ca=payload["ca"],
+        )
     return {
         "observation": result["observation"].model_dump(mode="json"),
         "redirects": result["redirects"],

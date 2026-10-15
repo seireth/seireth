@@ -7,6 +7,7 @@ from time import monotonic
 from urllib.parse import urljoin, urlsplit
 
 import dns.asyncresolver
+import dns.exception
 import httpcore
 import httpx
 
@@ -23,22 +24,28 @@ async def resolve(host: str) -> list[str]:
         resolver = dns.asyncresolver.Resolver()
         answer = await resolver.resolve_name(host, lifetime=5)
         return list(answer.addresses())
+    except dns.exception.Timeout:
+        raise TimeoutError("destination DNS resolution timed out") from None
     except Exception:
         raise PolicyError("destination DNS resolution failed") from None
 
 
 class PinnedBackend(httpcore.AsyncNetworkBackend):
-    def __init__(self, authorize, mapping=None):
+    def __init__(self, authorize, pinned_addresses=None):
         self.backend = httpcore.AnyIOBackend()
         self.authorize = authorize
-        self.mapping = mapping or {}
+        self.pinned_addresses = pinned_addresses
 
     async def connect_tcp(
         self, host, port, timeout=None, local_address=None, socket_options=None
     ):
         name = host
         deadline = monotonic() + (timeout if timeout is not None else 10)
-        addresses = await resolve(self.mapping.get(name, name))
+        addresses = (
+            await resolve(name)
+            if self.pinned_addresses is None
+            else self.pinned_addresses.get(name, [])
+        )
         addresses = list(dict.fromkeys(addresses))
         if not addresses or len(addresses) > 32:
             raise PolicyError("destination has no approved addresses")
@@ -120,13 +127,13 @@ async def fetch(
     follow_redirects=False,
     timeout=10,
     authorize,
-    mapping=None,
+    pinned_addresses=None,
     ca=None,
 ) -> dict:
     async with asyncio.timeout(timeout):
         # Honor pending cancellation before creating transport resources.
         await asyncio.sleep(0)
-        backend = PinnedBackend(authorize, mapping)
+        backend = PinnedBackend(authorize, pinned_addresses)
         transport = CoreTransport(backend, ca)
         async with httpx.AsyncClient(
             transport=transport,
@@ -140,6 +147,8 @@ async def fetch(
                     raise PolicyError(
                         "redirect destination is outside the registered target"
                     )
+                # Each hop uses only the headers supplied by the request profile.
+                client.cookies.clear()
                 async with client.stream(
                     "GET", current, headers=headers or {}
                 ) as response:
@@ -167,10 +176,6 @@ async def fetch(
                         destination = urljoin(current, location)
                         if hop == 5:
                             raise PolicyError("redirect limit exceeded")
-                        if not bounded_url(destination, registered):
-                            raise PolicyError(
-                                "redirect destination is outside the registered target"
-                            )
                         # Query values and response header contents are not stored
                         # in the redirect history.
                         chain.append(
@@ -179,7 +184,6 @@ async def fetch(
                         current = destination
                         continue
                     return {"observation": observation, "redirects": chain}
-            raise PolicyError("redirect limit exceeded")
 
 
 def website_authorizer(snapshot, config, control_origin, runtime_addresses=()):

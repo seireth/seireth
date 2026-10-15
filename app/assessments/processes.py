@@ -1,11 +1,28 @@
 """Conservative process-exit proof for native HTTP crash recovery."""
 
+import ctypes
 import json
 import os
 import re
 import socket
 import subprocess
+from contextlib import contextmanager
+from ctypes import wintypes
 from pathlib import Path
+
+
+@contextmanager
+def _windows_process(pid):
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)
+    try:
+        yield kernel, handle
+    finally:
+        if handle:
+            kernel.CloseHandle(handle)
 
 
 def process_start(pid):
@@ -13,28 +30,18 @@ def process_start(pid):
         if os.name != "nt":
             fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
             return fields[19]
-        import ctypes
-        from ctypes import wintypes
-
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.GetProcessTimes.argtypes = [
-            wintypes.HANDLE,
-            *[ctypes.POINTER(wintypes.FILETIME)] * 4,
-        ]
-        handle = kernel.OpenProcess(0x1000, False, pid)
-        if not handle:
-            return None
-        try:
+        with _windows_process(pid) as (kernel, handle):
+            if not handle:
+                return None
+            kernel.GetProcessTimes.argtypes = [
+                wintypes.HANDLE,
+                *[ctypes.POINTER(wintypes.FILETIME)] * 4,
+            ]
             times = [wintypes.FILETIME() for _ in range(4)]
             if kernel.GetProcessTimes(
                 handle, *(ctypes.byref(value) for value in times)
             ):
                 return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
-        finally:
-            kernel.CloseHandle(handle)
     except OSError, IndexError, ValueError:
         pass
     return None
@@ -166,28 +173,18 @@ def process_exited(pid):
     if type(pid) is not int or pid <= 0:
         return False
     if os.name == "nt":
-        import ctypes
-        from ctypes import wintypes
-
-        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.GetExitCodeProcess.argtypes = [
-            wintypes.HANDLE,
-            ctypes.POINTER(wintypes.DWORD),
-        ]
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        handle = kernel.OpenProcess(0x1000, False, pid)
-        if not handle:
-            return ctypes.get_last_error() == 87
-        try:
+        with _windows_process(pid) as (kernel, handle):
+            if not handle:
+                return ctypes.get_last_error() == 87
+            kernel.GetExitCodeProcess.argtypes = [
+                wintypes.HANDLE,
+                ctypes.POINTER(wintypes.DWORD),
+            ]
             status = wintypes.DWORD()
             return bool(
                 kernel.GetExitCodeProcess(handle, ctypes.byref(status))
                 and status.value != 259
             )
-        finally:
-            kernel.CloseHandle(handle)
     try:
         os.kill(pid, 0)
         return False
