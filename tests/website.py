@@ -113,7 +113,7 @@ def configure(monkeypatch, tmp_path, website):
     return path
 
 
-def graph(website):
+def graph(url):
     from app.core.identity import ACTOR
 
     return SimpleNamespace(id="project", owner_actor=ACTOR), SimpleNamespace(
@@ -122,7 +122,7 @@ def graph(website):
         name="fixture",
         kind="website",
         image=None,
-        url=website.url,
+        url=url,
         network_profile="fixture",
         trust_profile=None,
         launch_profile=None,

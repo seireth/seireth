@@ -27,7 +27,7 @@ export const reportFixture: AssessmentReport = {
         target: { image: "seireth/demo-app:local", command: [], environment: {}, secret_environment: {}, uid: 65532, gid: 65532, volumes: [], depends_on: [], readiness: { kind: "tcp", port: 80, path: "/", status: 200 }, tmpfs: [], memory: "256m", cpus: 0.5, pids: 64 },
         services: {}, startup_seconds: 30,
       },
-      network: null, ca: null, ca_fingerprint: null, control_endpoints: [], timeout_seconds: 60, cleanup_seconds: 60,
+      network: null, ca: null, control_endpoints: [], timeout_seconds: 60, cleanup_seconds: 60,
       runner_limits: { memory: "256m", cpus: 0.5, pids: 64 }, policy: "strict-v1", baseline: null,
     },
     result: {
@@ -43,7 +43,7 @@ export const reportFixture: AssessmentReport = {
       completed_at: "2026-10-07T12:00:30Z", attempt: 1, finding_count: 1,
       routes: [{ id: "route-id", key: "session", url: "http://demo.test/", status: "completed",
         response: { status_code: 200, media_type: "text/html", url: "http://demo.test/", redirects: [] },
-        plugins: [{ id: "cookie-security", finding_count: 1, checks: [{ rule_id: "samesite-none-without-secure", status: "failed", reason: "Observed cookie lacks Secure." }] }], finding_count: 1,
+        plugins: [{ id: "cookie-security", finding_count: 1, checks: [{ rule_id: "samesite-none-without-secure", status: "failed", reason: "Cookie attributes evaluated." }] }], finding_count: 1,
         coverage: { complete: true, expected_response: true, missing_checks: [], failed_checks: ["cookie-security:samesite-none-without-secure"] } }],
     },
   },
@@ -77,27 +77,6 @@ export const multiFindingReport: AssessmentReport = {
     { ...cookieEvidence, id: "a-other", finding_id: "other", data: { ...cookieEvidence.data, cookie_name: "other" } },
     { ...cookieEvidence, id: "b-second", data: { ...cookieEvidence.data, cookie_name: "second" } },
   ],
-};
-
-export const routeReportFixture: AssessmentReport = {
-  ...reportFixture,
-  schema_version: 1,
-  assessment: {
-    ...reportFixture.assessment,
-    result: {
-      ...reportFixture.assessment.result!,
-      execution_outcome: "completed",
-      routes: [{
-        id: "route-id", key: "session", url: reportFixture.assessment.url, status: "completed",
-        finding_count: 1,
-        response: { status_code: 200, media_type: "text/html", url: reportFixture.assessment.url, redirects: [] },
-        plugins: [{ id: "cookie-security", finding_count: 1,
-          checks: [{ rule_id: "samesite-none-without-secure", status: "failed", reason: "Cookie attributes evaluated." }] }],
-        coverage: { complete: true, expected_response: true, missing_checks: [], failed_checks: ["cookie-security:samesite-none-without-secure"] },
-      }],
-    },
-  },
-  findings: [{ ...reportFixture.findings[0], route_result_id: "route-id" }],
 };
 
 export function blobText(blob: Blob): Promise<string> {

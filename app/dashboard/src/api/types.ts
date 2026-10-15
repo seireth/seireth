@@ -92,7 +92,7 @@ export interface FrozenPlan {
   plugins: { id: string; version: string }[];
   images: Record<string, string>; launch: Record<string, unknown> | null;
   network: { url: string; cidrs: string[] } | null;
-  ca: string | null; ca_fingerprint: string | null;
+  ca: string | null;
   control_endpoints: { address: string; port: number }[];
   timeout_seconds: number; cleanup_seconds: number;
   runner_limits: { memory: string; cpus: number; pids: number };

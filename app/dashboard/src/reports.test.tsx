@@ -1,7 +1,7 @@
 import { act, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { htmlReport } from "./reports";
-import { cspReportFixture, multiFindingReport, reportFixture, routeReportFixture } from "./test/report";
+import { cspReportFixture, multiFindingReport, reportFixture } from "./test/report";
 
 function documentFor(report = reportFixture) {
   let html = "";
@@ -11,7 +11,7 @@ function documentFor(report = reportFixture) {
 }
 
 it("exports route provenance and displays each response only once", () => {
-  const document = documentFor(routeReportFixture);
+  const document = documentFor();
   expect(document.body.textContent).toContain("Route: session");
   expect(document.querySelectorAll('[aria-label="Response and check outcomes"]')).toHaveLength(1);
   expect(document.body.textContent?.match(/Cookie attributes evaluated\./g)).toHaveLength(1);

@@ -1,5 +1,6 @@
 """Real API process fixture shared by lifecycle and website recovery tests."""
 
+import json
 import os
 import socket
 import subprocess
@@ -25,32 +26,37 @@ def postgres_image():
 
 @pytest.fixture
 def api_process(database, tmp_path, request, wait_until):
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
     backend = request.param
     env = {
         **os.environ,
         "SEIRETH_DATABASE_URL": settings.database_url,
     }
     if backend == "http":
+        website = request.getfixturevalue("website")
+        config = tmp_path / "operator.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "networks": {
+                        "fixture": {"url": website.url, "cidrs": ["127.0.0.0/8"]}
+                    }
+                }
+            )
+        )
+        env["SEIRETH_OPERATOR_CONFIG_FILE"] = str(config)
         env["PATH"] = str(Path(sys.executable).parent)  # Docker must not be needed.
-    api = SimpleNamespace(
-        assessment_id=None, process=None, env=env, native_website=False
-    )
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    api = SimpleNamespace(assessment_id=None, process=None)
     with ExitStack() as cleanup:
         log = cleanup.enter_context((tmp_path / "api.log").open("w+"))
         api.client = cleanup.enter_context(
             httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=5)
         )
 
-        cleanup.callback(
-            lambda: (
-                None
-                if api.native_website
-                else remove_assessment_resources(api.assessment_id)
-            )
-        )
+        if backend != "http":
+            cleanup.callback(lambda: remove_assessment_resources(api.assessment_id))
 
         def stop(process):
             if process.poll() is None:

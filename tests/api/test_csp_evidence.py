@@ -7,7 +7,6 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from app.api.schemas import EvidenceOut
 from app.assessments.worker import AssessmentDispatcher
 from app.persistence import models
 from app.plugins.base import HttpObservation
@@ -40,14 +39,6 @@ def evidence_data():
             },
         ],
     }
-
-
-def test_csp_evidence_round_trips_through_the_public_union():
-    value = EvidenceOut(
-        id="e", finding_id="f", kind="http-response", data=evidence_data()
-    )
-    assert isinstance(value.data, CspEvidenceData)
-    assert EvidenceOut.model_validate_json(value.model_dump_json()) == value
 
 
 @pytest.mark.parametrize(

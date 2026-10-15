@@ -2,11 +2,11 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { RouteResults } from "./RouteResults";
 import type { Result } from "../api/types";
-import { routeReportFixture } from "../test/report";
+import { reportFixture } from "../test/report";
 
 describe("persisted route outcomes", () => {
   it("renders a single-route response once through the shared check view", () => {
-    const result = routeReportFixture.assessment.result;
+    const result = reportFixture.assessment.result;
     render(<RouteResults result={result} />);
     expect(screen.getAllByRole("region", { name: "Response and check outcomes" })).toHaveLength(1);
     expect(screen.getAllByText("Cookie attributes evaluated.")).toHaveLength(1);

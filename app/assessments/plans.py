@@ -1,6 +1,5 @@
 """Admission-time normalization and immutable, sanitized execution plans."""
 
-import hashlib
 import json
 from functools import cache
 from pathlib import Path
@@ -90,7 +89,6 @@ class FrozenPlan(ConfigModel):
     images: dict[str, TargetImage]
     network: NetworkGrant | None
     ca: str | None = Field(max_length=262144)
-    ca_fingerprint: str | None
     timeout_seconds: float = Field(gt=0, allow_inf_nan=False)
     cleanup_seconds: float = Field(gt=0, allow_inf_nan=False)
     runner_limits: ContainerLimits
@@ -181,10 +179,7 @@ def required_checks(route: RoutePlan, plugins) -> list[str]:
             )
         )
         or (
-            applicability == "cookie-presence" and bool(route.analysis.expected_cookies)
-        )
-        or (
-            applicability == "cookie-observation"
+            applicability in {"cookie-presence", "cookie-observation"}
             and bool(route.analysis.expected_cookies)
         )
     ]
@@ -343,7 +338,6 @@ def freeze_plan(
             "images": pinned,
             "network": network,
             "ca": ca,
-            "ca_fingerprint": hashlib.sha256(ca.encode()).hexdigest() if ca else None,
             "timeout_seconds": timeout,
             "cleanup_seconds": settings.cleanup_timeout_seconds,
             "runner_limits": limits,

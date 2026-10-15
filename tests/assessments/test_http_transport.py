@@ -279,7 +279,7 @@ def test_dns_timeout_is_reported_by_native_workflow(
     monkeypatch, tmp_path, website, execution_context
 ):
     configure(monkeypatch, tmp_path, website)
-    project, target = graph(website)
+    project, target = graph(website.url)
     target.url, target.network_profile = "http://fixture.test/", None
     snapshot = freeze_plan(
         project,
@@ -322,7 +322,7 @@ def test_cancelled_native_fetch_closes_tasks_before_cleanup(
     monkeypatch, tmp_path, website
 ):
     configure(monkeypatch, tmp_path, website)
-    project, target = graph(website)
+    project, target = graph(website.url)
     snapshot = freeze_plan(
         project,
         target,
@@ -378,10 +378,7 @@ def test_tls_validates_certificate_hostname_and_preserves_identity(
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        from types import SimpleNamespace
-
         from app.core.config import settings
-        from app.core.identity import ACTOR
 
         url = f"https://{hostname}:{server.server_port}/"
         config = tmp_path / "operator.json"
@@ -400,18 +397,8 @@ def test_tls_validates_certificate_hostname_and_preserves_identity(
             return ["127.0.0.1"]
 
         monkeypatch.setattr(http_fetch, "resolve", resolver)
-        project = SimpleNamespace(id="project", owner_actor=ACTOR)
-        target = SimpleNamespace(
-            id="target",
-            project_id="project",
-            name="TLS fixture",
-            kind="website",
-            image=None,
-            url=url,
-            launch_profile=None,
-            network_profile="fixture",
-            trust_profile="fixture",
-        )
+        project, target = graph(url)
+        target.trust_profile = "fixture"
         snapshot = freeze_plan(
             project,
             target,

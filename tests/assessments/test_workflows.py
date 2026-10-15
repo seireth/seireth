@@ -15,6 +15,7 @@ from app.assessments.profiles import OperatorConfig, public_catalog
 from app.assessments.website import WebsiteSession
 from app.plugins.base import AnalysisContext
 from app.plugins.cookie_security import analyze
+from tests.sessions import FakeSession
 from tests.website import configure, graph
 
 
@@ -22,7 +23,7 @@ def test_native_fetch_reaches_actual_site_with_auth_and_preserved_host(
     monkeypatch, tmp_path, website
 ):
     configure(monkeypatch, tmp_path, website)
-    project, target = graph(website)
+    project, target = graph(website.url)
     route = RoutePlan(
         key="private",
         url=website.url + "private",
@@ -108,7 +109,7 @@ def test_network_permission_revocation_applies_to_frozen_plan(
     monkeypatch, tmp_path, website
 ):
     path = configure(monkeypatch, tmp_path, website)
-    project, target = graph(website)
+    project, target = graph(website.url)
     snapshot = freeze_plan(
         project,
         target,
@@ -132,7 +133,7 @@ def test_redirect_connection_rechecks_current_network_permission(
     config = json.loads(path.read_text())
     config["requests"]["follow"] = {"follow_redirects": True}
     path.write_text(json.dumps(config))
-    project, target = graph(website)
+    project, target = graph(website.url)
     snapshot = freeze_plan(
         project,
         target,
@@ -164,7 +165,7 @@ def test_timeout_closes_native_fetch_and_does_not_replay(
     monkeypatch, tmp_path, website
 ):
     configure(monkeypatch, tmp_path, website)
-    project, target = graph(website)
+    project, target = graph(website.url)
     snapshot = freeze_plan(
         project,
         target,
@@ -191,7 +192,7 @@ def test_request_definitions_are_frozen_but_secrets_are_runtime_references(
     monkeypatch, tmp_path, website
 ):
     path = configure(monkeypatch, tmp_path, website)
-    project, target = graph(website)
+    project, target = graph(website.url)
     snapshot = freeze_plan(
         project,
         target,
@@ -243,8 +244,6 @@ def test_later_failure_does_not_keep_an_earlier_failed_plugin(
     monkeypatch, make_plugin, execution_context, stop
 ):
     from app.assessments import workflows
-    from app.assessments.execution import CleanupOutcome
-    from app.plugins.base import HttpObservation
     from app.plugins.registry import PluginRegistry
 
     def broken(observation, _analysis):
@@ -255,22 +254,11 @@ def test_later_failure_does_not_keep_an_earlier_failed_plugin(
     )
     records = []
 
-    class Session:
-        def prepare(self):
-            pass
-
+    class Session(FakeSession):
         def fetch(self, route):
             if records:
                 raise TimeoutError()
-            return {
-                "observation": HttpObservation(
-                    url=route["url"], status_code=200, headers={}
-                ),
-                "redirects": [],
-            }
-
-        def cleanup(self):
-            return CleanupOutcome(True)
+            return super().fetch(route)
 
     def persist(data, results):
         records.append(data)
@@ -289,7 +277,10 @@ def test_later_failure_does_not_keep_an_earlier_failed_plugin(
         for key in ("first", "second")
     ]
     outcome = workflows.execute_plan(
-        Session(), {"routes": routes}, execution_context, persist
+        Session(None, context=execution_context, persist_journal=None),
+        {"routes": routes},
+        execution_context,
+        persist,
     )
     assert records[0]["failed_plugin"] == "broken"
     assert records[1]["status"] == (
