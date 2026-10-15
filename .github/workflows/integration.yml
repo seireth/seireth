@@ -24,6 +24,9 @@ jobs:
     timeout-minutes: 25
     env:
       COMPOSE_PROJECT_NAME: seireth-ci
+      CI_DEMO_PROJECT_NAME: seireth-ci-demo-app
+      CI_OPERATOR_CONFIG_FILE: /tmp/seireth-operator.json
+      SEIRETH_WEBSITE_FIXTURE_URL: http://workspace:8080/
       # Exercise the published-port setting instead of relying on the example port.
       SEIRETH_API_PORT: "18080"
     steps:
@@ -59,27 +62,55 @@ jobs:
         run: |
           uv sync --locked --extra test --no-editable --no-build
           mkdir -p artifacts
-          echo 'SEIRETH_OPERATOR_CONFIG_FILE=/tmp/seireth-operator.json' >> .env
+          echo "SEIRETH_OPERATOR_CONFIG_FILE=$CI_OPERATOR_CONFIG_FILE" >> .env
           docker build -t seireth/demo-app:local examples/demo_app
-          docker compose -p seireth-ci-demo-app -f examples/demo_app/compose.yml up -d --wait
-          docker build --target runner -t seireth/runner:local .
+          docker compose -p "$CI_DEMO_PROJECT_NAME" -f examples/demo_app/compose.yml up -d --wait
           uv run --no-sync --no-build python -m app docker-up --api-ready-timeout-seconds 120
+          postgres_image=$(docker compose config --images postgres)
+          echo "SEIRETH_TEST_POSTGRES_IMAGE=$postgres_image" >> "$GITHUB_ENV"
           docker build -t seireth/service-fixture:local examples/service_bundle
-          python .github/scripts/prepare_website_fixture.py
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+
+          def output(*args):
+              return subprocess.check_output(["docker", *args], text=True, timeout=30).strip()
+
+
+          network = os.environ["CI_DEMO_PROJECT_NAME"] + "_default"
+          metadata = json.loads(output("network", "inspect", network))[0]
+          cidrs = [item["Subnet"] for item in metadata["IPAM"]["Config"] if item.get("Subnet")]
+          config = Path("artifacts/website-operator.json")
+          config.write_text(
+              json.dumps(
+                  {
+                      "networks": {
+                          "browser-fixture": {
+                              "url": os.environ["SEIRETH_WEBSITE_FIXTURE_URL"],
+                              "cidrs": cidrs,
+                          }
+                      }
+                  }
+              ),
+              encoding="utf-8",
+          )
+          api = output("compose", "ps", "-q", "api")
+          subprocess.run(["docker", "network", "connect", network, api], check=True, timeout=30)
+          subprocess.run(
+              ["docker", "cp", str(config), api + ":" + os.environ["CI_OPERATOR_CONFIG_FILE"]],
+              check=True,
+              timeout=30,
+          )
+          PY
           migration_containers=$(docker compose ps -a -q migrate)
           test -z "$migration_containers"
-      - name: Verify real assessment and resource removal
+      - name: Verify real assessment
         run: |
           set -euo pipefail
           uv run --no-sync --no-build python -m app verify --image seireth/demo-app:local --target-url http://demo-app:8080/cookies --plugins http-security-headers cookie-security --timeout-seconds 120 | tee artifacts/verification.json
-          docker ps -a --format '{{.Names}}' > artifacts/container-names.txt
-          docker network ls --format '{{.Name}}' > artifacts/network-names.txt
-          containers=$(docker ps -aq --filter label=seireth.assessment)
-          networks=$(docker network ls -q --filter label=seireth.assessment)
-          volumes=$(docker volume ls -q --filter label=seireth.assessment)
-          test -z "$containers" || { echo "::error::Assessment containers remain: $containers"; exit 1; }
-          test -z "$networks" || { echo "::error::Assessment networks remain: $networks"; exit 1; }
-          test -z "$volumes" || { echo "::error::Assessment volumes remain: $volumes"; exit 1; }
       - name: Verify application plugin scenarios
         run: uv run --no-sync --no-build python -m examples.demo_app.verify --base-url http://127.0.0.1:18080 --output artifacts/demo-app.json
       - name: Verify real cancellation and crash recovery
@@ -89,19 +120,28 @@ jobs:
       - name: Verify GUI image selection, demo actions, and packaged assets
         env:
           SEIRETH_UI_URL: http://127.0.0.1:18080
-          SEIRETH_WEBSITE_FIXTURE_URL: http://workspace:8080/
         run: |
           npm --prefix app/dashboard run test:e2e
           docker compose exec -T api python -c 'from pathlib import Path; import app.main; root = Path(app.main.__file__).parent; assert (root / "dashboard/dist/index.html").is_file(); assert list((root / "dashboard/dist/assets").glob("*.js")); assert not (root / "dashboard/src").exists(); assert not (root / "dashboard/node_modules").exists()'
+      - name: Verify assessment resource removal
+        if: always()
+        run: |
+          containers=$(docker ps -aq --filter label=seireth.assessment)
+          networks=$(docker network ls -q --filter label=seireth.assessment)
+          volumes=$(docker volume ls -q --filter label=seireth.assessment)
+          test -z "$containers" || { echo "::error::Assessment containers remain: $containers"; exit 1; }
+          test -z "$networks" || { echo "::error::Assessment networks remain: $networks"; exit 1; }
+          test -z "$volumes" || { echo "::error::Assessment volumes remain: $volumes"; exit 1; }
       - name: Collect diagnostics
         if: always()
         run: |
           mkdir -p artifacts
           status=0
           docker compose logs --no-color > artifacts/compose.log 2>&1 || status=1
-          docker compose -p seireth-ci-demo-app -f examples/demo_app/compose.yml logs --no-color > artifacts/demo-app-compose.log 2>&1 || status=1
+          docker compose -p "$CI_DEMO_PROJECT_NAME" -f examples/demo_app/compose.yml logs --no-color > artifacts/demo-app-compose.log 2>&1 || status=1
           docker ps -a > artifacts/containers.txt 2>&1 || status=1
           docker network ls > artifacts/networks.txt 2>&1 || status=1
+          docker volume ls > artifacts/volumes.txt 2>&1 || status=1
           if [ "$status" -ne 0 ]; then
             echo "::error::Some Docker diagnostics could not be collected; inspect the available artifacts"
           fi
@@ -115,7 +155,7 @@ jobs:
           docker volume ls -q --filter label=seireth.assessment | xargs -r docker volume rm || status=1
           docker network ls -q --filter label=seireth.assessment | xargs -r docker network rm || status=1
           docker compose down --volumes --remove-orphans || status=1
-          docker compose -p seireth-ci-demo-app -f examples/demo_app/compose.yml down || status=1
+          docker compose -p "$CI_DEMO_PROJECT_NAME" -f examples/demo_app/compose.yml down || status=1
           exit "$status"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

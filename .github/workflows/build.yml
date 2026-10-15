@@ -52,7 +52,6 @@ jobs:
           base_url="postgresql+psycopg://seireth:$password@127.0.0.1:5432"
           {
             echo "POSTGRES_PASSWORD=$password"
-            echo "SEIRETH_DATABASE_URL=$base_url/seireth"
             echo "SEIRETH_TEST_ADMIN_URL=$base_url/postgres"
           } >> "$GITHUB_ENV"
       - name: Start PostgreSQL
@@ -75,15 +74,20 @@ jobs:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
           restore-keys: ${{ runner.os }}-sonar
+      # Dependabot PRs read SONAR_TOKEN from Dependabot secrets.
       - name: Check SonarQube credentials
-        if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           test -n "$SONAR_TOKEN" || { echo "::error::SONAR_TOKEN is required for repository analysis"; exit 1; }
       # Enforce the quality gate through the required SonarCloud Code Analysis check.
       - name: SonarQube Scan
-        if: github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        if: >-
+          github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
         uses: SonarSource/sonarqube-scan-action@d209202bc7d53ff1cc128f7f907dac145c9d6ae9 # v8.3.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -93,10 +97,10 @@ jobs:
             -Dsonar.projectKey=seireth_seireth
             -Dsonar.python.version=3.14
             -Dsonar.sources=.
-            -Dsonar.exclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**,**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
+            -Dsonar.exclusions=**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
             -Dsonar.tests=tests,app/dashboard/e2e,app/dashboard/src
             -Dsonar.test.inclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**
-            -Dsonar.coverage.exclusions=examples/demo_app/**
+            -Dsonar.coverage.exclusions=examples/demo_app/**,examples/service_bundle/**
             -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.javascript.lcov.reportPaths=app/dashboard/coverage/lcov.info
       - name: PostgreSQL diagnostics
