@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { expect, it } from "vitest";
 import { EvidenceDetails } from "./EvidenceDetails";
+import { cspEvidenceFixture } from "../test/report";
 import type { EvidenceData } from "../api/types";
 
 it.each([
@@ -11,7 +12,7 @@ it.each([
     header: "set-cookie",
     cookie_name: "<script>alert(1)</script>",
     secure: false,
-    rule: "samesite-none-without-secure",
+    rule_id: "samesite-none-without-secure",
     samesite: "none",
   },
   {
@@ -20,7 +21,7 @@ it.each([
     cookie_name: "__Host-demo",
     secure: true,
     https: true,
-    rule: "host-prefix",
+    rule_id: "host-prefix",
     domain_present: false,
     root_path: true,
   },
@@ -30,7 +31,7 @@ it.each([
     cookie_name: "__Secure-demo",
     secure: true,
     https: false,
-    rule: "secure-prefix",
+    rule_id: "secure-prefix",
   },
   {
     url: "http://example.test/",
@@ -38,7 +39,7 @@ it.each([
     cookie_name: "__Host-demo",
     secure: false,
     https: false,
-    rule: "host-prefix",
+    rule_id: "host-prefix",
     domain_present: true,
     root_path: false,
   },
@@ -56,10 +57,12 @@ it.each([
       data.secure ? "Yes" : "No",
     );
   }
-  if ("rule_id" in data) {
-    expect(screen.getByText("Rule").nextElementSibling).toHaveTextContent(data.rule_id);
+  expect(screen.getByText("Rule").nextElementSibling).toHaveTextContent(data.rule_id);
+  if ("status_code" in data) {
     expect(screen.getByText("HTTP status").nextElementSibling).toHaveTextContent(String(data.status_code));
     expect(screen.getByText("Declared media type").nextElementSibling).toHaveTextContent(data.media_type ?? "Unknown");
+  }
+  if ("condition" in data) {
     expect(screen.getByText("Observed condition").nextElementSibling).toHaveTextContent(data.condition);
     expect(screen.getByText("Expected requirement").nextElementSibling).toHaveTextContent(data.expected);
   }
@@ -75,4 +78,18 @@ it.each([
       data.root_path ? "Yes" : "No",
     );
   }
+});
+
+it("explains CSP permissions with complete policy and execution context details", () => {
+  render(<EvidenceDetails evidence={[cspEvidenceFixture]} />);
+  expect(screen.getByText("Enforced policies").nextElementSibling).toHaveTextContent("2");
+  const observations = screen.getAllByRole("listitem");
+  expect(observations.map((item) => item.textContent)).toEqual([
+    "Policy 1: Inline script elements ; script-src-elem ; Effective unsafe-inline permission",
+    "Policy 2: Inline script elements ; No script directive ; No applicable script directive",
+    "Policy 1: Inline event handlers ; script-src-attr ; Effective unsafe-inline permission",
+    "Policy 2: Inline event handlers ; No script directive ; No applicable script directive",
+  ]);
+  expect(screen.getByText("csp-inline-scripts")).toBeVisible();
+  expect(screen.queryByText("Expected requirement")).toBeNull();
 });

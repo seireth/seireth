@@ -66,7 +66,6 @@ def verify(
     target_url: str,
     plugins: list[str],
     timeout_seconds: float = 120,
-    expected_backend: str | None = None,
 ) -> dict:
     """Run the complete reachable MVP workflow against a running API."""
 
@@ -105,15 +104,14 @@ def verify(
             202,
         )
         results = wait_for_results(client, assessment["id"], timeout_seconds)
+        if results.get("assessment_id") != assessment["id"]:
+            raise RuntimeError("results did not match the submitted assessment")
         if results["status"] != "completed":
             raise RuntimeError(f"assessment did not complete: {results}")
         if not results["result"]["cleanup_verified"]:
             raise RuntimeError("sandbox cleanup was not verified")
-        if (
-            expected_backend
-            and results["result"]["sandbox_backend"] != expected_backend
-        ):
-            raise RuntimeError(f"expected {expected_backend} backend, got: {results}")
+        if results["result"]["sandbox_backend"] != "docker":
+            raise RuntimeError("verification requires a real Docker execution")
         try:
             evidence = AssessmentEvidenceOut.model_validate(
                 require(
@@ -136,16 +134,17 @@ def verify(
             client.get(f"/api/v1/projects/{project['id']}/audit-events"),
             200,
         )
-        actions = [event["action"] for event in audit]
-        expected_actions = [
-            "project.created",
-            "target.registered",
-            "assessment.queued",
-            "assessment.running",
-            "assessment.completed",
+        events = [(event["action"], event.get("resource_id")) for event in audit]
+        expected_events = [
+            ("project.created", project["id"]),
+            ("target.registered", target["id"]),
+            ("assessment.queued", assessment["id"]),
+            ("assessment.running", assessment["id"]),
+            ("assessment.route_finished", assessment["id"]),
+            ("assessment.completed", assessment["id"]),
         ]
-        if actions != expected_actions:
-            raise RuntimeError(f"unexpected audit trail: {actions}")
+        if events != expected_events:
+            raise RuntimeError(f"unexpected audit trail: {events}")
         return {
             "project": project,
             "target": target,

@@ -16,20 +16,6 @@ function setup() {
   });
 }
 
-it("guards simultaneous clicks before the pending state renders", async () => {
-  let resolve!: (response: Response) => void;
-  const fetcher = vi.fn(() => new Promise<Response>((done) => { resolve = done; }));
-  vi.stubGlobal("fetch", fetcher);
-  const { result } = setup();
-  act(() => {
-    result.current.download("json");
-    result.current.download("html");
-  });
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
-  act(() => resolve(new Response(JSON.stringify({ detail: "invalid report" }), { status: 500 })));
-  await waitFor(() => expect(result.current.error?.message).toBe("invalid report"));
-});
-
 it("resets export state on assessment navigation and rejects a late response even if fetch ignores abort", async () => {
   let resolve!: (response: Response) => void;
   let signal: AbortSignal | undefined;

@@ -1,12 +1,31 @@
 """Target boundaries shared by API admission, execution, and recovery."""
 
-from urllib.parse import SplitResult, unquote, urlsplit
+from typing import Annotated
+from urllib.parse import SplitResult, unquote, urlsplit, urlunsplit
 
+from pydantic import BeforeValidator
+
+from ..core.constraints import StoredHttpUrl
 from ..core.identity import ACTOR
 
 
 class PolicyError(ValueError):
     """The requested assessment is outside its registered target."""
+
+
+def validate_response_url(value):
+    # Check raw input before URL normalization can erase unsafe components.
+    if not bounded_url(str(value), str(value)):
+        raise ValueError("URL contains unsafe or ambiguous components")
+    return value
+
+
+ResponseUrl = Annotated[StoredHttpUrl, BeforeValidator(validate_response_url)]
+
+
+def public_response_url(url):
+    parsed = urlsplit(str(url))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
 def http_origin(url: SplitResult) -> tuple[str, str | None, int]:

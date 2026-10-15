@@ -7,14 +7,7 @@ from fastapi.testclient import TestClient
 from app.api.router import router
 from app.persistence import models
 from tests.header_evidence import header_evidence
-
-
-@pytest.fixture
-def client(database):
-    from app.main import app
-
-    with TestClient(app) as test_client:
-        yield test_client
+from tests.sessions import completed_route
 
 
 @pytest.fixture
@@ -26,14 +19,7 @@ def read_client(database):
 
 
 @pytest.fixture
-def project(client):
-    response = client.post("/api/v1/projects", json={"name": "demo"})
-    assert response.status_code == 200
-    return response.json()["id"]
-
-
-@pytest.fixture
-def target(client, project, request):
+def target(client, project, request, mock_images):
     response = client.post(
         "/api/v1/targets",
         json={
@@ -79,6 +65,9 @@ def evidence_row(database):
                 evidence.id = identity
             finding = models.Finding(
                 assessment_id=assessment_id,
+                route_result_id=completed_route(
+                    db, db.get(models.Assessment, assessment_id)
+                ).id,
                 plugin="http-security-headers",
                 title="Test finding",
                 severity="medium",

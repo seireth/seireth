@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Link, useParams } from "react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { post } from "../api/client";
@@ -7,20 +7,21 @@ import type {
   EvidenceResponse,
   Project,
   Results,
-  Target,
 } from "../api/types";
 import { date, ErrorMessage, StatusBadge } from "../components/common";
 import {
   AssessmentRequestFields,
   AssessmentSummary,
   EmptyFindings,
+  ExecutionMetadata,
   FindingDetails,
-  ResponseChecks,
+  IncompleteExecution,
 } from "../components/AssessmentDetails";
 import { EvidenceDetails } from "../components/EvidenceDetails";
 import { groupEvidenceByFinding } from "../evidence";
 import { terminal, useAssessment } from "../hooks/useAssessment";
 import { useReportDownload } from "../hooks/useReportDownload";
+import { AssessmentSource, RouteResults } from "../components/RouteResults";
 
 export default function AssessmentPage() {
   const { assessmentId = "" } = useParams();
@@ -34,7 +35,7 @@ export default function AssessmentPage() {
   );
   const evidence = useResource<EvidenceResponse>(
     `/assessments/${assessmentId}/evidence`,
-    assessment?.status === "completed",
+    finished && !assessment?.cleanup_pending,
   );
   const evidenceByFinding = useMemo(
     () => groupEvidenceByFinding(evidence.data?.evidence ?? []),
@@ -44,11 +45,15 @@ export default function AssessmentPage() {
     `/projects/${assessment?.project_id}`,
     !!assessment,
   );
-  const target = useResource<Target>(
-    `/targets/${assessment?.target_id}`,
-    !!assessment,
-  );
   const report = useReportDownload(assessmentId);
+  const previousCleanup = useRef(assessment?.cleanup_pending);
+  useEffect(() => {
+    if (previousCleanup.current && assessment?.cleanup_pending === false) {
+      void client.invalidateQueries({ queryKey: ["/assessments/" + assessmentId + "/results"] });
+      void client.invalidateQueries({ queryKey: ["/assessments/" + assessmentId + "/evidence"] });
+    }
+    previousCleanup.current = assessment?.cleanup_pending;
+  }, [assessment?.cleanup_pending, assessmentId, client]);
   const cancel = useMutation({
     mutationFn: () => post(`/assessments/${assessmentId}/cancel`),
     onSettled: () => {
@@ -77,7 +82,7 @@ export default function AssessmentPage() {
             Assessment <span className="mono">{assessment.id.slice(0, 8)}</span>
           </h1>
           <p>
-            {target.data?.name || "Target"} · {date(assessment.created_at)}
+            {assessment.plan_snapshot.target.name} · {date(assessment.created_at)}
           </p>
         </div>
         <div>
@@ -113,25 +118,18 @@ export default function AssessmentPage() {
       <section className="panel">
         <h2>Assessment request</h2>
         <dl>
-          <AssessmentRequestFields assessment={assessment} targetUrl={target.data?.url} />
-          {assessment.result?.plugins && (
-            <>
-              <dt>Plugin findings</dt>
-              <dd>
-                {assessment.result.plugins
-                  .map((p) => `${p.id}: ${p.finding_count}`)
-                  .join(" · ")}
-              </dd>
-            </>
-          )}
+          <AssessmentRequestFields assessment={assessment} targetUrl={assessment.plan_snapshot.target.url} />
+          <ExecutionMetadata result={assessment.result} />
+          <AssessmentSource assessment={assessment} />
+
         </dl>
-        <ErrorMessage error={target.error} />
         <ErrorMessage error={project.error} />
         {assessment.result?.error && (
           <div className="error" role="alert">
             {assessment.result.error}
           </div>
         )}
+        <IncompleteExecution status={assessment.status} />
         {!finished && (
           <>
             <p role="status">
@@ -152,7 +150,7 @@ export default function AssessmentPage() {
         )}
         <ErrorMessage error={cancel.error} />
       </section>
-      {finished && <ResponseChecks result={assessment.result} />}
+      {finished && <RouteResults result={assessment.result} />}
       {finished && (
         <section className="findings-section">
           <div className="section-header">
@@ -163,7 +161,7 @@ export default function AssessmentPage() {
               onClick={() => {
                 void run.refetch();
                 void results.refetch();
-                if (assessment.status === "completed") void evidence.refetch();
+                if (!assessment.cleanup_pending) void evidence.refetch();
               }}
             >
               Refresh
@@ -177,7 +175,7 @@ export default function AssessmentPage() {
             <EmptyFindings status={assessment.status} />
           ) : (
             results.data?.findings.map((finding) => (
-              <FindingDetails key={finding.id} finding={finding}>
+              <FindingDetails key={finding.id} finding={finding} routes={assessment.result?.routes}>
                 {evidence.isPending ? (
                   <p>Loading evidence…</p>
                 ) : evidence.error ? (
