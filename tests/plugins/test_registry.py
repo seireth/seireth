@@ -90,9 +90,9 @@ def test_observation_normalizes_only_unambiguous_content_types(fields, expected)
     )
 
 
-def test_legacy_header_plugin_id_is_rejected():
-    with pytest.raises(ValueError, match="unknown or inactive"):
-        registry.select(["security-headers"])
+def test_unregistered_plugin_id_is_rejected():
+    with pytest.raises(ValueError, match="unknown plugin"):
+        registry.select(["unregistered-plugin"])
 
 
 def test_plugin_contract_round_trips_through_json(finding_payload):
@@ -102,7 +102,9 @@ def test_plugin_contract_round_trips_through_json(finding_payload):
     restored_observation = HttpObservation.model_validate_json(
         observation.model_dump_json()
     )
-    plugin_response = PluginResponse(findings=(PluginFinding(**finding_payload),))
+    plugin_response = PluginResponse(
+        findings=(PluginFinding(**finding_payload),), checks=()
+    )
     restored_response = PluginResponse.model_validate_json(
         plugin_response.model_dump_json()
     )
@@ -184,8 +186,8 @@ def test_finding_contract_preserves_meaningful_text(field, value, finding_payloa
 
 
 def test_registry_is_ordered_validated_and_catalog_backed(make_plugin):
-    def no_findings(observation):
-        return PluginResponse(findings=())
+    def no_findings(observation, _analysis):
+        return PluginResponse(findings=(), checks=())
 
     second = make_plugin("second", no_findings)
     local = PluginRegistry((SECURITY_HEADERS_PLUGIN, second))
@@ -217,7 +219,9 @@ def test_registry_is_ordered_validated_and_catalog_backed(make_plugin):
     ],
 )
 def test_registry_rejects_invalid_selections(selection, make_plugin):
-    active = make_plugin("active", lambda observation: PluginResponse(findings=()))
+    active = make_plugin(
+        "active", lambda observation, context: PluginResponse(findings=(), checks=())
+    )
     local = PluginRegistry((active,))
     with pytest.raises(ValueError):
         local.select(selection)
@@ -229,13 +233,51 @@ def test_registry_revalidates_manifests_at_construction():
         name="Invalid",
         description="Invalid plugin ID bypassing model validation",
     )
-    plugin = Plugin(bypassed_manifest, lambda observation: PluginResponse(findings=()))
+    plugin = Plugin(
+        bypassed_manifest,
+        lambda observation, context: PluginResponse(findings=(), checks=()),
+        rules={},
+    )
 
     with pytest.raises(ValueError, match="invalid manifest"):
         PluginRegistry((plugin,))
 
 
 def test_registry_rejects_noncallable_analyzer():
-    plugin = Plugin(SECURITY_HEADERS_PLUGIN.manifest, None)
+    plugin = Plugin(SECURITY_HEADERS_PLUGIN.manifest, None, rules={})
     with pytest.raises(ValueError, match="must satisfy the plugin contract"):
         PluginRegistry((plugin,))
+
+
+def test_csp_policy_is_catalogued_and_independently_selectable():
+    assert [entry["id"] for entry in registry.catalog()] == [
+        "http-security-headers",
+        "cookie-security",
+        "csp-policy",
+    ]
+    assert [plugin.manifest.id for plugin in registry.select(["csp-policy"])] == [
+        "csp-policy"
+    ]
+    assert [
+        plugin.manifest.id
+        for plugin in registry.select(
+            [
+                "csp-policy",
+                "http-security-headers",
+                "cookie-security",
+            ]
+        )
+    ] == ["csp-policy", "http-security-headers", "cookie-security"]
+
+
+def test_rule_catalogue_uses_registered_contracts_and_cannot_be_mutated():
+    from app.plugins.csp_policy_contract import RULE_CONTEXTS
+    from app.plugins.http_security_headers_contract import RULE_REQUIREMENTS
+
+    catalogue = {item["id"]: item for item in registry.catalog()}
+    assert set(catalogue["http-security-headers"]["rules"]) == set(RULE_REQUIREMENTS)
+    assert set(catalogue["csp-policy"]["rules"]) == set(RULE_CONTEXTS)
+    catalogue["http-security-headers"]["rules"].clear()
+    assert registry.catalog()[0]["rules"]
+    with pytest.raises(TypeError):
+        registry.select(["http-security-headers"])[0].rules["extra"] = "document"

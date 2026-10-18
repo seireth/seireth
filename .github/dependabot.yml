@@ -19,8 +19,6 @@ updates:
     ignore:
       # Update Node together with frontend, CI, and development pins.
       - dependency-name: node
-      # Update uv together with pyproject.toml, CI, and development pins.
-      - dependency-name: ghcr.io/astral-sh/uv
       # Keep Python aligned with CI, Ruff, and the sandbox runner.
       - dependency-name: python
         update-types: [version-update:semver-major, version-update:semver-minor]

@@ -1,17 +1,24 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..assessments import images
-from ..assessments.lifecycle import audit, transition
-from ..assessments.policy import PolicyError, validate
+from ..assessments.lifecycle import audit, latest_attempt, terminal_result, transition
+from ..assessments.plans import RoutePlan, freeze_plan
+from ..assessments.policy import PolicyError
 from ..assessments.worker import dispatcher
+from ..assessments.workflows import (
+    published_evidence,
+    published_findings,
+    published_records,
+    refresh_result,
+)
+from ..core.config import settings
 from ..persistence import models
 from ..persistence.db import get_db
-from ..plugins.registry import registry as plugin_registry
 from .dependencies import authorize_project, page, pagination
 from .schemas import (
     AssessmentCreate,
@@ -39,29 +46,26 @@ def load_assessment(
     return item, project
 
 
-def load_evidence(db: Session, item: models.Assessment) -> list[EvidenceOut]:
+def validated_evidence(item, rows) -> list[EvidenceOut]:
     evidence = []
-    if item.status == models.AssessmentStatus.completed:
-        rows = db.scalars(
-            select(models.Evidence)
-            .join(models.Finding)
-            .where(models.Finding.assessment_id == item.id)
-            .order_by(models.Evidence.id)
-        )
-        for row in rows:
-            try:
-                evidence.append(EvidenceOut.model_validate(row, from_attributes=True))
-            except ValidationError:
-                logger.error(
-                    "Invalid stored evidence for assessment %s, evidence %s",
-                    item.id,
-                    row.id,
-                )
-                raise HTTPException(500, "stored evidence is invalid") from None
+    for row in rows:
+        try:
+            evidence.append(EvidenceOut.model_validate(row, from_attributes=True))
+        except ValidationError:
+            logger.error(
+                "Invalid stored evidence for assessment %s, evidence %s",
+                item.id,
+                row.id,
+            )
+            raise HTTPException(500, "stored evidence is invalid") from None
     return evidence
 
 
-@router.get("/projects/{project_id}/assessments", response_model=PageOut[AssessmentOut])
+@router.get(
+    "/projects/{project_id}/assessments",
+    response_model=PageOut[AssessmentOut],
+    response_model_exclude_unset=True,
+)
 def list_assessments(
     project_id: str, db: Session = Depends(get_db), bounds=Depends(pagination)
 ):
@@ -78,6 +82,7 @@ def list_assessments(
 @router.post(
     "/assessments",
     response_model=AssessmentOut,
+    response_model_exclude_unset=True,
     status_code=202,
     responses={
         400: {
@@ -88,35 +93,51 @@ def list_assessments(
     },
 )
 def create_assessment(
-    payload: AssessmentCreate, response: Response, db: Session = Depends(get_db)
+    payload: AssessmentCreate,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db),
 ):
     """Validate the target, response URL, and plugins before enqueueing."""
 
     project = authorize_project(db, payload.project_id)
     target = db.get(models.Target, payload.target_id)
     try:
-        plugins = plugin_registry.select(payload.plugins)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    try:
-        validate(
+        if not target:
+            raise PolicyError("valid project and target required")
+        if target.project_id != project.id:
+            raise PolicyError("target does not belong to this project")
+        routes = (
+            payload.routes
+            if payload.routes is not None
+            else [RoutePlan(key="response", url=payload.url, plugins=payload.plugins)]
+        )
+        snapshot = freeze_plan(
             project,
             target,
-            str(payload.url),
+            routes,
+            timeout_seconds=settings.assessment_timeout_seconds
+            if payload.routes is None
+            else None,
+            baseline=payload.baseline,
+            control_endpoint=request.scope.get("server"),
         )
     except PolicyError as exc:
         raise HTTPException(403, str(exc)) from exc
-    try:
-        images.require_local_image(target.image)
     except images.ImageUnavailable as exc:
         raise HTTPException(400, str(exc)) from None
     except images.DockerUnavailable as exc:
         raise HTTPException(503, str(exc)) from None
+    except ValueError:
+        raise HTTPException(400, "invalid plugin selection or plan") from None
+    if payload.baseline:
+        baseline, _ = load_assessment(db, payload.baseline)
+        if baseline.project_id != project.id:
+            raise HTTPException(403, "baseline must belong to this project")
     item = models.Assessment(
         project_id=payload.project_id,
         target_id=target.id,
-        url=str(payload.url),
-        plugins=[plugin.manifest.id for plugin in plugins],
+        plan_snapshot=snapshot,
     )
     db.add(item)
     db.flush()
@@ -130,6 +151,7 @@ def create_assessment(
 @router.get(
     "/assessments/{assessment_id}",
     response_model=AssessmentOut,
+    response_model_exclude_unset=True,
     responses={404: _ASSESSMENT_NOT_FOUND_RESPONSE},
 )
 def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
@@ -142,18 +164,20 @@ def get_assessment(assessment_id: str, db: Session = Depends(get_db)):
 @router.get(
     "/assessments/{assessment_id}/results",
     response_model=AssessmentResultsOut,
+    response_model_exclude_unset=True,
     responses={404: _ASSESSMENT_NOT_FOUND_RESPONSE},
 )
 def get_results(assessment_id: str, db: Session = Depends(get_db)):
     """Return the assessment status, JSON result, and normalized findings."""
 
     item, _ = load_assessment(db, assessment_id)
+    findings = published_findings(db, item)
     return {
         "assessment_id": item.id,
         "status": item.status,
         "cleanup_pending": item.cleanup_pending,
         "result": item.result,
-        "findings": item.findings,
+        "findings": findings,
     }
 
 
@@ -168,11 +192,12 @@ def get_results(assessment_id: str, db: Session = Depends(get_db)):
 def get_evidence(assessment_id: str, db: Session = Depends(get_db)):
     """Return validated evidence for an authorized, completed assessment."""
     item, _ = load_assessment(db, assessment_id)
+    rows = published_evidence(db, item)
     return AssessmentEvidenceOut(
         assessment_id=item.id,
         status=item.status,
         cleanup_pending=item.cleanup_pending,
-        evidence=load_evidence(db, item),
+        evidence=validated_evidence(item, rows),
     )
 
 
@@ -194,14 +219,15 @@ def get_report(assessment_id: str, response: Response, db: Session = Depends(get
     # Capture scalar state once; cleanup reconciliation can update future reports.
     try:
         assessment = ReportAssessmentOut.model_validate(item)
+        findings, rows = published_records(db, item)
         report = AssessmentReportOut(
             schema_version=1,
             generated_at=models.now(),
             project=project,
-            target=db.get(models.Target, item.target_id),
+            target=item.plan_snapshot["target"],
             assessment=assessment,
-            findings=sorted(item.findings, key=lambda finding: finding.id),
-            evidence=load_evidence(db, item),
+            findings=findings,
+            evidence=validated_evidence(item, rows),
         )
     except ValidationError:
         logger.error("Invalid stored report data for assessment %s", item.id)
@@ -228,6 +254,15 @@ def cancel_assessment(
         raise HTTPException(409, "assessment is no longer cancellable")
     if item.status == "queued":
         transition(db, item, "cancelled")
+        attempt = latest_attempt(db, item.id)
+        item.cleanup_pending = bool(attempt and not attempt.cleanup_verified)
+        item.result = terminal_result(
+            attempt=attempt,
+            execution_outcome="not_started",
+            cleanup_verified=not item.cleanup_pending,
+            error="assessment cancelled before execution",
+        )
+        refresh_result(db, item, attempt)
     else:
         if item.status != "cancelling":
             transition(db, item, "cancelling")

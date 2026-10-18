@@ -1,4 +1,4 @@
-"""Cancellation and deadlines for actual sandbox operations."""
+"""Cancellation, deadlines, and cleanup outcomes for assessment operations."""
 
 from dataclasses import dataclass
 from threading import Event
@@ -12,6 +12,12 @@ class Cancelled(RuntimeError):
 
 class Interrupted(RuntimeError):
     """Execution stopped because of shutdown or lost dispatcher ownership."""
+
+
+@dataclass(frozen=True)
+class CleanupOutcome:
+    verified: bool
+    reason: str | None = None
 
 
 @dataclass

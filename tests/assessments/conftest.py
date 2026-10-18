@@ -1,4 +1,4 @@
-"""Fixtures for assessment execution and simulated Docker behavior."""
+"""Current execution contexts and test-only Docker command doubles."""
 
 from time import monotonic
 

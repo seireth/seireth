@@ -1,20 +1,19 @@
-"""Real API processes: native simulated execution and opt-in Docker recovery."""
+"""Real API processes and opt-in Docker lifecycle acceptance."""
 
 import os
-import socket
-import subprocess
-import sys
-from contextlib import ExitStack
-from pathlib import Path
-from types import SimpleNamespace
+from dataclasses import replace
 from uuid import uuid4
 
-import httpx
 import pytest
 
-from app.cli.verify import verify
-from app.core.config import settings
 from app.persistence import models
+from tests.api.helpers import finish
+from tests.integration.helpers import (
+    assert_assessment_resources_removed,
+    docker,
+    remove_assessment_resources,
+    submit_docker_assessment,
+)
 
 docker_only = pytest.mark.skipif(
     os.environ.get("SEIRETH_DOCKER_TESTS") != "1",
@@ -22,98 +21,9 @@ docker_only = pytest.mark.skipif(
 )
 
 
-def docker(*args):
-    return subprocess.check_output(["docker", *args], text=True, timeout=20).strip()
-
-
-@pytest.fixture
-def api_process(database, tmp_path, request, wait_until):
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    backend = request.param
-    env = {
-        **os.environ,
-        "SEIRETH_DATABASE_URL": settings.database_url,
-        "SEIRETH_SANDBOX_BACKEND": backend,
-    }
-    if backend == "inmemory":
-        env["PATH"] = str(Path(sys.executable).parent)  # Docker must not be needed.
-    api = SimpleNamespace(backend=backend, assessment_id=None, process=None)
-    with ExitStack() as cleanup:
-        log = cleanup.enter_context((tmp_path / "api.log").open("w+"))
-        api.client = cleanup.enter_context(
-            httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=5)
-        )
-
-        def remove_resources():
-            if api.assessment_id:
-                selector = f"label=seireth.assessment={api.assessment_id}"
-                for identity in docker("ps", "-aq", "--filter", selector).splitlines():
-                    docker("rm", "-f", identity)
-                for identity in docker(
-                    "network", "ls", "-q", "--filter", selector
-                ).splitlines():
-                    docker("network", "rm", identity)
-
-        cleanup.callback(remove_resources)
-
-        def stop(process):
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=10)
-            assert process.poll() is not None
-
-        def start():
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "uvicorn",
-                    "app.main:app",
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(port),
-                ],
-                env=env,
-                stdout=log,
-                stderr=log,
-            )
-            cleanup.callback(stop, process)
-            api.process = process
-
-            def ready():
-                if process.poll() is not None:
-                    raise AssertionError(
-                        f"API process exited with {process.returncode}"
-                    )
-                try:
-                    return api.client.get("/health").status_code == 200
-                except httpx.TransportError:
-                    return False
-
-            try:
-                wait_until(
-                    ready, description="API readiness", timeout=30, interval=0.05
-                )
-            except AssertionError as error:
-                log.seek(0)
-                raise AssertionError(f"{error}\n{log.read()}") from error
-
-        api.start = start
-        start()
-        yield api
-
-
 @pytest.mark.parametrize(
     "api_process,action,expected_status,expected_attempt,expected_findings",
     [
-        ("inmemory", "verify", "completed", 1, 3),
         pytest.param(
             "docker",
             "cancel",
@@ -133,9 +43,9 @@ def api_process(database, tmp_path, request, wait_until):
         pytest.param(
             "docker",
             "image-removed",
-            "failed",
-            1,
-            0,
+            "completed",
+            2,
+            3,
             marks=[docker_only, pytest.mark.docker],
         ),
     ],
@@ -150,60 +60,34 @@ def test_real_api_lifecycle(
     wait_until,
 ):
     client = api_process.client
-    if api_process.backend == "inmemory":
-        result = verify(
-            str(client.base_url),
-            image="demo:local",
-            target_url="http://demo-app:8080/",
-            plugins=["http-security-headers"],
-            expected_backend="inmemory",
-        )
-        assert result["results"]["status"] == expected_status
-        assert result["results"]["result"]["finding_count"] == expected_findings
-        assert result["results"]["result"]["attempt"] == expected_attempt
-        assert len(result["evidence"]["evidence"]) == expected_findings
-        assert {entry["finding_id"] for entry in result["evidence"]["evidence"]} == {
-            finding["id"] for finding in result["results"]["findings"]
-        }
-        return
 
-    def post(path, data):
-        response = client.post(path, json=data)
-        response.raise_for_status()
-        return response.json()
-
-    project = post("/api/v1/projects", {"name": "Docker recovery"})
     image = "seireth/demo-app:local"
     if action == "image-removed":
         image = f"seireth/recovery-test:{uuid4().hex}"
         docker("tag", "seireth/demo-app:local", image)
-    target = post(
-        "/api/v1/targets",
-        {
-            "project_id": project["id"],
-            "name": "slow",
-            "image": image,
-            "url": "http://demo-app:8080/slow",
-        },
-    )
-    assessment = post(
-        "/api/v1/assessments",
-        {
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "url": target["url"],
-            "plugins": ["http-security-headers"],
-        },
+    _, assessment = submit_docker_assessment(
+        client, "/slow", ["http-security-headers"], image=image
     )
     aid = api_process.assessment_id = assessment["id"]
     assert assessment["plugins"] == ["http-security-headers"]
     selector = f"label=seireth.assessment={aid}"
     wait_until(
         lambda: (
-            "seireth-assessment-runner-"
+            "seireth-runner-"
             in docker("ps", "--filter", selector, "--format", "{{.Names}}")
         ),
         description="Docker runner startup",
+        timeout=30,
+        interval=0.05,
+    )
+    # Verified cancellation and recovery require recorded resource identities.
+    # Interrupting an in-flight create may correctly leave cleanup pending.
+    wait_until(
+        lambda: (
+            "seireth-target-"
+            in docker("ps", "--filter", selector, "--format", "{{.Names}}")
+        ),
+        description="Docker target startup after identity persistence",
         timeout=30,
         interval=0.05,
     )
@@ -222,14 +106,21 @@ def test_real_api_lifecycle(
         lambda: client.get(f"/api/v1/assessments/{aid}/results").json(),
         lambda report: report["status"] in {"completed", "cancelled", "failed"},
         description="Docker assessment completion",
-        timeout=60,
+        timeout=assessment["plan_snapshot"]["timeout_seconds"]
+        + 2 * assessment["plan_snapshot"]["cleanup_seconds"]
+        + 10,
         interval=0.05,
     )
-    assert report["status"] == expected_status, report
+    assert report["status"] == expected_status, (
+        report["result"].get("error"),
+        report["result"].get("cleanup_reason"),
+        report["result"].get("routes"),
+    )
     assert report["result"]["cleanup_verified"]
     assert report["result"]["attempt"] == expected_attempt
     if action == "image-removed":
-        assert "not available locally" in report["result"]["error"]
+        # Removing the submitted tag does not remove the pinned image content.
+        assert "error" not in report["result"]
         assert not report["cleanup_pending"]
     assert client.get(f"/api/v1/assessments/{aid}").json()["plugins"] == [
         "http-security-headers"
@@ -237,11 +128,122 @@ def test_real_api_lifecycle(
     if action == "crash":
         assert [
             {key: plugin[key] for key in ("id", "finding_count")}
-            for plugin in report["result"]["plugins"]
+            for plugin in report["result"]["routes"][0]["plugins"]
         ] == [{"id": "http-security-headers", "finding_count": 3}]
     assert len(report["findings"]) == expected_findings
-    assert not docker("ps", "-a", "--filter", selector, "--format", "{{.Names}}")
-    assert not docker("network", "ls", "--filter", selector, "--format", "{{.Name}}")
+    assert_assessment_resources_removed(aid)
+
+
+@docker_only
+@pytest.mark.docker
+@pytest.mark.parametrize("case", ["vulnerable", "corrected", "plugin-failure"])
+def test_acceptance_run_persists_provenance_and_survives_restart(
+    database, monkeypatch, wait_until, make_plugin, case
+):
+    from datetime import datetime
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from app.assessments import plans as assessment_plans
+    from app.assessments import worker
+    from app.assessments import workflows as assessment_workflows
+    from app.main import app
+    from app.plugins.registry import PluginRegistry, registry
+
+    analysis_calls = []
+
+    def broken(_observation, _analysis):
+        analysis_calls.append("broken")
+        raise RuntimeError("synthetic crash detail")
+
+    plugins = registry.plugins + (make_plugin("broken", broken),)
+    selection = PluginRegistry(plugins)
+    monkeypatch.setattr(assessment_plans, "registry", selection)
+    monkeypatch.setattr(assessment_workflows, "registry", selection)
+    path = (
+        "/lab/nosniff-first-invalid"
+        if case == "vulnerable"
+        else "/lab/nosniff-first-valid"
+    )
+    selected = ["http-security-headers"] + (
+        ["broken"] if case == "plugin-failure" else []
+    )
+    expected_status = "failed" if case == "plugin-failure" else "completed"
+    aid = None
+    try:
+        with TestClient(app) as client:
+            target, assessment = submit_docker_assessment(client, path, selected)
+            aid = assessment["id"]
+            for _ in range(5):
+                worker.dispatcher.submit(aid)
+            result, report = finish(client, aid, wait_until)
+            assert result["status"] == expected_status, result["result"]
+            assert (
+                result["result"]["cleanup_verified"] and not result["cleanup_pending"]
+            )
+            assert len(result["findings"]) == (1 if case == "vulnerable" else 0)
+            if case == "vulnerable":
+                assert (
+                    result["findings"][0]["title"]
+                    == "Missing or ineffective X-Content-Type-Options"
+                )
+            if case == "plugin-failure":
+                assert result["result"]["error_kind"] == "plugin_error"
+                assert result["result"]["failed_plugin"] == "broken"
+                assert analysis_calls == ["broken"]
+                assert "synthetic crash detail" not in str(result)
+            execution = result["result"]["execution"]
+            assert execution["target"] == target
+            assert execution["plugins"] == [
+                {"id": identity, "version": "1.0.0"} for identity in selected
+            ]
+            assert (
+                datetime.fromisoformat(execution["deadline_at"])
+                - datetime.fromisoformat(execution["started_at"])
+            ).total_seconds() == assessment["plan_snapshot"]["timeout_seconds"]
+            with database.SessionLocal() as db:
+                attempts = list(
+                    db.scalars(
+                        select(models.Attempt).where(
+                            models.Attempt.assessment_id == aid
+                        )
+                    )
+                )
+                assert len(attempts) == 1
+                assert attempts[0].execution_metadata == execution
+                assert attempts[0].cleanup_verified
+                assert all(
+                    entry["state"] in {"removed", "not_requested"}
+                    for entry in attempts[0].operation_journal["resources"].values()
+                )
+            assert {entry["finding_id"] for entry in report["evidence"]} == {
+                finding["id"] for finding in report["findings"]
+            }
+        # A fresh API/dispatcher reads the same results, even if installed plugins change.
+        newer = PluginRegistry(
+            tuple(
+                replace(
+                    plugin,
+                    manifest=plugin.manifest.model_copy(update={"version": "9.0.0"}),
+                )
+                for plugin in plugins
+            )
+        )
+        monkeypatch.setattr(assessment_plans, "registry", newer)
+        monkeypatch.setattr(assessment_workflows, "registry", newer)
+        with TestClient(app) as client:
+            refreshed = client.get(f"/api/v1/assessments/{aid}/report").json()
+            refreshed.pop("generated_at")
+            report.pop("generated_at")
+            assert refreshed == report
+            assert (
+                client.get(f"/api/v1/assessments/{aid}").json()["status"]
+                == expected_status
+            )
+        assert_assessment_resources_removed(aid)
+    finally:
+        remove_assessment_resources(aid)
 
 
 @docker_only
@@ -254,31 +256,8 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
 
     client = api_process.client
 
-    def post(path, payload):
-        response = client.post(path, json=payload)
-        response.raise_for_status()
-        return response.json()
-
-    project = post("/api/v1/projects", {"name": "Cookie assessment"})
-    target = post(
-        "/api/v1/targets",
-        {
-            "project_id": project["id"],
-            "name": "cookies",
-            "image": "seireth/demo-app:local",
-            "url": "http://demo-app:8080/cookies",
-        },
-    )
     selection = ["http-security-headers", "cookie-security"]
-    assessment = post(
-        "/api/v1/assessments",
-        {
-            "project_id": project["id"],
-            "target_id": target["id"],
-            "url": target["url"],
-            "plugins": selection,
-        },
-    )
+    _, assessment = submit_docker_assessment(client, "/cookies", selection)
     aid = api_process.assessment_id = assessment["id"]
     report = wait_until(
         lambda: client.get(f"/api/v1/assessments/{aid}/results").json(),
@@ -290,7 +269,7 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
     assert report["status"] == "completed", report
     assert [
         {key: plugin[key] for key in ("id", "finding_count")}
-        for plugin in report["result"]["plugins"]
+        for plugin in report["result"]["routes"][0]["plugins"]
     ] == [{"id": plugin, "finding_count": 3} for plugin in selection]
     assert report["result"]["finding_count"] == len(report["findings"]) == 6
     assert report["result"]["cleanup_verified"] and not report["cleanup_pending"]
@@ -329,6 +308,4 @@ def test_real_cookie_assessment_preserves_repeated_fields_and_verifies_cleanup(
         assert secret not in evidence_response.text
         assert secret not in str([item.data for item in evidence])
         assert secret not in (tmp_path / "api.log").read_text()
-    selector = f"label=seireth.assessment={aid}"
-    assert not docker("ps", "-a", "--filter", selector, "--format", "{{.Names}}")
-    assert not docker("network", "ls", "--filter", selector, "--format", "{{.Name}}")
+    assert_assessment_resources_removed(aid)

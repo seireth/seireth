@@ -1,7 +1,9 @@
 # Assessments
 
-Use the API's generated `/docs` explorer for schemas and interactive requests, or
-run the [verification workflow](getting-started.md#simulated-assessment).
+For Docker bundles, existing websites, authentication, route plans, release
+checks, and reports, use [Docker and website workflows](workflows.md).
+The single-URL submission below is normalized into the same execution plan.
+Use the API's `/docs` explorer or the [verification workflow](getting-started.md#real-docker-assessment).
 
 ## Register and select
 
@@ -16,15 +18,14 @@ run the [verification workflow](getting-started.md#simulated-assessment).
 Register a target with `project_id`, `name`, `image`, and `url`. Image discovery
 returns `{"items":[{"image":"repository:tag","id":"sha256:…"}]}` and is optional.
 Docker rejects missing local images with HTTP 400 and daemon failures with 503.
-The simulated backend accepts valid image metadata without Docker.
 
 Assessment URLs must stay within the target's origin and registered path, including
 child paths. Ownership, URL boundaries, plugins, and local image availability are
 rechecked during submission, execution, and recovery retries. Requests use one
 development actor; there is no login flow.
 
-Get selectable IDs from `GET /api/v1/plugins`. The built-ins are `http-security-headers`
-and `cookie-security`; select either or both. Selection must be explicit, nonempty,
+Get selectable IDs from `GET /api/v1/plugins`. The built-ins are `http-security-headers`,
+`cookie-security`, and `csp-policy`; select any combination. Selection must be explicit, nonempty,
 and contain unique active IDs. Registering a plugin never automatically selects it.
 See [Plugin development](plugins.md) to add checks.
 
@@ -42,7 +43,7 @@ Submit this body, replacing placeholder IDs with those returned above:
 ## Poll status and results
 
 Submission returns HTTP 202, the saved assessment, and a `Location` to poll.
-The requested URL and selected plugin IDs are persisted and returned in assessment details and history. `result` is null until an outcome exists;
+The frozen plan persists request and plugin configuration; URL and plugin summaries are derived from it and returned in assessment details and history. `result` is null until an outcome exists;
 execution can advance the initial status before the response arrives.
 
 | Status | Meaning |
@@ -57,8 +58,8 @@ execution can advance the initial status before the response arrives.
 
 Poll until `completed`, `failed`, or `cancelled`. Append `/results` to `Location`
 for findings. For completed assessments, `result` includes `sandbox_backend`,
-`attempt`, and `completed_at`. `result.plugins` preserves selection order with
-per-plugin counts; `result.finding_count` is the total. `result.response` contains
+`attempt`, and `completed_at`. Each entry of `result.routes` preserves selected
+plugins and their counts; `result.finding_count` is the published total. Each route response contains
 the HTTP `status_code` and normalized `media_type` (null when unknown). The
 `http-security-headers` entry includes `checks`, each with a stable `rule_id`,
 `status`, and short `reason`. Only `failed` checks generate findings. `passed`
@@ -74,15 +75,24 @@ include `cleanup_pending`; `result.cleanup_verified` records verification and
 [cleanup procedure](security-model.md#cleanup-and-failure); reconciliation can
 update cleanup fields after execution becomes terminal.
 
-The GUI polls every second during execution and every five seconds while terminal
-cleanup remains pending, then stops. Refocus refreshes data; leaving the page
-cancels its reads. Evidence failures show a retry action without hiding findings.
+New execution attempts persist `result.execution`: UTC `started_at` and
+`deadline_at`, the registered target snapshot, and the ordered plugin IDs and
+versions. This metadata is committed before sandbox resources are created and is
+retained for failed runs as well as completed runs. `result.error_kind` separates
+`plugin_error`, `timeout`, and other `execution_error` outcomes; plugin failures
+also identify `failed_plugin`. Failed or cancelled batches may publish clearly
+labelled results from completed routes only after verified cleanup; incomplete
+routes publish no findings. Such batches never pass the release gate.
+
+The GUI refreshes execution and pending cleanup automatically. Evidence failures
+offer a retry without hiding findings.
 
 ## Retrieve evidence
 
 `GET /api/v1/assessments/{assessment_id}/evidence` returns an `evidence` array ordered
 by evidence ID. Match each entry's `finding_id` to a finding's `id` in `/results`.
-The array is empty unless the assessment is completed with findings.
+The array contains evidence for published findings from the terminal attempt.
+Cleanup must be verified before any findings or evidence are released.
 
 Header evidence identifies the response URL, header, stable `rule_id`, HTTP
 `status_code`, normalized `media_type`, safe observed `condition` (missing,
@@ -103,20 +113,19 @@ for a `completed`, `failed`, or `cancelled` assessment. Other states return 409
 after project authorization. The dashboard's **Download JSON** and **Download HTML**
 buttons each fetch a fresh snapshot; HTML generation happens in the browser.
 
-The report contains `schema_version` (currently 1), UTC `generated_at`, the public
-`project` and `target`, `assessment`, ID-ordered `findings`, and ID-ordered
-`evidence`. Request and plugin-selection metadata are preserved. The assessment's
-result projects only documented execution, cleanup, response, and check-outcome
-fields; unknown stored result fields are excluded. Missing outcomes remain missing.
-The existing results and evidence endpoints retain their response shapes.
+The report uses `schema_version: 1` and includes the project, frozen plan/target,
+execution metadata, route outcomes, coverage, cleanup, verdict, comparison,
+findings, and evidence. Response facts and plugin checks live under
+`assessment.result.routes`; findings link to their route and evidence by ID.
 
-Reports do not rerun checks or change saved records. Cleanup can remain pending
-in a terminal assessment; the report states that uncertainty. Regenerating it
-reflects later reconciliation. Simulated runs are identified, and zero findings
-does not certify security. JSON retains saved timestamps; HTML displays them in UTC.
-Completion timestamps require an extended ISO date and time with seconds, a `T`
-separator, and `Z` or a `±HH:MM` timezone offset; up to six fractional-second digits
-are supported. Unparseable or unsupported stored timestamps fail report validation.
+Exports read persisted data without rerunning checks, so restarts or plugin/target
+changes do not rewrite what ran. `generated_at` records the export time; cleanup
+fields reflect reconciliation and may still be pending. JSON retains saved
+ISO 8601 timestamps; HTML displays them in UTC. Invalid stored timestamps fail
+validation.
+
+See [Contributing](../CONTRIBUTING.md#tests) for real Docker lifecycle and report
+durability tests.
 
 HTML includes expanded finding evidence and inline styles, works offline, and can
 be printed using the browser. It contains no scripts or external assets. Stored
@@ -135,7 +144,6 @@ text are preserved; reports do not anonymize target details.
 | `GET /api/v1/projects/{id}/targets` | Registered targets |
 | `GET /api/v1/targets/{id}` | Target name, image, URL, and project ID |
 | `GET /api/v1/projects/{id}/assessments` | Assessment history |
-| `GET /api/v1/runtime` | `sandbox_backend` |
 
 Project, target, and assessment lists return `items` and `has_more`.
 Use `offset` (default 0) and `limit` (default 50, range 1â€“100). While `has_more` is
@@ -152,7 +160,7 @@ return 403. CLI requests without `Origin` continue to work.
 ## Header checks
 
 Select `http-security-headers` (**HTTP security headers** in the catalog).
-The former `security-headers` ID is rejected. Applicability is based on declared
+Applicability is based on declared
 status and content type, without inspecting a body or assessing redirect
 destinations. Content types are normalized by case and stripped of parameters;
 repeated declarations must agree and be well formed.
@@ -185,10 +193,70 @@ repeated/comma-separated values and conflicts that block framing.
 See the [implementation](../app/plugins/http_security_headers.py) for exact matching.
 These checks do not fully validate CSP, prove security, or assess every response.
 
+## CSP policy checks
+
+Select `csp-policy` (**CSP policy** in the catalog) independently or alongside the
+baseline header checks. It analyzes the same fetched response without additional
+requests. A nonblank header can pass the baseline presence check while the CSP
+policy plugin identifies overly broad script permissions.
+
+| Rule | Covered permission | Severity |
+| --- | --- | --- |
+| `csp-script-sources` | Arbitrary HTTP(S) origins for parser-inserted scripts without nonce/integrity authorization | Medium |
+| `csp-inline-scripts` | Arbitrary inline script elements or inline event handlers | Medium |
+| `csp-eval` | Unrestricted JavaScript string evaluation | Low |
+
+For example, `script-src https: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'none'`
+passes CSP presence and framing, but fails all three policy checks. A policy using
+`script-src 'self'` has no covered policy finding; that does not certify its
+allowlist or application as secure.
+
+The plugin applies the same document-response eligibility as baseline CSP checks,
+including HTML error pages. Missing or blank enforced CSP yields three skipped
+checks; report-only headers do not enforce protection. Multiple policies combine
+restrictively. Fallbacks, first duplicate directives, syntactic nonces/hashes,
+`strict-dynamic`, and a script-blocking CSP sandbox are accounted for. Nonce
+recognition does not measure randomness, reuse, or correspondence with document
+elements. Nonces alone do not suppress broad network sources.
+
+Network-source coverage recognizes `*`, `http:`, `https:`, and global HTTP(S)
+wildcard hosts without path or port constraints. Specific hosts are outside the
+broad-source finding. Unsupported permissions such as `data:`, `blob:`, constrained
+global wildcards, and relevant Trusted Types interactions remain inconclusive
+when no supported restriction or permission settles the covered capability.
+`wasm-unsafe-eval` does not permit JavaScript string evaluation.
+
+Trusted Types requirements and evaluation keyword interactions are assessed across
+the enforced policy set. When enabled, `trusted-types-eval` keeps evaluation
+inconclusive even with other source-list restrictions; a script-blocking sandbox
+remains conclusive. Directives containing non-ASCII text are discarded as browsers
+discard them, while still counting toward the analysis limits.
+
+Analysis is limited to 64 KiB of UTF-8 CSP text, 32 fields, 32 nonblank policies,
+128 directives per policy, and 256 source tokens per directive. Duplicate and
+ignored directives count toward limits. Exceeding any limit returns three
+inconclusive checks and no findings; partial input never certifies a policy.
+
+CSP evidence uses the existing `http-response` kind. It contains the response URL,
+status, document media type, `header: "content-security-policy"`, rule ID,
+`policy_count`, and `observations`. Each observation identifies its one-based
+`policy_index`, `context` (`network-script`, `inline-script`, `script-attribute`,
+or `eval`), effective `directive` (or null), and a closed `condition`:
+`missing-directive`, `wildcard-source`, `http-scheme-source`,
+`https-scheme-source`, `global-host-source`, `unsafe-inline`, or `unsafe-eval`.
+Every reported context has complete policy coverage. Raw policies, nonces, hashes,
+allowlist hostnames, and report destinations are excluded.
+
+Findings describe header permissions. Response bodies and meta-delivered CSP are
+not inspected, and findings do not establish exploitable XSS. Browser probes test
+the supported semantics independently of analyzer expectations. See the
+[CSP3 algorithms](https://www.w3.org/TR/2026/WD-CSP3-20260916/) and
+[script-src reference](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/script-src).
+
 ## Cookie checks
 
-`cookie-security` analyzes every separate `Set-Cookie` field on the single assessed
-response. It emits low-severity configuration findings, not exploit claims:
+`cookie-security` inspects separate `Set-Cookie` fields. Prefix and SameSite
+findings have low severity; declared session-cookie findings have medium severity:
 
 | Check | Reported configuration |
 | --- | --- |
@@ -196,37 +264,34 @@ response. It emits low-severity configuration findings, not exploit claims:
 | `__Secure-` prefix | Missing `Secure` or an HTTP response URL |
 | `__Host-` prefix | Missing `Secure`, HTTP, a nonempty `Domain`, or missing explicit `Path=/` |
 
-Each field can produce one finding per violated rule; failed requirements for a
-prefix are combined. Attribute names, SameSite values, and prefix matching are
-case-insensitive; findings preserve the original cookie name. Repeated cookie
-names are inspected separately. The parser retains only `Secure`, `SameSite`,
-`Domain`, and `Path`. It ignores attribute values longer than 1,024 bytes after
-trimming spaces and tabs; an ignored duplicate never replaces an earlier accepted
-value. `Secure` counts by presence after this length check, and the last retained
-value wins for the other attributes. Other attributes are discarded. Malformed
-fields are skipped without failing the run, including malformed content in
-discarded attributes.
+Each field can produce one finding per violated rule; prefix failures are combined.
+Attribute names, SameSite values, and prefixes are case-insensitive; cookie names
+are preserved and repeated fields inspected separately. The parser retains
+`Secure`, `HttpOnly`, `SameSite`, `Domain`, and `Path`, ignoring attribute values
+over 1,024 bytes. Flags count by presence; other attributes use the last retained
+value. Malformed fields are skipped.
 
 Findings identify cookie names and explain remediation. Stored evidence contains
 only names, rule IDs, the response URL, and normalized requirement values or
 booleans. Cookie values and complete fields are excluded from findings, evidence,
 and diagnostics. Retrieve evidence separately using the endpoint above.
 
-There are no general warnings for absent `Secure`, `HttpOnly`, or explicit
-`SameSite`, and no login, replay, cookie-jar, newer-prefix, or full browser-policy
-validation. Zero findings does not establish cookie security. The owned demo's
+Declared `session_cookies` also require `Secure` and `HttpOnly`; use
+`expected_cookies` when absence must block coverage. Unrelated cookies receive
+no general warnings for missing flags. Login, replay, cookie-jar, newer-prefix,
+and full browser-policy validation are outside these checks. The owned demo's
 `/cookies` path emits four fields: one ordinary cookie and three violations.
 Selecting both plugins there produces six findings (three per plugin).
 
 ## Cancellation and audit
 
 `POST /api/v1/assessments/{id}/cancel` returns `id` and `status`:
-queued work cancels immediately (200; its assessment result may remain null);
+queued work cancels immediately (200 with a terminal result);
 active work returns 202 / `cancelling`. Pending repeats are idempotent; terminal
 runs return 409. Continue polling nonterminal states, including recovery.
 
 Cancellation interrupts the runner and verifies cleanup before `cancelled`.
-Execution timeout fails after cleanup. [Crash recovery](architecture.md#recovery)
+Execution timeout fails after cleanup. [Docker crash recovery](architecture.md#recovery)
 can retry once after cleanup and fresh boundary and image checks; results expose `attempt`.
 
 `GET /api/v1/projects/{id}/audit-events` returns chronological events. Normal success

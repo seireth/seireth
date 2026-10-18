@@ -3,10 +3,11 @@
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
-from .base import Plugin, PluginManifest
+from .base import CheckOutcome, Plugin, PluginManifest, RuleApplicability
 from .cookie_security import PLUGIN as COOKIE_SECURITY_PLUGIN
+from .csp_policy import PLUGIN as CSP_POLICY_PLUGIN
 from .http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
 
 
@@ -22,9 +23,22 @@ class PluginRegistry:
                 raise ValueError("registered plugins must satisfy the plugin contract")
             try:
                 manifest = PluginManifest.model_validate(plugin.manifest, strict=True)
+                rules = TypeAdapter(dict[str, RuleApplicability]).validate_python(
+                    dict(plugin.rules), strict=True
+                )
+                for rule in rules:
+                    CheckOutcome(
+                        rule_id=rule, status="skipped", reason="Registered rule"
+                    )
             except (TypeError, ValidationError) as exc:
                 raise ValueError("registered plugin has an invalid manifest") from exc
-            validated_plugins.append(Plugin(manifest=manifest, analyze=plugin.analyze))
+            validated_plugins.append(
+                Plugin(
+                    manifest=manifest,
+                    analyze=plugin.analyze,
+                    rules=MappingProxyType(rules),
+                )
+            )
         plugins = tuple(validated_plugins)
         ids = [plugin.manifest.id for plugin in plugins]
         if len(ids) != len(set(ids)):
@@ -45,14 +59,16 @@ class PluginRegistry:
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate plugins are not allowed")
         if any(plugin_id not in self._by_id for plugin_id in ids):
-            raise ValueError("unknown or inactive plugin")
+            raise ValueError("unknown plugin")
         return [self._by_id[plugin_id] for plugin_id in ids]
 
     def catalog(self) -> list[dict]:
         return [
-            plugin.manifest.model_dump(include={"id", "name", "description"})
+            {**plugin.manifest.model_dump(), "rules": dict(plugin.rules)}
             for plugin in self.plugins
         ]
 
 
-registry = PluginRegistry(plugins=(SECURITY_HEADERS_PLUGIN, COOKIE_SECURITY_PLUGIN))
+registry = PluginRegistry(
+    plugins=(SECURITY_HEADERS_PLUGIN, COOKIE_SECURITY_PLUGIN, CSP_POLICY_PLUGIN)
+)

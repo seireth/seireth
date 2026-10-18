@@ -30,10 +30,16 @@ jobs:
           for file in README.md CONTRIBUTING.md SECURITY.md LICENSE docs/{getting-started,architecture,configuration,assessments,plugins,security-model,roadmap}.md docs/assets/seireth-logo.png; do
             test -f "$file" || { echo "::error file=$file::Required file is missing"; exit 1; }
           done
-          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -vE '(^|/)\.env\.example$'; then
-            echo "::error::A non-example environment file is tracked"
-            exit 1
-          fi
+          git ls-files -z | while IFS= read -r -d '' file; do
+            case "${file##*/}" in
+              .env.example) ;;
+              .env|.env.*)
+                echo "::error::A non-example environment file is tracked"
+                printf '%q\n' "$file"
+                exit 1
+                ;;
+            esac
+          done
 
   quality:
     name: Python quality
@@ -47,7 +53,7 @@ jobs:
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: "0.12.23"
-      - run: uv sync --locked --extra quality --no-build --no-install-project
+      - run: uv sync --locked --only-group quality --no-build
       - run: uv run --no-sync --no-build python -m ruff check --output-format=github .
       - run: uv run --no-sync --no-build python -m ruff format --check .
 
@@ -76,7 +82,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: low

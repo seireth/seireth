@@ -1,9 +1,8 @@
 """Bounded local Docker image inspection; never build or pull images."""
 
 import json
+import re
 import subprocess
-
-from ..core.config import settings
 
 
 class ImageUnavailable(ValueError):
@@ -15,6 +14,8 @@ class DockerUnavailable(RuntimeError):
 
 
 def _command(args):
+    from ..core.config import settings
+
     try:
         return subprocess.run(
             ["docker", *args],
@@ -27,20 +28,35 @@ def _command(args):
 
 
 def require_local_image(image):
-    if settings.sandbox_backend != "docker":
-        return
     result = _command(["image", "inspect", "--format", "{{.Id}}", image])
     if result.returncode:
-        if _command(["info", "--format", "{{.ServerVersion}}"]).returncode:
-            raise DockerUnavailable("Docker image inspection unavailable")
-        raise ImageUnavailable(
-            "Target image is not available locally; build or pull it first"
-        )
+        _missing_image()
+
+
+def _missing_image():
+    if _command(["info", "--format", "{{.ServerVersion}}"]).returncode:
+        raise DockerUnavailable("Docker image inspection unavailable")
+    raise ImageUnavailable(
+        "Target image is not available locally; build or pull it first"
+    )
+
+
+def inspect_image(image):
+    result = _command(["image", "inspect", image])
+    if result.returncode:
+        _missing_image()
+    try:
+        metadata = json.loads(result.stdout)[0]
+        if not isinstance(metadata["Id"], str) or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", metadata["Id"]
+        ):
+            raise ValueError()
+        return metadata
+    except ValueError, KeyError, IndexError, TypeError:
+        raise DockerUnavailable("Docker returned invalid image metadata") from None
 
 
 def local_images():
-    if settings.sandbox_backend != "docker":
-        return []
     result = _command(["image", "ls", "--no-trunc", "--format", "{{json .}}"])
     if result.returncode:
         raise DockerUnavailable("Docker image discovery unavailable")

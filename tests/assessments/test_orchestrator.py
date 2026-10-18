@@ -1,164 +1,131 @@
-"""Shared fetching, plugin execution, and cleanup."""
+"""Route execution isolates plugins and publishes routes atomically."""
 
 import pytest
 
-from app.assessments.orchestrator import execute
-from app.assessments.sandbox import CleanupOutcome
-from app.plugins.base import HttpObservation, PluginFinding, PluginResponse
-from app.plugins.http_security_headers import PLUGIN as SECURITY_HEADERS_PLUGIN
-
-URL = "http://demo-app:8080/"
+from app.assessments import execution, workflows
+from app.plugins.base import PluginFinding, PluginResponse
+from app.plugins.registry import PluginRegistry
+from tests.sessions import FakeSession, frozen_plan
 
 
 @pytest.fixture
-def recording_sandbox():
+def run_plan(monkeypatch, mock_images, execution_context):
+    def run(plugins, *, routes=1, cleanup=None):
+        monkeypatch.setattr(workflows, "registry", PluginRegistry(tuple(plugins)))
+        snapshot = frozen_plan()
+        route = snapshot["routes"][0]
+        route["plugins"] = [plugin.manifest.id for plugin in plugins]
+        snapshot["routes"] = [{**route, "key": str(index)} for index in range(routes)]
+        session = FakeSession(
+            snapshot, context=execution_context, persist_journal=lambda *a, **kw: None
+        )
+        if cleanup is not None:
+            session.cleanup = cleanup
+        saved = []
+        outcome = workflows.execute_plan(
+            session,
+            snapshot,
+            execution_context,
+            lambda data, results: saved.append(data),
+        )
+        return outcome, saved
+
+    return run
+
+
+def test_plugins_receive_independent_observations(run_plan, make_plugin):
     calls = []
 
-    class Sandbox:
-        observation = HttpObservation(
-            status_code=200,
-            url=URL,
-            headers={
-                "Content-Type": ["text/html"],
-                "Set-Cookie": ["theme=synthetic-cookie"],
-            },
+    def first(observation, context):
+        observation.headers["content-type"].append("application/json")
+        calls.append("first")
+        return PluginResponse(findings=(), checks=())
+
+    def second(observation, context):
+        assert observation.headers == {"content-type": ["text/html"]}
+        calls.append("second")
+        return PluginResponse(findings=(), checks=())
+
+    outcome, saved = run_plan(
+        [make_plugin("first", first), make_plugin("second", second)]
+    )
+    assert outcome.status == "completed" and outcome.cleanup_verified
+    assert calls == ["first", "second"]
+    assert len(saved) == 1 and saved[0]["status"] == "completed"
+    assert [plugin["id"] for plugin in saved[0]["plugins"]] == calls
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "crash",
+        "invalid",
+        "signature",
+        "missing-checks",
+        "blank-description",
+        "blank-remediation",
+    ],
+)
+def test_invalid_plugin_response_fails_routes_and_cleans(
+    run_plan, make_plugin, mode, caplog
+):
+    def broken(observation, context):
+        if mode == "crash":
+            raise RuntimeError("secret-runtime-value")
+        if mode == "invalid":
+            return object()
+        if mode == "missing-checks":
+            return PluginResponse.model_construct(findings=())
+        values = dict(
+            title="Example",
+            severity="low",
+            description="Example",
+            remediation="Fix",
+            evidence={},
+        )
+        values[mode.removeprefix("blank-")] = " \t\n"
+        return PluginResponse.model_construct(
+            findings=(PluginFinding.model_construct(**values),), checks=()
         )
 
-        def execute(self, url):
-            calls.append("fetch")
-            assert str(self.observation.url) == url
-            return self.observation
-
-        def cleanup(self):
-            calls.append("cleanup")
-            return CleanupOutcome(True)
-
-    return Sandbox(), calls
+    analyzer = (lambda: None) if mode == "signature" else broken
+    outcome, saved = run_plan([make_plugin("broken", analyzer)], routes=2)
+    assert outcome.status == "failed" and outcome.cleanup_verified
+    assert outcome.error_kind == "plugin_error"
+    assert all(row["status"] == "failed" and "plugins" not in row for row in saved)
+    assert "secret-runtime-value" not in caplog.text
 
 
-def test_multiple_plugins_share_one_fetch_but_not_mutable_observations(
-    recording_sandbox, make_plugin, execution_context
+def test_analyzer_overrun_discards_route_and_cleans(
+    run_plan, make_plugin, execution_context, monkeypatch
 ):
-    sandbox, calls = recording_sandbox
+    monkeypatch.setattr(execution, "monotonic", lambda: 0)
+    execution_context.deadline = 1
 
-    def first(observation):
-        observation.headers["set-cookie"].append("mutated=synthetic-cookie")
-        calls.append("first")
-        return PluginResponse(findings=())
+    def delayed(observation, context):
+        monkeypatch.setattr(execution, "monotonic", lambda: 1)
+        return PluginResponse(findings=(), checks=())
 
-    def second(observation):
-        assert observation.headers["set-cookie"] == ["theme=synthetic-cookie"]
-        calls.append("second")
-        return PluginResponse(findings=())
-
-    plugins = [make_plugin("first", first), make_plugin("second", second)]
-    outcome = execute(sandbox, URL, execution_context, plugins)
-    assert outcome.status == "completed"
-    assert [item.plugin_id for item in outcome.plugin_results] == ["first", "second"]
-    assert calls == ["fetch", "first", "second", "cleanup"]
-    assert sandbox.observation.headers == {
-        "content-type": ["text/html"],
-        "set-cookie": ["theme=synthetic-cookie"],
-    }
-
-
-@pytest.mark.parametrize("mode", ["raises", "invalid-response"])
-def test_plugin_error_fails_attempt_but_still_cleans_up(
-    mode, recording_sandbox, make_plugin, execution_context, caplog
-):
-    sandbox, calls = recording_sandbox
-
-    observations = []
-
-    def broken(observation):
-        observations.append(observation)
-        calls.append("broken")
-        if mode == "raises":
-            raise RuntimeError("plugin failed")
-        return object()
-
-    outcome = execute(sandbox, URL, execution_context, [make_plugin("broken", broken)])
-    assert outcome.status == "failed"
+    outcome, saved = run_plan([make_plugin("delayed", delayed)], routes=2)
+    assert outcome.status == outcome.execution_status == "failed"
+    assert outcome.error_kind == "timeout" and outcome.failed_plugin is None
     assert outcome.cleanup_verified
-    assert outcome.plugin_results == []
-    assert calls == ["fetch", "broken", "cleanup"]
-    assert len(observations) == 1
-    assert str(observations[0].url) == URL
-    assert observations[0].headers == {
-        "content-type": ["text/html"],
-        "set-cookie": ["theme=synthetic-cookie"],
-    }
-    assert (
-        "plugin broken returned an invalid response"
-        if mode == "invalid-response"
-        else "plugin failed"
-    ) in caplog.text
+    assert len(saved) == 2 and all(row["status"] == "unattempted" for row in saved)
 
 
-@pytest.mark.parametrize("field", ["description", "remediation"])
-@pytest.mark.parametrize("bypass_validation", [False, True])
-def test_blank_finding_fails_only_its_attempt_and_cleans_up(
-    field,
-    bypass_validation,
-    recording_sandbox,
-    finding_payload,
-    make_plugin,
-    execution_context,
-    caplog,
-):
-    sandbox, calls = recording_sandbox
-    observations = []
-
-    def broken(observation):
-        observations.append(observation)
-        calls.append("broken")
-        values = finding_payload
-        values[field] = " \t\n\u2003"
-        if bypass_validation:
-            finding = PluginFinding.model_construct(**values)
-            return PluginResponse.model_construct(findings=(finding,))
-        return PluginResponse(findings=(PluginFinding(**values),))
-
-    outcome = execute(sandbox, URL, execution_context, [make_plugin("broken", broken)])
-    assert outcome.status == "failed"
-    assert outcome.cleanup_verified
-    assert outcome.plugin_results == []
-    assert calls == ["fetch", "broken", "cleanup"]
-    assert len(observations) == 1
-    assert str(observations[0].url) == URL
-    assert observations[0].headers == {
-        "content-type": ["text/html"],
-        "set-cookie": ["theme=synthetic-cookie"],
-    }
-    assert (
-        "plugin broken returned an invalid response" if bypass_validation else field
-    ) in caplog.text
-
-    other = execute(sandbox, URL, execution_context, [SECURITY_HEADERS_PLUGIN])
-    assert other.status == "completed"
-    assert other.cleanup_verified
-    assert len(other.plugin_results[0].findings) == 3
-    assert calls == ["fetch", "broken", "cleanup", "fetch", "cleanup"]
-
-
-def test_cleanup_exception_fails_successful_analysis(
-    recording_sandbox, make_plugin, execution_context, monkeypatch, caplog
-):
-    sandbox, calls = recording_sandbox
-
-    def analyze(observation):
-        calls.append("analyze")
-        return PluginResponse(findings=())
-
+def test_cleanup_exception_blocks_completed_route(run_plan, make_plugin):
     def cleanup():
-        calls.append("cleanup")
-        raise OSError("synthetic cleanup failure")
+        raise OSError("secret-cleanup-value")
 
-    monkeypatch.setattr(sandbox, "cleanup", cleanup)
-    outcome = execute(sandbox, URL, execution_context, [make_plugin("valid", analyze)])
-    assert calls == ["fetch", "analyze", "cleanup"]
-    assert outcome.status == "failed"
-    assert not outcome.cleanup_verified
+    outcome, saved = run_plan(
+        [
+            make_plugin(
+                "valid",
+                lambda observation, context: PluginResponse(findings=(), checks=()),
+            )
+        ],
+        cleanup=cleanup,
+    )
+    assert saved[0]["status"] == "completed"
+    assert outcome.status == "failed" and not outcome.cleanup_verified
     assert outcome.cleanup_reason == "cleanup could not be completed"
-    assert outcome.error == "sandbox cleanup could not be verified"
-    assert "synthetic cleanup failure" in caplog.text

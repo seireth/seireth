@@ -12,8 +12,8 @@ Native and Docker servers use `app.main:app`.
 `app/core/` contains configuration and shared constraints. `app/persistence/`
 contains database sessions, models, and Alembic migrations. `app/assessments/`
 contains policy, execution, workers, and sandbox lifecycle management.
-`app/cli/` implements development commands and workflow verification;
-`app/__main__.py` delegates to it, preserving `python -m app` commands.
+`app/cli/` implements development commands and workflow verification, invoked
+with `python -m app.cli.commands`.
 
 Vite builds `app/dashboard/dist/`; only those assets join the backend in the Python
 package and final container. `/` redirects to `/dashboard/`, where HTML fallback supports
@@ -38,13 +38,17 @@ migration revisions. Follow [startup](getting-started.md) and
    a durable attempt, resource names, and operation journal before Docker commands.
    Creation intent precedes each command; resource IDs are committed before
    container startup. Creation, startup, and cleanup removal are separate operations.
-3. The immutable registry resolves plugins in request order. The orchestrator
-   fetches once through the sandbox, which validates an observation containing the
-   original authorized URL and ordered repeated headers. The orchestrator gives
-   each plugin an independent deep copy and owns cleanup. Findings remain buffered
-   until execution and cleanup succeed.
-4. Finalization locks the assessment and atomically commits results, findings,
-   evidence, attempt outcome, and terminal audit event.
+3. One Docker bundle or website session fetches the ordered routes using the shared
+   HTTP observation contract. Every selected plugin receives an independent copy
+   and the same immutable analysis context. After every selected plugin succeeds,
+   a short transaction atomically records that route, normalized findings,
+   evidence, and its audit event. Incomplete routes publish no findings.
+4. Finalization locks the assessment and commits the execution outcome, verified
+   cleanup, coverage, release verdict, comparison, and terminal audit event.
+   Publication requires a terminal attempt and verified cleanup. Failed or
+   cancelled batches may then expose labelled findings from completed routes.
+   Finding payloads live only in normalized finding/evidence tables; route
+   summaries derive their counts from those records.
 
 Evidence has a required `finding_id`; assessment and project ownership derive
 from that finding.
@@ -57,14 +61,17 @@ from that finding.
 
 Startup and background reconciliation recover orphaned nonterminal attempts after
 crashes, shutdown, or transient finalization failures, including while the API
-remains running. One retry is allowed (two attempts total), requiring verified
+remains running. Docker permits one retry (two attempts total), requiring verified
 cleanup, valid target boundaries, and a locally available image. Cleanup itself
 requires no target image, so removing an image cannot prevent resource removal. Persisted resource names and labels survive
-crashes; journal ownership tokens fence stale workers.
+crashes; journal ownership tokens fence stale workers. Websites fail interrupted
+execution without replaying external requests; closure acknowledgement or verified
+process exit proves HTTP cleanup.
 
 Finalized cancellations and failures, including deadline, policy, and plugin
 errors, are not retried. Later reconciliation can resolve a failed assessment's
-pending cleanup without re-executing its plugins.
+pending cleanup without re-executing its plugins or turning the failure into a pass.
+See [workflow configuration and coverage](workflows.md) for route plans and profiles.
 
 A separate thread revisits failed cleanup and orphaned attempts after startup,
 waiting 30 seconds between passes without blocking readiness or unrelated work.

@@ -7,7 +7,7 @@ COPY app/dashboard ./
 COPY docs/assets /src/docs/assets
 RUN npm run build
 
-FROM python:3.14-slim AS python-build
+FROM python:3.14.8-slim AS python-build
 COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
 ENV UV_PYTHON_DOWNLOADS=never
 WORKDIR /app
@@ -17,7 +17,14 @@ COPY app app
 COPY --from=dashboard /src/app/dashboard/dist app/dashboard/dist
 RUN uv sync --locked --no-dev --no-editable --no-cache
 
-FROM python:3.14-slim
+FROM python:3.14.8-slim AS runner
+ENV PATH="/app/.venv/bin:$PATH"
+WORKDIR /app
+COPY --from=python-build /app/.venv /app/.venv
+USER 65532:65532
+ENTRYPOINT ["python", "-m", "app.assessments.runner"]
+
+FROM python:3.14.8-slim AS api
 ENV PATH="/app/.venv/bin:$PATH"
 WORKDIR /app
 RUN apt-get update \

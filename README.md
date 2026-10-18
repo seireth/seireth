@@ -19,8 +19,9 @@
 </p>
 
 SEIRETH is a local, single-operator GUI and API for passive HTTP header and cookie
-security checks. Docker assessments inspect disposable instances of locally available
-images. Findings, evidence, and audit events are stored in PostgreSQL 18, and
+security checks. Assess an existing website or a disposable Docker application
+with declared companion services. Route plans record response expectations,
+coverage, evidence, and a strict release verdict in PostgreSQL 18.
 SEIRETH verifies cleanup after execution.
 Finished assessments can be downloaded as versioned JSON or self-contained HTML
 with findings, remediation, validated evidence, and cleanup status.
@@ -29,15 +30,17 @@ with findings, remediation, validated evidence, and cleanup status.
 
 ```mermaid
 flowchart LR
-    A[Register image & base URL] --> B[Queue assessment]
-    B --> C[Run sandbox checks]
-    C --> D[Destroy & verify cleanup]
-    D --> E[Record outcome]
+    A[Register Docker or website target] --> B[Freeze route plan]
+    B --> C[Fetch and analyze responses]
+    C --> D[Close or destroy resources and verify cleanup]
+    D --> E[Persist report and release verdict]
 ```
 
-Targets bound requests by project, origin, and path. Supply a local image and base
-URL, then choose a response URL and plugins. Docker provides a private network,
-restricted target, and runner; it never pulls assessment images automatically.
+Targets bound requests by project, origin, and path. Choose routes and plugins;
+runtime references supply authentication. Docker bundles use an internal network,
+owned volumes, and pinned local images. Website connections validate and pin
+destination addresses while preserving Host and TLS identity.
+See [Docker and website workflows](docs/workflows.md) for reproducible examples.
 
 ## Checks
 
@@ -50,8 +53,9 @@ restricted target, and runner; it never pulls assessment images automatically.
 ## Getting started
 
 Follow [Getting started](docs/getting-started.md) for setup and startup commands.
-The example configuration selects `inmemory`, which simulates responses. Real
-checks require Docker and API access to its privileged socket. Open `/dashboard/`
+Website checks run natively; Docker checks require prepared images and access to
+the Docker socket. Both workflows request real target responses.
+Open `/dashboard/`
 on the API address to use the GUI.
 
 ## Documentation
@@ -61,6 +65,7 @@ on the API address to use the GUI.
 | [Getting started](docs/getting-started.md) | Run, verify, stop, and troubleshoot                |
 | [Configuration](docs/configuration.md)     | Required settings, defaults, and Compose overrides |
 | [Assessments](docs/assessments.md)         | Submit requests and interpret results              |
+| [Docker and website workflows](docs/workflows.md) | Configure staging, service bundles, route coverage, and release gates |
 | [Architecture](docs/architecture.md)       | Understand execution, persistence, and recovery    |
 | [Plugin development](docs/plugins.md)      | Add approved checks                                |
 | [Security model](docs/security-model.md)   | Understand boundaries and investigate cleanup      |
