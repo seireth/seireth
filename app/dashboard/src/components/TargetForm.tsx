@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { post } from "../api/client";
 import { useResource } from "../api/queries";
-import type { TargetImages } from "../api/types";
+import type { Profiles, TargetImages } from "../api/types";
 import { ErrorMessage, FieldError } from "./common";
 
 export default function TargetForm({
@@ -12,7 +12,12 @@ export default function TargetForm({
   projectId: string;
   onCreated?: (id: string) => void;
 }) {
-  const images = useResource<TargetImages>("/target-images");
+  const [kind, setKind] = useState<"docker" | "website">("docker");
+  const images = useResource<TargetImages>("/target-images", kind === "docker");
+  const profiles = useResource<Profiles>("/runtime/profiles");
+  const [launchProfile, setLaunchProfile] = useState("");
+  const [networkProfile, setNetworkProfile] = useState("");
+  const [trustProfile, setTrustProfile] = useState("");
   const client = useQueryClient();
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
@@ -23,7 +28,11 @@ export default function TargetForm({
         project_id: projectId,
         name: name.trim(),
         url,
-        image: image.trim(),
+        kind,
+        image: kind === "docker" ? image.trim() : null,
+        launch_profile: kind === "docker" ? launchProfile || null : null,
+        network_profile: kind === "website" ? networkProfile || null : null,
+        trust_profile: trustProfile || null,
       }),
     onSuccess: ({ id }) => {
       void client.invalidateQueries({
@@ -41,6 +50,9 @@ export default function TargetForm({
         if (!create.isPending) create.mutate();
       }}
     >
+      <label>Assessment source<select value={kind} onChange={e => setKind(e.target.value as "docker" | "website")}>
+        <option value="docker">Docker</option><option value="website">Existing website</option>
+      </select></label>
       <label>
         Target name
         <input
@@ -62,7 +74,7 @@ export default function TargetForm({
         />
         <FieldError error={create.error} name="url" />
       </label>
-      <label>
+      {kind === "docker" && <label>
         Docker image
         <input
           required
@@ -78,20 +90,28 @@ export default function TargetForm({
           ))}
         </datalist>
         <FieldError error={create.error} name="image" />
-      </label>
+      </label>}
+      {kind === "docker" && <label>Launch profile<select value={launchProfile} onChange={e => setLaunchProfile(e.target.value)}>
+        <option value="">Self-contained application</option>{Object.keys(profiles.data?.launches ?? {}).map(name => <option key={name}>{name}</option>)}
+      </select></label>}
+      {kind === "website" && <label>Private staging permission<select value={networkProfile} onChange={e => setNetworkProfile(e.target.value)}>
+        <option value="">Public destinations only</option>{Object.keys(profiles.data?.networks ?? {}).map(name => <option key={name}>{name}</option>)}
+      </select></label>}
+      <label>Certificate trust<select value={trustProfile} onChange={e => setTrustProfile(e.target.value)}>
+        <option value="">System trust</option>{(profiles.data?.trusts ?? []).map(name => <option key={name}>{name}</option>)}
+      </select></label>
       <p className="hint">
-        Docker checks inspect a disposable instance of this image. The
-        registered URL defines which response URLs you can assess.
+        {kind === "docker" ? "Docker checks inspect a disposable instance of this image." : "Website checks request the existing deployment."} The registered URL defines which response URLs you can assess.
       </p>
-      <button type="button" className="subtle" disabled={images.isFetching}
+      {kind === "docker" && <button type="button" className="subtle" disabled={images.isFetching}
         onClick={() => { void images.refetch(); }}>
         Refresh images
-      </button>
-      <ErrorMessage error={images.error} retry={images.refetch} />
+      </button>}
+      {kind === "docker" && <ErrorMessage error={images.error} retry={images.refetch} />}
       <ErrorMessage error={create.error} />
       <button
         type="submit"
-        disabled={create.isPending || !image.trim() || !name.trim() || !url.trim()}
+        disabled={create.isPending || (kind === "docker" && !image.trim()) || !name.trim() || !url.trim()}
       >
         {create.isPending ? "Registering…" : "Register target"}
       </button>

@@ -1,315 +1,271 @@
-from datetime import datetime, timezone
+"""Reports read current persisted results without rerunning or inventing data."""
+
+from copy import deepcopy
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import select
 
+from app.assessments.worker import AssessmentDispatcher
+from app.assessments.workflows import refresh_result
 from app.persistence import models
 from tests.api.helpers import snapshot
-from tests.header_evidence import header_evidence
 
 
-def save_result(database, assessment_id, result, *, pending=False):
+@pytest.fixture
+def completed(database, assessment_graph, fake_session):
+    graph = assessment_graph()
+    AssessmentDispatcher()._run(graph.assessment.id, __import__("threading").Event())
     with database.SessionLocal() as db:
-        item = db.get(models.Assessment, assessment_id)
+        assert db.get(models.Assessment, graph.assessment.id).status == "completed"
+    return graph
+
+
+def mutate_result(database, graph, change):
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, graph.assessment.id)
+        result = deepcopy(item.result)
+        change(result)
         item.result = result
-        item.cleanup_pending = pending
         db.commit()
 
 
-def test_report_reads_the_authorized_project_once(
-    read_client, database, assessment_graph
-):
-    graph = assessment_graph(status="completed")
-    project_reads = []
-
-    def record_select(connection, cursor, statement, parameters, context, executemany):
-        if statement.lstrip().startswith("SELECT") and "FROM projects" in statement:
-            project_reads.append(statement)
-
-    # The HTTP dependency opens a fresh session; fixture objects cannot cache its reads.
-    event.listen(database.engine, "before_cursor_execute", record_select)
-    try:
-        response = read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report")
-    finally:
-        event.remove(database.engine, "before_cursor_execute", record_select)
-
-    assert response.status_code == 200
-    assert response.json()["project"]["id"] == graph.project.id
-    assert len(project_reads) == 1
-
-
-def test_report_matches_existing_reads_and_is_ordered_read_only(
-    read_client, database, assessment_graph, evidence_row, monkeypatch
-):
-    graph = assessment_graph(
-        status="completed", plugins=["cookie-security", "http-security-headers"]
-    )
-    first_finding, _ = evidence_row(graph.assessment.id, identity="z-evidence")
-    second_finding, _ = evidence_row(graph.assessment.id, identity="a-evidence")
-    other = assessment_graph(status="completed")
-    evidence_row(other.assessment.id, identity="other-evidence")
-    result = {
-        "sandbox_backend": "inmemory",
-        "attempt": 1,
-        "completed_at": models.now().isoformat(),
-        "cleanup_verified": True,
-        "cleanup_reason": None,
-        "finding_count": 2,
-        "response": {
-            "status_code": 200,
-            "media_type": "text/html",
-            "raw": "synthetic-secret",
-        },
-        "plugins": [
-            {"id": "cookie-security", "finding_count": 0},
-            {
-                "id": "http-security-headers",
-                "finding_count": 2,
-                "checks": [
-                    {
-                        "rule_id": "content-security-policy",
-                        "status": "failed",
-                        "reason": "Missing policy.",
-                        "raw": "synthetic-secret",
-                    }
-                ],
-                "raw": "synthetic-secret",
-            },
-        ],
-        "raw": "synthetic-secret",
-    }
-    save_result(database, graph.assessment.id, result)
-    from app.assessments.worker import dispatcher
-
-    def unexpected(*args, **kwargs):
-        raise AssertionError("report read attempted assessment work")
-
-    monkeypatch.setattr(dispatcher, "submit", unexpected)
-    monkeypatch.setattr(dispatcher, "cancel", unexpected)
+def test_report_matches_reads_and_does_not_write(read_client, database, completed):
+    base = f"/api/v1/assessments/{completed.assessment.id}"
     before = snapshot(database)
-    path = f"/api/v1/assessments/{graph.assessment.id}"
-    response = read_client.get(path + "/report")
-    assert response.status_code == 200
-    assert response.headers["cache-control"] == "no-store"
+    response = read_client.get(base + "/report")
+    assert response.status_code == 200, response.text
     report = response.json()
     assert report["schema_version"] == 1
-    assert datetime.fromisoformat(
-        report["generated_at"]
-    ).utcoffset() == timezone.utc.utcoffset(None)
-    assert (
-        report["project"]
-        == read_client.get(f"/api/v1/projects/{graph.project.id}").json()
+    assert report["assessment"] == read_client.get(base).json()
+    assert report["findings"] == read_client.get(base + "/results").json()["findings"]
+    assert report["evidence"] == read_client.get(base + "/evidence").json()["evidence"]
+    assert len(report["findings"]) == len(report["evidence"]) == 3
+    assert all(
+        finding["route_result_id"] == report["assessment"]["result"]["routes"][0]["id"]
+        for finding in report["findings"]
     )
     assert (
-        report["target"] == read_client.get(f"/api/v1/targets/{graph.target.id}").json()
+        "response" not in report["assessment"]["result"]
+        and "plugins" not in report["assessment"]["result"]
     )
-    assessment = read_client.get(path).json()
-    assert {k: v for k, v in report["assessment"].items() if k != "result"} == {
-        k: v for k, v in assessment.items() if k != "result"
-    }
-    results = read_client.get(path + "/results").json()
-    assert report["findings"] == sorted(results["findings"], key=lambda f: f["id"])
-    assert {f["id"] for f in report["findings"]} == {first_finding, second_finding}
-    assert report["evidence"] == read_client.get(path + "/evidence").json()["evidence"]
-    assert "synthetic-secret" not in response.text
-    assert report["assessment"]["plugins"] == [
-        "cookie-security",
-        "http-security-headers",
-    ]
-    assert "checks" not in report["assessment"]["result"]["plugins"][0]
-    assert report["assessment"]["result"]["plugins"][1]["checks"][0] == {
-        "rule_id": "content-security-policy",
-        "status": "failed",
-        "reason": "Missing policy.",
-    }
+    assert response.headers["cache-control"] == "no-store"
     assert snapshot(database) == before
 
 
-@pytest.mark.parametrize("status", ["completed", "failed", "cancelled"])
-def test_terminal_reports_preserve_absent_results(
-    read_client, database, assessment_graph, status
+def test_report_uses_frozen_target_after_registration_changes(
+    read_client, database, completed
 ):
-    graph = assessment_graph(status=status)
-    report = read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report").json()
-    assert report["assessment"]["status"] == status
-    assert report["assessment"]["result"] is None
+    with database.SessionLocal() as db:
+        target = db.get(models.Target, completed.target.id)
+        target.name, target.url, target.image = (
+            "Changed",
+            "http://different.test/",
+            "other:local",
+        )
+        db.commit()
+    report = read_client.get(
+        f"/api/v1/assessments/{completed.assessment.id}/report"
+    ).json()
+    assert report["target"] == completed.assessment.plan_snapshot["target"]
+
+
+@pytest.mark.parametrize("status", ["running", "failed"])
+def test_corrupt_journal_preserves_provenance_and_failure(
+    read_client, database, completed, status
+):
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, completed.assessment.id)
+        attempt = db.scalar(
+            select(models.Attempt).where(models.Attempt.assessment_id == item.id)
+        )
+        item.status, item.cleanup_pending = status, True
+        item.result = {
+            **item.result,
+            "error": "original execution failure",
+            "execution_outcome": "failed",
+        }
+        attempt.operation_journal = {}
+        execution = deepcopy(attempt.execution_metadata)
+        db.commit()
+    dispatcher = AssessmentDispatcher()
+    dispatcher.recover(include_failed_cleanup=True)
+    response = read_client.get(f"/api/v1/assessments/{completed.assessment.id}/report")
+    assert response.status_code == 200, response.text
+    report = response.json()
+    result = report["assessment"]["result"]
+    assert result["execution"] == execution
+    assert result["error"] == "original execution failure"
+    assert (
+        result["cleanup_verified"] is False and report["assessment"]["cleanup_pending"]
+    )
+    assert result["verdict"]["status"] == "blocked"
     assert report["findings"] == report["evidence"] == []
 
 
-def test_reports_reflect_reconciliation_without_certifying_cleanup(
-    read_client, database, assessment_graph
-):
-    graph = assessment_graph(status="failed")
-    path = f"/api/v1/assessments/{graph.assessment.id}/report"
-    result = {
-        "error": "Execution failed",
-        "cleanup_verified": False,
-        "cleanup_reason": "Unknown creation outcome",
-    }
-    save_result(database, graph.assessment.id, result, pending=True)
-    pending = read_client.get(path).json()
-    assert pending["assessment"]["cleanup_pending"] is True
-    assert pending["assessment"]["result"] == result
-    save_result(
-        database,
-        graph.assessment.id,
-        {**result, "cleanup_verified": True, "cleanup_reason": None},
-    )
-    reconciled = read_client.get(path).json()
-    assert reconciled["assessment"]["status"] == "failed"
-    assert reconciled["assessment"]["cleanup_pending"] is False
-    assert reconciled["assessment"]["result"]["cleanup_verified"] is True
-    assert reconciled["generated_at"] > pending["generated_at"]
-
-
 @pytest.mark.parametrize("status", ["queued", "running", "cancelling", "recovering"])
-def test_unfinished_reports_are_rejected_after_authorization(
-    read_client, assessment_graph, status
+def test_unfinished_reports_are_rejected(
+    read_client, database, assessment_graph, status
 ):
     graph = assessment_graph(status=status)
     assert (
         read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report").status_code
         == 409
     )
-    denied = assessment_graph(status=status, owner="other-operator")
+
+
+def test_queued_cancellation_reports_without_an_attempt(
+    read_client, database, assessment_graph
+):
+    graph = assessment_graph()
+    base = f"/api/v1/assessments/{graph.assessment.id}"
+    assert read_client.post(base + "/cancel").status_code == 200
+    report = read_client.get(base + "/report").json()
+    result = report["assessment"]["result"]
+    assert result["execution_outcome"] == "not_started" and "attempt" not in result
+    assert result["cleanup_verified"] and result["verdict"]["status"] == "blocked"
+    assert result["routes"][0]["status"] == "unattempted"
+
+
+def test_preflight_version_mismatch_is_reported_without_execution(
+    read_client, database, assessment_graph
+):
+    graph = assessment_graph()
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, graph.assessment.id)
+        plan = deepcopy(item.plan_snapshot)
+        plan["plugins"][0]["version"] = "9.0.0"
+        item.plan_snapshot = plan
+        db.commit()
+    AssessmentDispatcher()._run(graph.assessment.id, __import__("threading").Event())
+    response = read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report")
+    assert response.status_code == 200, response.text
+    result = response.json()["assessment"]["result"]
+    assert result["execution_outcome"] == "not_started"
+    assert result["error"] == "installed plugin versions differ from the queued plan"
+    assert result["cleanup_verified"] and "attempt" not in result
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-10-07T12:00:30Z",
+        "2026-10-07T12:00:30.123456+02:30",
+        "2026-10-07T12:00:30-05:30",
+    ],
+)
+def test_supported_completion_timestamps_are_preserved(
+    read_client, database, completed, timestamp
+):
+    mutate_result(
+        database, completed, lambda result: result.update(completed_at=timestamp)
+    )
+    report = read_client.get(
+        f"/api/v1/assessments/{completed.assessment.id}/report"
+    ).json()
+    assert report["assessment"]["result"]["completed_at"] == timestamp
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("completed_at", "secret-invalid-time"),
+        ("cleanup_verified", "true"),
+        ("execution_outcome", "old"),
+        ("response", {}),
+        ("plugins", []),
+        ("sandbox_backend", "unsupported"),
+    ],
+)
+def test_current_result_schema_rejects_unsupported_fields(
+    read_client, database, completed, field, value, caplog
+):
+    mutate_result(database, completed, lambda result: result.update({field: value}))
+    response = read_client.get(f"/api/v1/assessments/{completed.assessment.id}/report")
+    assert response.status_code == 500
+    assert response.json() == {"detail": "stored report data is invalid"}
+    assert "secret-invalid-time" not in caplog.text
+
+
+def test_duplicate_checks_fail_report_validation(read_client, database, completed):
+    def change(result):
+        checks = result["routes"][0]["plugins"][0]["checks"]
+        checks.append(checks[0])
+
+    mutate_result(database, completed, change)
     assert (
         read_client.get(
-            f"/api/v1/assessments/{denied.assessment.id}/report"
+            f"/api/v1/assessments/{completed.assessment.id}/report"
         ).status_code
-        == 403
+        == 500
     )
 
 
-def test_unknown_and_unauthorized_reports(read_client, assessment_graph):
+@pytest.mark.parametrize("field", ["cleanup_verified", "finding_count"])
+def test_terminal_report_requires_current_outcome_fields(
+    read_client, database, completed, field
+):
+    mutate_result(database, completed, lambda result: result.pop(field))
+    assert (
+        read_client.get(
+            f"/api/v1/assessments/{completed.assessment.id}/report"
+        ).status_code
+        == 500
+    )
+
+
+def test_cleanup_reconciliation_cannot_turn_failure_into_pass(
+    read_client, database, completed
+):
+    with database.SessionLocal() as db:
+        item = db.get(models.Assessment, completed.assessment.id)
+        attempt = db.scalar(
+            select(models.Attempt).where(models.Attempt.assessment_id == item.id)
+        )
+        item.status, item.cleanup_pending = "failed", True
+        item.result = {
+            **item.result,
+            "execution_outcome": "failed",
+            "error": "execution failed",
+        }
+        attempt.cleanup_verified = False
+        refresh_result(db, item, attempt)
+        db.commit()
+    dispatcher = AssessmentDispatcher()
+    dispatcher.recover(include_failed_cleanup=True)
+    report = read_client.get(
+        f"/api/v1/assessments/{completed.assessment.id}/report"
+    ).json()
+    assert report["assessment"]["status"] == "failed"
+    assert report["assessment"]["result"]["cleanup_verified"]
+    assert report["assessment"]["result"]["verdict"]["status"] == "blocked"
+
+
+def test_unknown_and_unauthorized_reports(read_client, database, assessment_graph):
     assert read_client.get("/api/v1/assessments/missing/report").status_code == 404
-    graph = assessment_graph(status="completed", owner="other-operator")
+    graph = assessment_graph(owner="another-operator")
     assert (
         read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report").status_code
         == 403
     )
 
 
-@pytest.mark.parametrize(
-    "completed_at",
-    [
-        "2026-10-07T12:00:30Z",
-        "2026-10-07T12:00:30+00:00",
-        "2026-10-07T12:00:30.123456+02:30",
-        "2026-10-07T12:00:30-05:30",
-        "2026-10-07T12:00:30.1Z",
-    ],
-)
-def test_report_preserves_supported_completion_timestamps(
-    read_client, database, assessment_graph, completed_at
-):
-    graph = assessment_graph(status="completed")
-    save_result(database, graph.assessment.id, {"completed_at": completed_at})
-    path = f"/api/v1/assessments/{graph.assessment.id}"
-    response = read_client.get(path + "/report")
-    assert response.status_code == 200
-    assert (
-        response.json()["assessment"]["result"]
-        == read_client.get(path + "/results").json()["result"]
-        == {"completed_at": completed_at}
-    )
-
-
-@pytest.mark.parametrize("duplicate", [False, True])
-def test_report_requires_unique_checks_and_preserves_their_order(
-    read_client, database, assessment_graph, duplicate
-):
-    graph = assessment_graph(status="completed")
-    checks = [
-        {"rule_id": "second-rule", "status": "passed", "reason": "Accepted."},
-        {
-            "rule_id": "second-rule" if duplicate else "first-rule",
-            "status": "skipped",
-            "reason": "Not applicable.",
-        },
-    ]
-    save_result(
-        database,
-        graph.assessment.id,
-        {
-            "plugins": [
-                {"id": "http-security-headers", "finding_count": 0, "checks": checks}
-            ]
-        },
-    )
-    response = read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report")
-    if duplicate:
-        assert response.status_code == 500
-        assert response.json() == {"detail": "stored report data is invalid"}
-    else:
-        assert response.status_code == 200
-        assert response.json()["assessment"]["result"]["plugins"][0]["checks"] == checks
-
-
-@pytest.mark.parametrize(
-    "result",
-    [
-        {"attempt": "synthetic-report-secret"},
-        {"attempt": True},
-        {"attempt": 0},
-        {"cleanup_verified": "synthetic-report-secret"},
-        {"cleanup_verified": None},
-        {"completed_at": "synthetic-report-secret"},
-        {"completed_at": "2026-10-07T12:00:00"},
-        {"completed_at": "20261007T120000+0000"},
-        {"completed_at": "2026-10-07T12:00:00+00:00:01"},
-        {"completed_at": "2026-10-07T12:00:00+00:60"},
-        {"completed_at": "2026-10-07 12:00:00+00:00"},
-        {"completed_at": "2026-10-07T12:00:00,123456+00:00"},
-        {"completed_at": "2026-02-30T12:00:00Z"},
-        {"response": {"status_code": 600, "media_type": None}},
-        {
-            "response": {
-                "status_code": 200,
-                "media_type": "text/html;synthetic-report-secret",
-            }
-        },
-        {"plugins": [{"id": "example", "finding_count": 0, "checks": None}]},
-        {
-            "plugins": [
-                {
-                    "id": "example",
-                    "finding_count": 0,
-                    "checks": [
-                        {
-                            "rule_id": "rule",
-                            "status": "synthetic-report-secret",
-                            "reason": "A reason",
-                        }
-                    ],
-                }
-            ]
-        },
-    ],
-)
-def test_invalid_result_fails_without_partial_export_or_diagnostics(
-    read_client, database, assessment_graph, evidence_row, caplog, result
-):
-    graph = assessment_graph(status="completed")
-    evidence_row(graph.assessment.id)
-    save_result(database, graph.assessment.id, result)
-    response = read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report")
-    assert response.status_code == 500
-    assert response.json() == {"detail": "stored report data is invalid"}
-    assert graph.assessment.id in caplog.text
-    assert "synthetic-report-secret" not in response.text + caplog.text
-
-
-def test_invalid_evidence_uses_existing_fail_closed_read(
-    read_client, assessment_graph, evidence_row, caplog
-):
-    graph = assessment_graph(status="completed")
-    evidence_row(graph.assessment.id, identity="a-valid")
-    evidence_row(
-        graph.assessment.id,
-        identity="z-invalid",
-        data={**header_evidence(), "raw": "synthetic-evidence-secret"},
-    )
-    response = read_client.get(f"/api/v1/assessments/{graph.assessment.id}/report")
-    assert response.status_code == 500
-    assert response.json() == {"detail": "stored evidence is invalid"}
-    assert "synthetic-evidence-secret" not in response.text + caplog.text
+def test_route_storage_contains_no_duplicate_finding_payload(database, completed):
+    with database.SessionLocal() as db:
+        row = db.scalar(
+            select(models.RouteResult).where(
+                models.RouteResult.assessment_id == completed.assessment.id
+            )
+        )
+        assert all(set(plugin) == {"id", "checks"} for plugin in row.data["plugins"])
+        findings = list(
+            db.scalars(
+                select(models.Finding).where(models.Finding.route_result_id == row.id)
+            )
+        )
+        assert len(findings) == 3 and all(finding.evidence for finding in findings)
+        result = db.get(models.Assessment, completed.assessment.id).result
+        assert (
+            result["finding_count"]
+            == result["routes"][0]["finding_count"]
+            == len(findings)
+        )

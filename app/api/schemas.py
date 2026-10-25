@@ -3,53 +3,70 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..assessments.policy import bounded_url
+from ..assessments.plans import FrozenPlan, RoutePlan, read_snapshot
+from ..assessments.policy import ResponseUrl
+from ..assessments.results import AssessmentResult
 from ..core.constraints import (
     NAME_MAX_LENGTH,
-    NormalizedMediaType,
-    StoredHttpUrl,
     TargetImage,
 )
 from ..persistence.models import AssessmentStatus
-from ..plugins.base import CheckOutcome, require_unique_check_ids
-from ..plugins.http_security_headers_contract import (
-    EVIDENCE_CONDITIONS,
-    RULE_REQUIREMENTS,
-    HeaderCondition,
-    HeaderName,
-    HeaderRequirement,
-    HeaderRuleId,
-)
+from ..plugins.evidence import EvidenceData
 
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=NAME_MAX_LENGTH)
 
 
-class ResponseUrlInput(BaseModel):
-    url: StoredHttpUrl
-
-    @field_validator("url", mode="before")
-    @classmethod
-    def safe_url(cls, value):
-        # Check before normalization can erase traversal or backslashes.
-        if isinstance(value, str) and not bounded_url(value, value):
-            raise ValueError("URL contains unsafe or ambiguous components")
-        return value
-
-
-class TargetCreate(ResponseUrlInput):
+class TargetCreate(BaseModel):
+    url: ResponseUrl
     project_id: str
     name: str = Field(min_length=1, max_length=NAME_MAX_LENGTH)
-    image: TargetImage
+    kind: Literal["docker", "website"] = "docker"
+    image: TargetImage | None = Field(default=None, validate_default=True)
+    launch_profile: str | None = Field(default=None, max_length=100)
+    network_profile: str | None = Field(default=None, max_length=100)
+    trust_profile: str | None = Field(default=None, max_length=100)
+
+    @field_validator("image")
+    @classmethod
+    def docker_image(cls, value, info):
+        if info.data.get("kind", "docker") == "docker" and value is None:
+            raise ValueError("Docker target requires an image")
+        return value
+
+    @model_validator(mode="after")
+    def target_source(self):
+        if self.kind == "website" and (self.image or self.launch_profile):
+            raise ValueError("website target cannot select an image or launch profile")
+        return self
 
 
-class AssessmentCreate(ResponseUrlInput):
+class AssessmentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project_id: str
     target_id: str
-    plugins: list[str] = Field(min_length=1)
+    url: ResponseUrl | None = None
+    routes: list[RoutePlan] | None = Field(default=None, min_length=1, max_length=20)
+    plugins: list[str] | None = Field(default=None, min_length=1, validate_default=True)
+    baseline: str | None = None
+
+    @field_validator("plugins")
+    @classmethod
+    def selection_required(cls, value, info):
+        if info.data.get("routes") is None and value is None:
+            raise ValueError("plugins are required for single URL requests")
+        return value
+
+    @model_validator(mode="after")
+    def one_form(self):
+        if self.routes is not None:
+            if self.url is not None or self.plugins is not None:
+                raise ValueError("select either routes or URL and plugins")
+        elif self.url is None or self.plugins is None:
+            raise ValueError("URL and plugins are required")
+        return self
 
 
 class ReadModel(BaseModel):
@@ -65,7 +82,15 @@ class AssessmentOut(ReadModel):
     status: AssessmentStatus
     plugins: list[str]
     cleanup_pending: bool = False
-    result: dict | None = None
+    result: AssessmentResult | None = None
+    plan_snapshot: FrozenPlan
+
+    @field_validator("plan_snapshot", mode="before")
+    @classmethod
+    def validated_snapshot(cls, value):
+        if isinstance(value, FrozenPlan):
+            value = value.model_dump(mode="json")
+        return read_snapshot(value)
 
 
 class ProjectOut(ReadModel):
@@ -78,8 +103,12 @@ class TargetOut(ReadModel):
     id: str
     project_id: str
     name: str
-    image: str
+    image: str | None
     url: str
+    kind: Literal["docker", "website"]
+    launch_profile: str | None = None
+    network_profile: str | None = None
+    trust_profile: str | None = None
 
 
 class PageOut[Item](BaseModel):
@@ -94,18 +123,15 @@ class FindingOut(ReadModel):
     severity: str
     description: str
     remediation: str
+    route_result_id: str
 
 
 class AssessmentResultsOut(BaseModel):
     assessment_id: str
     status: AssessmentStatus
     cleanup_pending: bool
-    result: dict | None
+    result: AssessmentResult | None
     findings: list[FindingOut]
-
-
-class RuntimeOut(BaseModel):
-    sandbox_backend: Literal["inmemory", "docker"]
 
 
 class TargetImageOut(BaseModel):
@@ -117,68 +143,13 @@ class TargetImagesOut(BaseModel):
     items: list[TargetImageOut]
 
 
-class ResponseEvidenceData(BaseModel):
-    """Public response evidence; arbitrary stored JSON is never exposed."""
-
-    model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
-
-    url: StoredHttpUrl
-
-
-class HeaderEvidenceData(ResponseEvidenceData):
-    header: HeaderName
-    rule_id: HeaderRuleId
-    status_code: int = Field(ge=100, le=599)
-    media_type: NormalizedMediaType | None
-    condition: HeaderCondition
-    expected: HeaderRequirement
-
-    @model_validator(mode="after")
-    def consistent_rule_evidence(self):
-        conditions = EVIDENCE_CONDITIONS.get((self.rule_id, self.header), ())
-        if (
-            self.expected != RULE_REQUIREMENTS[self.rule_id]
-            or self.condition not in conditions
-        ):
-            raise ValueError("header evidence contradicts its rule")
-        return self
-
-
-class CookieEvidenceData(ResponseEvidenceData):
-    header: Literal["set-cookie"]
-    cookie_name: str = Field(min_length=1)
-    secure: bool
-
-
-class SameSiteEvidenceData(CookieEvidenceData):
-    rule: Literal["samesite-none-without-secure"]
-    samesite: Literal["none"]
-
-
-class SecurePrefixEvidenceData(CookieEvidenceData):
-    rule: Literal["secure-prefix"]
-    https: bool
-
-
-class HostPrefixEvidenceData(CookieEvidenceData):
-    rule: Literal["host-prefix"]
-    https: bool
-    domain_present: bool
-    root_path: bool
-
-
 class EvidenceOut(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, hide_input_in_errors=True)
 
     id: str
     finding_id: str
     kind: Literal["http-response"]
-    data: (
-        HeaderEvidenceData
-        | SameSiteEvidenceData
-        | SecurePrefixEvidenceData
-        | HostPrefixEvidenceData
-    )
+    data: EvidenceData
 
 
 class AssessmentEvidenceOut(BaseModel):
@@ -188,85 +159,12 @@ class AssessmentEvidenceOut(BaseModel):
     evidence: list[EvidenceOut]
 
 
-class ReportData(BaseModel):
-    """Project only documented result fields, without coercing stored values."""
-
-    model_config = ConfigDict(extra="ignore", strict=True, hide_input_in_errors=True)
-
-
-class ReportResponseOut(ReportData):
-    status_code: int = Field(ge=100, le=599)
-    media_type: NormalizedMediaType | None
-
-
-class ReportCheckOut(CheckOutcome):
-    model_config = ReportData.model_config
-
-
-class ReportPluginOut(ReportData):
-    id: str
-    finding_count: int = Field(ge=0)
-    checks: list[ReportCheckOut] | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def supplied_checks_are_not_null(cls, value):
-        if isinstance(value, dict) and "checks" in value and value["checks"] is None:
-            raise ValueError("supplied check outcomes must be a list")
-        return value
-
-    @field_validator("checks")
-    @classmethod
-    def unique_checks(cls, checks):
-        if checks is not None:
-            require_unique_check_ids(checks)
-        return checks
-
-
-class ReportResultOut(ReportData):
-    sandbox_backend: Literal["inmemory", "docker"] | None = None
-    attempt: int | None = Field(default=None, ge=1)
-    completed_at: str | None = Field(
-        default=None,
-        pattern=(
-            r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T"
-            r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?"
-            r"(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
-        ),
-    )
-    error: str | None = None
-    cleanup_verified: bool | None = None
-    cleanup_reason: str | None = None
-    response: ReportResponseOut | None = None
-    finding_count: int | None = Field(default=None, ge=0)
-    plugins: list[ReportPluginOut] | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def supplied_fields_are_not_null(cls, value):
-        if isinstance(value, dict) and any(
-            value[key] is None
-            for key in cls.model_fields
-            if key in value and key != "cleanup_reason"
-        ):
-            raise ValueError("supplied execution fields must not be null")
-        return value
-
-    @field_validator("completed_at")
-    @classmethod
-    def valid_completion_time(cls, value):
-        if value is not None:
-            # The pattern ensures a browser-readable format; parsing checks the date.
-            datetime.fromisoformat(value)
-        return value
-
-
 class ReportAssessmentOut(AssessmentOut):
-    result: ReportResultOut | None = None
+    result: AssessmentResult
 
 
 class AssessmentReportOut(BaseModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1]
     generated_at: datetime
     project: ProjectOut
     target: TargetOut

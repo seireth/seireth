@@ -1,8 +1,15 @@
 name: seireth
 
 services:
+  assessment-runner:
+    profiles: [tools]
+    image: seireth/runner:local
+    build:
+      context: .
+      target: runner
+
   postgres:
-    image: postgres:18-trixie
+    image: postgres:18.6-trixie
     environment:
       POSTGRES_USER: seireth
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
@@ -47,7 +54,6 @@ services:
     env_file: [.env]
     environment:
       SEIRETH_DATABASE_URL: postgresql+psycopg://seireth:${POSTGRES_PASSWORD}@postgres:5432/seireth
-      SEIRETH_SANDBOX_BACKEND: docker
     ports:
       - target: 8000
         published: "${SEIRETH_API_PORT:?Set SEIRETH_API_PORT in .env}"

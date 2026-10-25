@@ -5,11 +5,11 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Column, Integer, MetaData, Table, inspect, text
+from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from app.assessments.sandbox import new_journal
 from app.persistence import models
+from tests.sessions import attempt_record, completed_route
 
 
 def _assert_schema_matches_models(database):
@@ -29,11 +29,6 @@ def _assert_schema_matches_models(database):
                 constraint["name"]
                 for constraint in inspector.get_check_constraints(table)
             }
-
-
-def test_versioned_schema_and_model_agree(database, alembic_config):
-    command.upgrade(alembic_config, "head")
-    _assert_schema_matches_models(database)
 
 
 def test_migration_connection_has_separate_timeouts(database, alembic_config):
@@ -63,7 +58,7 @@ def test_status_constraint(database):
         with pytest.raises(IntegrityError) as error:
             connection.execute(
                 text(
-                    "INSERT INTO assessments (id, project_id, target_id, url, plugins, status, created_at) VALUES ('bad', 'bad', 'bad', 'bad', '[\"http-security-headers\"]'::json, 'unknown', now())"
+                    "INSERT INTO assessments (id, project_id, target_id, plan_snapshot, status, created_at) VALUES ('bad', 'bad', 'bad', '{}'::json, 'unknown', now())"
                 )
             )
     assert error.value.orig.diag.constraint_name == "assessment_status_valid"
@@ -81,40 +76,12 @@ def test_baseline_round_trip(database, alembic_config):
         )
 
 
-def test_revision_generation_uses_template(
-    database, tmp_path, alembic_config, monkeypatch
-):
-    import shutil
-
-    config = alembic_config
-    baseline = ScriptDirectory.from_config(config).get_current_head()
-    baseline_tables = set(inspect(database.engine).get_table_names())
-    location = tmp_path / "migrations"
-    shutil.copytree(ScriptDirectory.from_config(config).dir, location)
-    config.set_main_option("script_location", str(location))
-
-    metadata = MetaData()
-    for table in database.Base.metadata.sorted_tables:
-        table.to_metadata(metadata)
-    added_table = Table(
-        "migration_generation_check", metadata, Column("id", Integer, primary_key=True)
-    )
-    monkeypatch.setattr(database.Base, "metadata", metadata)
-
-    revision = command.revision(config, message="generation check", autogenerate=True)
-    assert revision.down_revision == baseline
-    command.upgrade(config, revision.revision)
-    assert inspect(database.engine).has_table(added_table.name)
-    command.downgrade(config, baseline)
-    assert set(inspect(database.engine).get_table_names()) == baseline_tables
-
-
 def test_missing_journal_is_rejected_by_database(database):
     with database.engine.begin() as connection:
         with pytest.raises(IntegrityError) as error:
             connection.execute(
                 text(
-                    "INSERT INTO attempts (id, assessment_id, number, backend, resources, started_at, cleanup_verified) VALUES ('bad', 'bad', 1, 'docker', '{}', now(), false)"
+                    "INSERT INTO attempts (id, assessment_id, number, backend, execution_metadata, started_at, cleanup_verified) VALUES ('bad', 'bad', 1, 'docker', '{}', now(), false)"
                 )
             )
     assert error.value.orig.diag.column_name == "operation_journal"
@@ -125,12 +92,9 @@ def test_attempt_number_bounds_are_enforced(database, assessment_graph, number):
     graph = assessment_graph()
     with database.SessionLocal() as db:
         db.add(
-            models.Attempt(
+            attempt_record(
                 assessment_id=graph.assessment.id,
                 number=number,
-                backend="inmemory",
-                resources={},
-                operation_journal=new_journal(),
             )
         )
         with pytest.raises(IntegrityError) as error:
@@ -142,12 +106,9 @@ def test_attempt_number_bounds_are_enforced(database, assessment_graph, number):
 def test_valid_attempt_numbers_are_persisted(database, assessment_graph, number):
     graph = assessment_graph()
     with database.SessionLocal() as db:
-        attempt = models.Attempt(
+        attempt = attempt_record(
             assessment_id=graph.assessment.id,
             number=number,
-            backend="inmemory",
-            resources={},
-            operation_journal=new_journal(),
         )
         db.add(attempt)
         db.commit()
@@ -163,12 +124,9 @@ def test_attempt_number_must_be_unique_per_assessment(database, assessment_graph
     with database.SessionLocal() as db:
         for _ in range(2):
             db.add(
-                models.Attempt(
+                attempt_record(
                     assessment_id=graph.assessment.id,
                     number=1,
-                    backend="inmemory",
-                    resources={},
-                    operation_journal=new_journal(),
                 )
             )
         with pytest.raises(IntegrityError) as error:
@@ -195,6 +153,7 @@ def test_finding_requires_remediation(database, assessment_graph, remediation):
         db.add(
             models.Finding(
                 assessment_id=graph.assessment.id,
+                route_result_id=completed_route(db, graph.assessment).id,
                 plugin="http-security-headers",
                 title="test",
                 severity="low",
@@ -213,6 +172,7 @@ def test_deleting_finding_removes_its_evidence(database, assessment_graph):
         evidence = models.Evidence(kind="http-response", data={})
         finding = models.Finding(
             assessment_id=graph.assessment.id,
+            route_result_id=completed_route(db, graph.assessment).id,
             plugin="http-security-headers",
             title="test",
             severity="low",

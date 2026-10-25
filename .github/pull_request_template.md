@@ -8,10 +8,9 @@
 
 ## Security and authorization impact
 
-- [ ] This change does not affect project authorization, target boundaries, sandboxing, networking, secrets, isolation, evidence, or audit events.
-- [ ] If it does, I have included failure-path tests and described how the security boundary is preserved below.
+Follow the [security-sensitive change requirements](https://github.com/seireth/seireth/blob/main/CONTRIBUTING.md#security-sensitive-changes).
 
-<!-- Describe relevant security impact, or write "None". -->
+<!-- Describe affected boundaries, failure-path tests, and how boundaries remain intact, or write "None". -->
 
 ## Documentation
 
@@ -22,4 +21,4 @@
 
 - [ ] The change is focused and does not include unrelated cleanup.
 - [ ] No credentials, private target information, production data, or undisclosed vulnerabilities are included.
-- [ ] Generated files, local databases, and build output are not committed.
+- [ ] Local databases and generated build/test output are not committed; dependency lockfiles are included with manifest changes.

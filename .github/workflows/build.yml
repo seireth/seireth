@@ -52,7 +52,6 @@ jobs:
           base_url="postgresql+psycopg://seireth:$password@127.0.0.1:5432"
           {
             echo "POSTGRES_PASSWORD=$password"
-            echo "SEIRETH_DATABASE_URL=$base_url/seireth"
             echo "SEIRETH_TEST_ADMIN_URL=$base_url/postgres"
           } >> "$GITHUB_ENV"
       - name: Start PostgreSQL
@@ -98,10 +97,10 @@ jobs:
             -Dsonar.projectKey=seireth_seireth
             -Dsonar.python.version=3.14
             -Dsonar.sources=.
-            -Dsonar.exclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**,**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
+            -Dsonar.exclusions=**/coverage/**,**/coverage.xml,**/.coverage*,**/.scannerwork/**,**/.venv/**,**/node_modules/**,**/dist/**,**/build/**,artifacts/**,**/playwright-report/**,**/test-results/**
             -Dsonar.tests=tests,app/dashboard/e2e,app/dashboard/src
             -Dsonar.test.inclusions=tests/**,app/dashboard/e2e/**,app/dashboard/src/**/*.test.ts,app/dashboard/src/**/*.test.tsx,app/dashboard/src/test/**
-            -Dsonar.coverage.exclusions=examples/demo_app/**
+            -Dsonar.coverage.exclusions=examples/demo_app/**,examples/service_bundle/**
             -Dsonar.python.coverage.reportPaths=coverage.xml
             -Dsonar.javascript.lcov.reportPaths=app/dashboard/coverage/lcov.info
       - name: PostgreSQL diagnostics

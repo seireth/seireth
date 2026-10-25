@@ -12,42 +12,43 @@ together, using URL-safe credentials without unescaped URL delimiters.
 | --- | --- |
 | `SEIRETH_API_HOST`, `SEIRETH_API_PORT` | Native binding / Docker published address; port 1â€“65535; example `127.0.0.1`, `8000` |
 | `SEIRETH_DATABASE_URL` | `postgresql+psycopg://...`; SQLite unsupported |
-| `SEIRETH_SANDBOX_BACKEND` | `inmemory` or `docker`; example selects `inmemory` |
 
 ## Optional defaults
 
 | Setting | Default / meaning |
 | --- | --- |
 | `SEIRETH_ASSESSMENT_TIMEOUT_SECONDS` | 60; positive finite execution timeout |
-| `SEIRETH_DOCKER_RUNNER_IMAGE` | `python:3.14-slim`; operator-controlled |
+| `SEIRETH_BUNDLE_RUNNER_IMAGE` | `seireth/runner:local`; shared HTTP runner for Docker bundles |
+| `SEIRETH_OPERATOR_CONFIG_FILE` | empty; optional operator-owned JSON profiles and secret references |
+| `SEIRETH_CLEANUP_TIMEOUT_SECONDS` | 60; independent foreground cleanup budget for bundles |
 | `SEIRETH_DOCKER_MEMORY`, `SEIRETH_DOCKER_CPUS`, `SEIRETH_DOCKER_PIDS_LIMIT` | `256m`, `0.5`, `64`; CPUs must be positive and finite, PIDs a positive integer |
 | `SEIRETH_DOCKER_TIMEOUT_SECONDS` | 15; positive finite base command timeout |
 
-Target registration requires an explicit image and base URL. Docker registration,
-assessment submission, execution, and retries require that image to exist locally.
+Target registration requires a base URL and source kind. Docker targets require
+an image; website targets reject images and use the existing deployment.
+Docker registration and submission require local images; submission freezes their
+IDs for execution and retries.
 `GET /api/v1/target-images` discovers tagged images; callers may supply another
 local reference directly. Build or pull images explicitly; both target and runner
-containers use `--pull=never`. Simulated workflows never contact Docker and image
-discovery returns an empty list. Cleanup uses persisted resource ownership and
-continues when an image is unavailable.
+containers use `--pull=never`. Websites need no Docker daemon. Cleanup remains
+possible when an image is unavailable.
 
 ## Timeouts
 
-The execution deadline is the configured assessment timeout.
-Checks are cooperative: Docker operations check interruption, but synchronous
-Python analyzers cannot be forcibly preempted and are checked between calls.
+Single-URL submissions retain the configured assessment timeout. Route plans
+default to the startup budget plus each route's request budget and five seconds
+for analysis, capped at 900 seconds. Requests default to 10 seconds and are bounded
+by the overall deadline. Synchronous analyzers are checked between calls and
+cannot be forcibly preempted. Cleanup has a separate 60-second foreground budget;
+unresolved resources remain pending for reconciliation.
 
-Docker header fetching has a fixed five-second budget. Resource creation and
-runner attachment use `max(configured command timeout, fetch budget + 5 seconds)`;
-target startup and cleanup use the configured timeout per command. Cleanup can
-continue after the assessment deadline; this timeout is not a total cleanup limit.
+See [workflows](workflows.md) for public/private website grants, custom CAs,
+runtime authentication, launch profiles, and supplied-session requirements.
 
 ## Compose overrides
 
 Compose requires `POSTGRES_PASSWORD`, also reflected in the native connection URL.
-It overrides the API database URL with its bundled `postgres:5432` connection and
-selects `docker`. The runner uses its configured image or the application default.
-
+It overrides the API database URL with its bundled `postgres:5432` connection.
 Compose loads API settings from `.env` through `env_file`. Shell variables override
 values used in Compose interpolation, such as the published API host/port and
 database password. They are not automatically forwarded into the API container:
@@ -73,3 +74,18 @@ see [Contributing](../CONTRIBUTING.md#tests).
 | `SEIRETH_UI_API_URL` | `http://127.0.0.1:8000`; API address for Vite's development proxy |
 | `SEIRETH_UI_URL` | `http://127.0.0.1:8000`; deployment address for Playwright tests |
 | `SEIRETH_DOCKER_EXECUTABLE` | Absolute Docker CLI path for Playwright cleanup checks; defaults to `/usr/bin/docker` or `C:\Program Files\Docker\Docker\resources\bin\docker.exe` on Windows |
+
+
+## Reset to the current schema
+
+Apply baseline `0001_current_schema` to an empty database; do not stamp an
+existing incompatible database. To reset disposable Compose data:
+
+1. Stop the API gracefully and [verify owned-resource cleanup](security-model.md#cleanup-and-failure)
+   before discarding its journal. Resolve pending cleanup first.
+2. Run `docker compose down --volumes` from this repository. This deletes the
+   deployment's PostgreSQL data.
+3. Run `python -m app.cli.commands docker-up` to recreate the database, migrate, and start.
+
+For native startup, recreate only the configured disposable database, run
+`python -m app.cli.commands migrate`, then start the API. Tests use separate databases.

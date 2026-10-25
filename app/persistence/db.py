@@ -1,20 +1,12 @@
-"""Database engine, declarative base, and request-scoped sessions."""
+"""Database engine and request-scoped sessions."""
 
 from collections.abc import Generator
-from uuid import uuid4
 
-from sqlalchemy import Engine, String, create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy import Engine, create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from ..core.config import settings
-
-
-class Base(DeclarativeBase):
-    """Base class for all SQLAlchemy models."""
-
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
+from .models import Base as Base
 
 
 def create_runtime_engine(url: str) -> Engine:

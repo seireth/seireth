@@ -29,11 +29,11 @@ weaken secure defaults to pass checks.
 
 ## Development setup
 
-Follow [setup and activation](docs/getting-started.md), then synchronize the development extras.
+Follow [setup and activation](docs/getting-started.md), then synchronize the test dependencies and quality tools.
 Activate once per terminal; all Python commands below use that environment.
 
 ```bash
-uv sync --locked --python 3.14 --all-extras
+uv sync --locked --python 3.14 --all-extras --group quality
 python -m ruff check .
 python -m ruff format --check .
 ```
@@ -54,6 +54,13 @@ startup/serving tests stay in `tests/test_main.py`. Process lifecycle tests live
 in `tests/integration/`. Frontend tests stay alongside the dashboard source.
 Shared fixtures stay in `tests/conftest.py`; HTTP-specific fixtures live in
 `tests/api/conftest.py`.
+
+Keep regression cases focused on critical behavior: authorization and request
+boundaries, sandbox isolation, execution and recovery, cleanup, release verdicts,
+evidence integrity and redaction, report safety, and CLI failure status. Exercise
+those behaviors through their public workflows where practical. Avoid redundant
+serialization checks, tests of test fixtures, simple command forwarding, and
+presentation checks for the synthetic demo application.
 
 Tests set their own environment. Each database-backed test creates and drops only
 its uniquely named database. Explicitly configure `SEIRETH_TEST_ADMIN_URL` with
@@ -88,8 +95,8 @@ database checks. `python -m pytest -m database` selects them; missing
 cases; it does not enable them. Set `SEIRETH_DOCKER_TESTS=1` as shown below.
 
 For sandbox changes, run the [Docker walkthrough](docs/getting-started.md#real-docker-assessment),
-check that no assessment containers/networks remain, then run lifecycle tests.
-They require the built demo and pulled runner images; the demo's `/slow` path
+check that no assessment containers/networks/volumes remain, then run lifecycle tests.
+They require the built demo and bundle runner images; the demo's `/slow` path
 briefly delays responses for cancellation/crash-recovery tests.
 
 ```powershell
@@ -103,9 +110,19 @@ python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 SEIRETH_DOCKER_TESTS=1 python -m pytest -m docker tests/integration/test_api_process_lifecycle.py
 ```
 
+Lifecycle tests cover vulnerable/corrected responses, plugin failure, duplicate
+delivery, frozen execution metadata, and report durability across API restarts.
+They independently inspect Docker to verify resource removal. Analyzer overrun
+classification uses a deterministic clock in `tests/assessments/test_orchestrator.py`;
+synchronous analysis cannot be forcibly interrupted. Subprocess termination and
+cleanup budgets are covered in `tests/assessments/test_sandbox.py`.
+
 The integration workflow uses a disposable Docker daemon and uploads verification
 output and diagnostic logs. It selects only Docker-marked Python cases; the
-in-memory API lifecycle case runs once in the build workflow.
+native website lifecycle cases run in the build workflow.
+The PostgreSQL fixtures use the stack's Compose image. CI exports the resolved
+image as `SEIRETH_TEST_POSTGRES_IMAGE`; local runs resolve it through
+`docker compose config --images postgres` using the configured `.env`.
 
 ## Frontend checks
 
@@ -155,8 +172,10 @@ npm --prefix app/dashboard test -- --coverage
 ```
 
 Python coverage measures `app`, including Python subprocesses, with branch
-coverage and relative source paths. The demo application is excluded from Python
-and SonarQube coverage; its unit tests guard against false verification success.
+coverage and relative source paths. The demo application and service-bundle fixture
+are excluded from Python and SonarQube coverage while retaining static analysis.
+The demo application's unit tests guard against false verification success;
+integration tests exercise the service-bundle fixture.
 Frontend coverage includes unimported source files and excludes tests, test setup,
 and declarations. SonarQube imports
 `coverage.xml` and `app/dashboard/coverage/lcov.info`; Docker and browser runs do not
@@ -171,8 +190,9 @@ per event; the application image and bundled frontend are built in integration o
 Runtime setup and SonarQube configuration stay inline. External actions use commit
 pins with release comments. The two database jobs generate and mask fresh
 credentials inline, then export them through `GITHUB_ENV`; no credential helper
-script is required. Python syncs explicitly use `--no-build`; the quality job also
-uses `--no-install-project` because it only needs dependencies and tools.
+script is required. Python commands explicitly use `--no-build` alongside the
+`no-build = true` policy in `pyproject.toml`. The quality job uses
+`--only-group quality` to install Ruff without the application or runtime dependencies.
 
 | Workflow                                         | Required job checks                                                    | Responsibility                                                                                    |
 | ------------------------------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -180,10 +200,31 @@ uses `--no-install-project` because it only needs dependencies and tools.
 | [Build](.github/workflows/build.yml)             | Tests, coverage and SonarQube                                          | Non-Docker Python tests with disposable PostgreSQL, frontend unit tests, coverage, analysis       |
 | [Integration](.github/workflows/integration.yml) | Docker assessment lifecycle                                            | Image build, migrations/readiness, real assessments/recovery, browser and packaging verification  |
 
-Require all six checks above before merging, with GitHub Actions as their source.
+Require all six job checks above before merging, with GitHub Actions as their
+source. Also require `SonarCloud Code Analysis` from the SonarCloud integration,
+for seven required checks in total.
 Successful bundling does not imply valid types; keep `Frontend quality` required.
 See [Dependency security](#dependency-security) for the repository settings and
 rollout checks. Workflow YAML alone does not enforce merge requirements.
+
+SonarQube configuration lives in the build action arguments. Keep automatic
+analysis disabled and configure `SONAR_TOKEN` in both repository Actions secrets
+and Dependabot secrets. After both test suites and report checks pass, the scanner
+submits the analysis. Scan errors fail the build job; the separate required
+`SonarCloud Code Analysis` check reports the quality-gate result and must pass
+before merging. Fork pull requests execute tests but skip SonarQube; same-repository
+pull requests, including Dependabot updates, run analysis and fail clearly if the
+token is missing. Diagnostics and database cleanup run on build failure, including
+scan errors. Coverage generation and scanning share a job and require no report
+transfer between workflows.
+
+Fork pull requests cannot satisfy the required SonarCloud check directly. After
+reviewing a fork contribution, a maintainer imports its changes onto a branch
+inside this repository and opens a replacement pull request against `main`.
+Link the original contribution in the replacement's description and preserve
+commit attribution. Wait for all seven checks on the replacement's latest commit
+before merging. Keep fork analysis skipped so repository secrets remain confined
+to repository-owned workflows.
 
 Build frontend assets before packaging. Clear setuptools' staging directory so
 hashed assets from earlier builds cannot enter the wheel:
@@ -249,18 +290,21 @@ describe the comparison and dependency coverage.
 are disabled; missing wheels are errors, not a reason to bypass that policy.
 The trusted Seireth package is still built with the exactly pinned setuptools backend.
 
-After pulling dependency changes, run `uv sync --locked --all-extras`; runtime-only
+After pulling dependency changes, run `uv sync --locked --all-extras --group quality`; runtime-only
 sync can remove development tools. Direct Python commands do not synchronize.
 
 After changing dependency declarations, run `uv lock`. For deliberate upgrades,
 run `uv lock --upgrade-package PACKAGE` (or `uv lock --upgrade` for a full refresh),
-then `uv sync --locked --all-extras` and the local checks. Commit the manifest and
+then `uv sync --locked --all-extras --group quality` and the local checks. Commit the manifest and
 lock together; Dependency Review runs on the pull request. [Dependabot configuration](.github/dependabot.yml)
 defines update schedules and exclusions; Python minor/major and PostgreSQL major
 upgrades are planned separately.
 
-Keep the exact uv version in the project configuration, all workflows, Dockerfile,
-and setup instructions aligned when upgrading uv.
+Keep the exact uv installation version aligned across all workflows, the Dockerfile,
+and setup instructions when upgrading uv. The project does not enforce an exact
+uv version, so Dependabot can use its bundled version to prepare dependency updates.
+Required pull-request checks validate the proposed manifest and lockfile changes
+with the pinned CI and Docker tooling before merging.
 
 ## Schema changes
 
@@ -271,7 +315,7 @@ Alembic head in `app/persistence/migrations/versions`:
 python -m alembic revision --autogenerate -m "describe schema change"
 ```
 
-Run `python -m app migrate` before native API startup; the API neither checks
+Run `python -m app.cli.commands migrate` before native API startup; the API neither checks
 revisions nor applies migrations. Docker startup
 uses the [migration-gated command](docs/getting-started.md#real-docker-assessment).
 

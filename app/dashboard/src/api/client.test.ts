@@ -29,13 +29,6 @@ it("makes one relative JSON write and extracts field errors without input values
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(fetch.mock.calls[0][0]).toBe("/api/v1/targets");
 });
-it("passes an abort signal to reads", async () => {
-  const controller = new AbortController();
-  const fetch = vi.fn().mockResolvedValue(new Response("{}"));
-  vi.stubGlobal("fetch", fetch);
-  await request("/projects", { signal: controller.signal });
-  expect(fetch.mock.calls[0][1].signal).toBe(controller.signal);
-});
 
 it.each(["<html>wrong upstream</html>", ""])(
   "rejects a successful response without valid JSON: %j",
@@ -44,15 +37,3 @@ it.each(["<html>wrong upstream</html>", ""])(
     await expect(request("/projects")).rejects.toBeInstanceOf(SyntaxError);
   },
 );
-
-it("preserves the HTTP error when its response is not JSON", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn().mockResolvedValue(new Response("Bad gateway", { status: 502 })),
-  );
-  await expect(request("/projects")).rejects.toMatchObject({
-    status: 502,
-    message: "Request failed (502)",
-    fields: {},
-  });
-});

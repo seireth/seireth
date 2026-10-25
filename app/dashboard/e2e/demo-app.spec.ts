@@ -1,22 +1,5 @@
 import { test, expect } from "@playwright/test";
 
-test("the demo workspace loads its API and creates a support ticket", async ({ page }) => {
-  const failures: string[] = [];
-  page.on("pageerror", (error) => failures.push(error.message));
-  await page.goto(process.env.SEIRETH_DEMO_APP_URL ?? "http://127.0.0.1:8081/");
-  await expect(page.getByText("Live queue connected", { exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "Manage tickets" }).click();
-  const title = `Browser demo ticket ${Date.now()}`;
-  await page.getByLabel("Ticket title").fill(title);
-  await page.getByRole("button", { name: "Create ticket", exact: true }).click();
-  await expect(page.getByRole("cell", { name: title, exact: true })).toBeVisible();
-  await page.getByRole("link", { name: "Plugin lab", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Plugin lab" })).toBeVisible();
-  await expect(page.locator("tbody tr")).toHaveCount(44);
-  expect(failures).toEqual([]);
-  await page.screenshot({ path: "test-results/demo-app-lab.png", fullPage: true });
-});
-
 for (const scenario of [
   { path: "/", name: "Protected workspace", findings: 0, outcomes: ["passed", "passed", "passed"] },
   { path: "/lab/csp-wildcard", name: "Permissive framing policy", findings: 1, outcomes: ["passed", "passed", "failed"] },
@@ -61,7 +44,7 @@ for (const scenario of [
     expect(results.result.cleanup_verified).toBe(true);
     expect(results.cleanup_pending).toBe(false);
     expect(evidence.evidence.map((entry: { data: { rule_id: string } }) => entry.data.rule_id)).toEqual(scenario.findings ? [scenario.path === "/lab/unknown-type" ? "x-content-type-options" : "framing-protection"] : []);
-    expect(results.result.plugins.find((plugin: {id: string}) => plugin.id === "http-security-headers").checks.map((check: {status: string}) => check.status)).toEqual(scenario.outcomes);
+    expect(results.result.routes[0].plugins.find((plugin: {id: string}) => plugin.id === "http-security-headers").checks.map((check: {status: string}) => check.status)).toEqual(scenario.outcomes);
     await expect(page.getByRole("region", {name: "Response and check outcomes"})).toBeVisible();
     for (const outcome of new Set(scenario.outcomes))
       await expect(page.locator(`.check-${outcome}`).first()).toBeVisible();

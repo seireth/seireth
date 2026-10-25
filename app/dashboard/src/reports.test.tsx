@@ -1,7 +1,7 @@
-import { act, waitFor, within } from "@testing-library/react";
+import { act, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import { downloadBlob, htmlReport } from "./reports";
-import { multiFindingReport, reportFixture } from "./test/report";
+import { htmlReport } from "./reports";
+import { cspReportFixture, multiFindingReport, reportFixture } from "./test/report";
 
 function documentFor(report = reportFixture) {
   let html = "";
@@ -10,13 +10,41 @@ function documentFor(report = reportFixture) {
   return new DOMParser().parseFromString(html, "text/html");
 }
 
+it("exports route provenance and displays each response only once", () => {
+  const document = documentFor();
+  expect(document.body.textContent).toContain("Route: session");
+  expect(document.querySelectorAll('[aria-label="Response and check outcomes"]')).toHaveLength(1);
+  expect(document.body.textContent?.match(/Cookie attributes evaluated\./g)).toHaveLength(1);
+});
+
+it("exports persisted plugin versions and makes incomplete execution explicit", () => {
+  const report = structuredClone(reportFixture);
+  report.assessment.status = "failed";
+  report.assessment.result = {
+    ...reportFixture.assessment.result!, execution_outcome: "failed",
+    error: "plugin cookie-security execution failed", error_kind: "plugin_error",
+    cleanup_verified: true,
+    execution: {
+      started_at: "2026-10-12T10:00:00+00:00", deadline_at: "2026-10-12T10:01:00+00:00",
+      target: report.target, plugins: [{id: "cookie-security", version: "1.0.0"}],
+    },
+  };
+  report.findings = [];
+  report.evidence = [];
+  const content = documentFor(report).body.textContent;
+  expect(content).toContain("cookie-security 1.0.0");
+  expect(content).toContain("2026-10-12T10:01:00.000Z");
+  expect(content).toContain("Execution was incomplete");
+  expect(content).toContain("plugin cookie-security execution failed");
+});
+
 it("renders a complete offline report using escaped shared finding and evidence views", () => {
   const document = documentFor();
   expect(document.body.textContent).toContain(reportFixture.project.name);
   expect(document.body.textContent).toContain(reportFixture.findings[0].description);
   expect(document.body.textContent).toContain("Set Secure.");
   expect(document.body.textContent).toContain("original");
-  expect(document.body.textContent).toContain("Simulated assessment");
+  expect(document.body.textContent).toContain("Isolated Docker bundle");
   expect(document.body.textContent).toContain("2026-10-07T12:01:00.000Z");
   expect(document.querySelector("details")?.open).toBe(true);
   expect(document.querySelector("style")?.textContent).toContain("@media print");
@@ -58,7 +86,7 @@ it.each([
   ["2026-10-07T12:00:30.1Z", "2026-10-07T12:00:30.100Z"],
 ])("renders the supported completion timestamp %s in UTC", (completed_at, expected) => {
   const document = documentFor({ ...reportFixture, assessment: {
-    ...reportFixture.assessment, result: { ...reportFixture.assessment.result, completed_at },
+    ...reportFixture.assessment, result: { ...reportFixture.assessment.result!, completed_at },
   } });
   expect(document.body.textContent).toContain(expected);
 });
@@ -72,7 +100,7 @@ it.each(["created_at", "completed_at", "generated_at"] as const)(
       assessment: {
         ...reportFixture.assessment,
         created_at: field === "created_at" ? invalid : reportFixture.assessment.created_at,
-        result: { ...reportFixture.assessment.result,
+        result: { ...reportFixture.assessment.result!,
           completed_at: field === "completed_at" ? invalid : reportFixture.assessment.result?.completed_at,
         },
       },
@@ -85,11 +113,11 @@ it.each(["created_at", "completed_at", "generated_at"] as const)(
 
 it("retains skipped and inconclusive outcomes with zero findings", () => {
   const report = { ...reportFixture, findings: [], evidence: [], assessment: {
-    ...reportFixture.assessment, result: { ...reportFixture.assessment.result,
-      plugins: [{ id: "http-security-headers", finding_count: 0, checks: [
+    ...reportFixture.assessment, result: { ...reportFixture.assessment.result!,
+      routes: reportFixture.assessment.result!.routes.map(route => ({ ...route, plugins: [{ id: "http-security-headers", finding_count: 0, checks: [
         { rule_id: "content-security-policy", status: "skipped" as const, reason: "Not a document." },
         { rule_id: "framing-protection", status: "inconclusive" as const, reason: "Media type unknown." },
-      ] }],
+      ] }] })),
     },
   } };
   const document = documentFor(report);
@@ -98,25 +126,32 @@ it("retains skipped and inconclusive outcomes with zero findings", () => {
   expect(document.querySelector(".check-inconclusive")?.textContent).toBe("inconclusive");
 });
 
-it("exports missing execution results and pending cleanup without manufacturing outcomes", () => {
-  const missing = documentFor({ ...reportFixture, findings: [], evidence: [], assessment: { ...reportFixture.assessment, status: "cancelled", result: null } });
-  expect(missing.body.textContent).toContain("No execution outcome");
+it("exports an unstarted execution and pending cleanup", () => {
+  const missing = documentFor({ ...reportFixture, findings: [], evidence: [], assessment: {
+    ...reportFixture.assessment, status: "cancelled", result: { ...reportFixture.assessment.result,
+      execution_outcome: "not_started", completed_at: undefined, attempt: undefined,
+      finding_count: 0, coverage: { complete: false },
+      verdict: { policy: "strict-v1", status: "blocked", reasons: ["execution did not start"] },
+      routes: reportFixture.assessment.result.routes.map(route => ({ ...route, status: "unattempted", response: undefined, plugins: [], finding_count: 0 })),
+    },
+  } });
+  expect(missing.body.textContent).toContain("not started");
   expect(missing.body.textContent).toContain("This assessment produced no persisted findings.");
   expect(missing.body.textContent).not.toContain("Completed at (UTC)");
-  const pending = documentFor({ ...reportFixture, assessment: { ...reportFixture.assessment, status: "failed", cleanup_pending: true, result: { error: "Execution failed", cleanup_verified: false, cleanup_reason: "Unknown outcome" } } });
+  const pending = documentFor({ ...reportFixture, assessment: { ...reportFixture.assessment, status: "failed", cleanup_pending: true, result: { ...reportFixture.assessment.result!, execution_outcome: "failed", error: "Execution failed", cleanup_verified: false, cleanup_reason: "Unknown outcome" } } });
   expect(pending.body.textContent).toContain("Pending verification");
   expect(pending.body.textContent).toContain("Unknown outcome");
   expect(pending.body.textContent).toContain("Execution failed");
 });
 
-it("removes the download anchor and releases its URL even if clicking fails", async () => {
-  const revokeObjectURL = vi.fn();
-  const createObjectURL = vi.fn(() => "blob:report");
-  vi.stubGlobal("URL", class extends URL { static createObjectURL = createObjectURL; static revokeObjectURL = revokeObjectURL; });
-  const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => { throw new Error("download failed"); });
-  try {
-    expect(() => downloadBlob(new Blob(["report"]), "report.json")).toThrow("download failed");
-    expect(document.querySelector("a[download]")).toBeNull();
-    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:report"));
-  } finally { click.mockRestore(); }
+it("exports current CSP evidence through the shared offline renderer", () => {
+  const document = documentFor(cspReportFixture);
+  expect(cspReportFixture.schema_version).toBe(1);
+  expect(document.body.textContent).toContain("Unrestricted CSP inline script execution");
+  expect(document.body.textContent).toContain("Remove effective unsafe-inline permissions.");
+  expect(document.body.textContent).toContain("Policy 1: Inline script elements");
+  expect(document.body.textContent).toContain("Policy 2: Inline event handlers");
+  expect(document.body.textContent).toContain("No applicable script directive");
+  expect(document.querySelectorAll(".evidence li")).toHaveLength(4);
+  expect(document.querySelector("script, img, link, [src]")).toBeNull();
 });

@@ -16,7 +16,7 @@ def run(command: list[str]) -> int:
 def _docker_up(timeout_seconds: float) -> int:
     compose_env = os.environ.copy()
     for stage, command in (
-        ("build", ["build", "api"]),
+        ("build", ["build", "api", "assessment-runner"]),
         ("stop API", ["stop", "api"]),
         ("start PostgreSQL", ["up", "-d", "--wait", "postgres"]),
         ("migration", ["run", "--rm", "--no-deps", "-T", "migrate"]),
@@ -73,7 +73,7 @@ def _docker_up(timeout_seconds: float) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="python -m app",
+        prog="python -m app.cli.commands",
         description="Run Seireth development commands.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -85,10 +85,18 @@ def main() -> int:
     check = subparsers.add_parser("verify", help="Run the MVP API workflow")
     check.add_argument("--base-url", default=None)
     check.add_argument("--timeout-seconds", type=positive_timeout, default=120)
-    check.add_argument("--expected-backend", choices=("inmemory", "docker"))
     check.add_argument("--image", required=True)
     check.add_argument("--target-url", required=True)
     check.add_argument("--plugins", nargs="+", required=True)
+    assessment = subparsers.add_parser(
+        "assess", help="Assess a route plan and enforce its release verdict"
+    )
+    assessment.add_argument("--base-url", default=None)
+    assessment.add_argument("--project-id", required=True)
+    assessment.add_argument("--target-id", required=True)
+    assessment.add_argument("--plan", required=True)
+    assessment.add_argument("--baseline", default=None)
+    assessment.add_argument("--output", default=None)
 
     subparsers.add_parser("migrate", help="Apply versioned database migrations")
     docker_up = subparsers.add_parser(
@@ -103,7 +111,23 @@ def main() -> int:
         return _docker_up(args.api_ready_timeout_seconds)
     if args.command == "migrate":
         return run(["alembic", "upgrade", "head"])
-    from ..core.config import settings
+    if args.command == "serve" or args.base_url is None:
+        from ..core.config import settings
+
+    if args.command != "serve":
+        base_url = args.base_url if args.base_url is not None else settings.api_base_url
+
+    if args.command == "assess":
+        from .assess import assess
+
+        return assess(
+            base_url,
+            project_id=args.project_id,
+            target_id=args.target_id,
+            plan=args.plan,
+            baseline=args.baseline,
+            output=args.output,
+        )
 
     if args.command == "serve":
         return run(
@@ -123,11 +147,8 @@ def main() -> int:
         print(
             json.dumps(
                 verify(
-                    args.base_url
-                    if args.base_url is not None
-                    else settings.api_base_url,
+                    base_url,
                     timeout_seconds=args.timeout_seconds,
-                    expected_backend=args.expected_backend,
                     image=args.image,
                     target_url=args.target_url,
                     plugins=args.plugins,
@@ -140,3 +161,7 @@ def main() -> int:
         print(f"verification failed: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

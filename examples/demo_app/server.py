@@ -9,7 +9,7 @@ from threading import Lock
 from time import sleep
 from urllib.parse import parse_qs, urlsplit
 
-from .scenarios import BY_PATH, COOKIE_SCENARIOS, PROTECTED, SCENARIOS
+from .scenarios import BY_PATH, COOKIE_SCENARIOS, CSP_SCENARIOS, PROTECTED, SCENARIOS
 
 STATIC = Path(__file__).parent / "static"
 
@@ -37,7 +37,7 @@ def page(title, content):
 <title>{escape(title)} | Northstar Workspace</title><link rel="stylesheet" href="/assets/app.css">
 <script src="/assets/app.js" defer></script></head><body>
 <header><a class="brand" href="/">N / Northstar</a><nav aria-label="Main navigation">
-<a href="/">Overview</a><a href="/tickets">Tickets</a><a href="/account">Account</a><a href="/lab">Plugin lab</a>
+<a href="/">Overview</a><a href="/tickets">Tickets</a><a href="/account">Account</a><a href="/lab">Plugin lab</a><a href="/csp">CSP lab</a>
 </nav><span class="avatar" aria-label="Demo operator">DO</span></header>
 <main><p class="eyebrow">NORTHSTAR WORKSPACE / OWNED DEMO</p><h1>{escape(title)}</h1>{content}</main>
 <footer>Synthetic data. Tickets reset when this disposable instance stops.</footer></body></html>"""
@@ -58,9 +58,14 @@ def scenario_body(scenario):
     expected = (
         ", ".join(scenario.expected) or "None for the checks covered by this plugin"
     )
+    csp_summary = (
+        f"<p>CSP policy findings: {escape(', '.join(scenario.csp_rules) or 'None for the covered checks')}</p>"
+        if scenario.csp_checks is not None
+        else ""
+    )
     return page(
         scenario.name,
-        f'<p class="intro">{escape(scenario.description)}</p><section class="panel"><h2>Response configuration</h2><pre>{escape(fields)}</pre><p>Expected findings: <strong>{escape(expected)}</strong></p><p>HTTP status: {scenario.status}</p><a href="/lab">Back to all scenarios</a></section>',
+        f'<p class="intro">{escape(scenario.description)}</p>{csp_summary}<section class="panel"><h2>Response configuration</h2><pre>{escape(fields)}</pre><p>Expected findings: <strong>{escape(expected)}</strong></p><p>HTTP status: {scenario.status}</p><a href="/lab">Back to all scenarios</a></section>',
     )
 
 
@@ -168,6 +173,18 @@ class Handler(BaseHTTPRequestHandler):
                     "Account settings",
                     '<section class="panel"><h2>Demo operator</h2><dl><dt>Email</dt><dd>operator@northstar.example</dd><dt>Workspace</dt><dd>Release operations</dd><dt>Role</dt><dd>Workspace administrator</dd></dl><p>This profile contains synthetic data.</p></section>',
                 ),
+            )
+            return
+        if path == "/csp":
+            rows = "".join(
+                f'<tr><td><a href="{scenario.path}">{escape(scenario.name)}</a><small>{escape(scenario.description)}</small></td><td>{len(scenario.csp_rules)}</td><td>{", ".join(scenario.csp_checks)}</td></tr>'
+                for scenario in CSP_SCENARIOS
+            )
+            self.respond(
+                page(
+                    "CSP policy lab",
+                    f'<p class="intro">Compare the independently selectable CSP policy checks. Outcomes are listed in order: network sources, inline scripts, JavaScript evaluation. Analysis covers headers only.</p><section class="panel"><table><caption>CSP response scenarios</caption><thead><tr><th>Response</th><th>CSP findings</th><th>Check outcomes</th></tr></thead><tbody>{rows}</tbody></table></section>',
+                )
             )
             return
         if path == "/lab":

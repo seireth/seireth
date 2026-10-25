@@ -4,6 +4,11 @@ title: "[Enhancement]: "
 labels:
   - enhancement
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private target information, production data, or vulnerability details in this form.
+        For security vulnerabilities in Seireth, follow [SECURITY.md](https://github.com/seireth/seireth/blob/main/SECURITY.md).
   - type: textarea
     id: existing_behavior
     attributes:

@@ -4,7 +4,7 @@ import logging
 
 import pytest
 
-from app.plugins.base import HttpObservation
+from app.plugins.base import AnalysisContext, HttpObservation
 from app.plugins.cookie_security import _parse, analyze
 
 URL = "https://example.test/app"
@@ -17,7 +17,8 @@ def findings(*cookies, url=URL):
             status_code=200,
             url=url,
             headers={"Set-Cookie": list(cookies)} if cookies else {},
-        )
+        ),
+        AnalysisContext(),
     ).findings
 
 
@@ -31,8 +32,6 @@ def findings(*cookies, url=URL):
         f"__Secure-session={SECRET}; Secure",
         f"__Host-session={SECRET}; Secure; Path=/",
         f"__Host-session={SECRET}; Secure; Path=/; Domain=",
-        f"__secure-session={SECRET}; Secure",
-        f"__host-session={SECRET}; Secure; Path=/",
         f"theme={SECRET}; SameSite=invalid; Future=ignored",
         f"__Host-session={SECRET}; Secure; Secure=false; Path=/",
         f'theme="{SECRET}"; SameSite=Lax',
@@ -51,7 +50,7 @@ def test_samesite_none_requires_secure(same_site):
         "url": URL,
         "header": "set-cookie",
         "cookie_name": "cross",
-        "rule": "samesite-none-without-secure",
+        "rule_id": "samesite-none-without-secure",
         "samesite": "none",
         "secure": False,
     }
@@ -146,7 +145,7 @@ def test_each_prefix_reports_one_finding_for_all_failed_requirements(
         "url": url,
         "header": "set-cookie",
         "cookie_name": cookie.partition("=")[0],
-        "rule": rule,
+        "rule_id": rule,
         **flags,
     }
     assert result[0].severity == "low"
@@ -174,7 +173,7 @@ def test_prefix_matching_ignores_case_but_preserves_cookie_names(
     ]:
         result = findings(cookie, url=url)
         assert len(result) == 1
-        assert result[0].evidence["rule"] == rule
+        assert result[0].evidence["rule_id"] == rule
         assert result[0].evidence["cookie_name"] == name
         assert repr(name) in result[0].description
 
@@ -186,12 +185,12 @@ def test_parser_retains_only_used_attributes_and_leaves_shared_headers_intact():
     )
     assert _parse(field) == (
         "__Host-session",
-        {"secure": "", "samesite": "Lax", "domain": "", "path": "/"},
+        {"httponly": "", "secure": "", "samesite": "Lax", "domain": "", "path": "/"},
     )
     observation = HttpObservation(
         status_code=200, url=URL, headers={"Set-Cookie": [field]}
     )
-    assert not analyze(observation).findings
+    assert not analyze(observation, AnalysisContext()).findings
     assert observation.headers == {"set-cookie": [field]}
 
 
@@ -205,7 +204,7 @@ def test_secure_value_limit_counts_decoded_wire_bytes(character, length):
         {"samesite": "None", **({"secure": ""} if length == 1024 else {})},
     )
     result = findings(field)
-    assert [item.evidence["rule"] for item in result] == (
+    assert [item.evidence["rule_id"] for item in result] == (
         [] if length == 1024 else ["samesite-none-without-secure"]
     )
 
@@ -224,7 +223,7 @@ def test_only_retained_duplicate_values_replace_earlier_attributes(
     length, name, attributes, duplicate, accepted_rules, ignored_rules
 ):
     field = f"{name}={SECRET}; {attributes}; {duplicate}={'a' * length}"
-    assert [item.evidence["rule"] for item in findings(field)] == (
+    assert [item.evidence["rule_id"] for item in findings(field)] == (
         accepted_rules if length == 1024 else ignored_rules
     )
 
@@ -235,7 +234,7 @@ def test_oversized_duplicates_preserve_nonempty_domain_and_samesite_none():
         f"SameSite={'a' * 1025}; Domain={'a' * 1025}; Path={'a' * 1025}"
     )
     result = findings(field)
-    assert [item.evidence["rule"] for item in result] == [
+    assert [item.evidence["rule_id"] for item in result] == [
         "samesite-none-without-secure",
         "host-prefix",
     ]
@@ -249,7 +248,7 @@ def test_oversized_duplicates_preserve_nonempty_domain_and_samesite_none():
 def test_oversized_attributes_without_earlier_values_are_ignored(attribute, expected):
     attributes = "Secure; Path=/" if attribute == "Domain" else "Secure"
     field = f"__Host-session={SECRET}; {attributes}; {attribute}={'a' * 1025}"
-    assert [item.evidence["rule"] for item in findings(field)] == expected
+    assert [item.evidence["rule_id"] for item in findings(field)] == expected
 
 
 @pytest.mark.parametrize("attribute", ["Future", "Secure"])
@@ -265,7 +264,7 @@ def test_independent_rules_and_repeated_cookie_names_are_preserved():
         f"__Host-session={SECRET}; Secure; Path=/",
         f"__Host-session={SECRET}; SameSite=None; Path=/app",
     )
-    assert [item.evidence["rule"] for item in result] == [
+    assert [item.evidence["rule_id"] for item in result] == [
         "samesite-none-without-secure",
         "host-prefix",
         "samesite-none-without-secure",
@@ -290,7 +289,7 @@ def test_independent_rules_and_repeated_cookie_names_are_preserved():
 )
 def test_last_valued_attribute_wins(name, attributes, expected):
     assert [
-        item.evidence["rule"] for item in findings(f"{name}={SECRET}; {attributes}")
+        item.evidence["rule_id"] for item in findings(f"{name}={SECRET}; {attributes}")
     ] == expected
 
 
@@ -336,7 +335,7 @@ def test_no_cookie_values_or_raw_attribute_values_in_findings(caplog):
             ]
         },
     )
-    response = analyze(observation)
+    response = analyze(observation, AnalysisContext())
     assert len(response.findings) == 2
     assert SECRET not in response.model_dump_json()
     assert SECRET not in caplog.text

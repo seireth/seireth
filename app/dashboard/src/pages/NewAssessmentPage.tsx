@@ -7,22 +7,38 @@ import type {
   Assessment,
   Plugin,
   Project,
-  Runtime,
+  Profiles,
   Target,
 } from "../api/types";
 import { ErrorMessage, FieldError, More } from "../components/common";
 import TargetForm from "../components/TargetForm";
+import { RoutePlanEditor, newRoute, routeRequest, selectRoutePlugins } from "../components/RoutePlanEditor";
+import type { RouteDraft } from "../components/RoutePlanEditor";
 
 export default function NewAssessmentPage() {
   const { projectId = "" } = useParams();
+  return <AssessmentForm key={projectId} projectId={projectId} />;
+}
+
+function AssessmentForm({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
   const client = useQueryClient();
   const [targetId, setTargetId] = useState("");
   const [url, setUrl] = useState<string | null>(null);
   const [selectedPlugins, setPlugins] = useState<string[]>([]);
   const [newTarget, setNewTarget] = useState(false);
+  const [usePlan, setUsePlan] = useState(false);
+  const [routes, setRoutes] = useState<RouteDraft[]>([]);
+  const [baseline, setBaseline] = useState("");
+  const selectTarget = (id: string) => {
+    setTargetId(id);
+    setUrl(null);
+    setUsePlan(false);
+    setRoutes([]);
+  };
+  const profiles = useResource<Profiles>("/runtime/profiles");
+  const history = useList<Assessment>("/projects/" + projectId + "/assessments");
   const project = useResource<Project>(`/projects/${projectId}`);
-  const runtime = useResource<Runtime>("/runtime");
   const plugins = useResource<Plugin[]>("/plugins");
   const targets = useList<Target>(`/projects/${projectId}/targets`);
   const target = useResource<Target>(`/targets/${targetId}`, !!targetId);
@@ -35,8 +51,8 @@ export default function NewAssessmentPage() {
       post<Assessment>("/assessments", {
         project_id: projectId,
         target_id: targetId,
-        url: assessmentUrl,
-        plugins: selectedPlugins,
+        ...(usePlan ? { routes: routes.map(route => routeRequest(route, selectedPlugins)), baseline: baseline || null }
+          : { url: assessmentUrl, plugins: selectedPlugins }),
       }),
     onSuccess: (a) => {
       void client.invalidateQueries({
@@ -58,15 +74,10 @@ export default function NewAssessmentPage() {
           </p>
         </div>
         <span className="badge neutral">
-          {runtime.data?.sandbox_backend === "inmemory"
-            ? "Simulated responses"
-            : runtime.data?.sandbox_backend === "docker"
-              ? "Docker assessment"
-              : "Backend unavailable"}
+          {target.data ? target.data.kind === "website" ? "Website assessment" : "Docker assessment" : "Select a target"}
         </span>
       </header>
       <ErrorMessage error={project.error} />
-      <ErrorMessage error={runtime.error} retry={runtime.refetch} />
       <section className="panel step">
         <span className="step-number">01</span>
         <h2>Target</h2>
@@ -74,10 +85,7 @@ export default function NewAssessmentPage() {
           Registered target
           <select
             value={targetId}
-            onChange={(e) => {
-              setTargetId(e.target.value);
-              setUrl(null);
-            }}
+            onChange={(e) => selectTarget(e.target.value)}
           >
             <option value="">Select a target</option>
             {targetItems.map((t) => (
@@ -102,8 +110,7 @@ export default function NewAssessmentPage() {
           <TargetForm
             projectId={projectId}
             onCreated={(id) => {
-              setTargetId(id);
-              setUrl(null);
+              selectTarget(id);
               setNewTarget(false);
             }}
           />
@@ -117,15 +124,23 @@ export default function NewAssessmentPage() {
       <section className="panel step">
         <span className="step-number">02</span>
         <h2>Response</h2>
-        <label>
+        <label><input type="checkbox" checked={usePlan} onChange={e => {
+          setUsePlan(e.target.checked); if (!routes.length) setRoutes([newRoute(assessmentUrl)]);
+        }} />Use a route plan with response expectations</label>
+        {!usePlan && <label>
           Assessment URL
           <input required type="url" disabled={!target.data}
             value={assessmentUrl}
             onChange={(e) => setUrl(e.target.value)} />
           <FieldError error={create.error} name="url" />
-        </label>
-        <p className="hint">Choose one response within the registered target's origin and path.</p>
+        </label>}
+        <p className="hint">Responses must stay within the registered target's origin and path.</p>
       </section>
+      {usePlan && <RoutePlanEditor routes={routes} onChange={setRoutes} profiles={profiles.data} plugins={plugins.data} selectedPlugins={selectedPlugins} />}
+      {usePlan && <label>Baseline assessment<select value={baseline} onChange={e => setBaseline(e.target.value)}>
+        <option value="">No comparison</option>{history.data?.pages.flatMap(page => page.items).filter(item => item.status === "completed")
+          .map(item => <option key={item.id} value={item.id}>{item.id.slice(0, 8)} · {item.created_at}</option>)}
+      </select></label>}
       <section className="panel step">
         <span className="step-number">03</span>
         <h2>Checks</h2>
@@ -137,13 +152,11 @@ export default function NewAssessmentPage() {
               <input
                 type="checkbox"
                 checked={selectedPlugins.includes(plugin.id)}
-                onChange={(e) =>
-                  setPlugins(
-                    e.target.checked
-                      ? [...selectedPlugins, plugin.id]
-                      : selectedPlugins.filter((p) => p !== plugin.id),
-                  )
-                }
+                onChange={(e) => {
+                  const chosen = e.target.checked ? [...selectedPlugins, plugin.id] : selectedPlugins.filter(p => p !== plugin.id);
+                  setPlugins(chosen);
+                  setRoutes(current => current.map(route => route.plugins === undefined ? selectRoutePlugins(route, chosen, true) : route));
+                }}
               />
               <span>
                 {plugin.name}
@@ -156,17 +169,16 @@ export default function NewAssessmentPage() {
       </section>
       <section className="submit-bar">
         <p>
-          The API rechecks the target boundary before executing. Checks analyze one
-          response.
+          The API rechecks the target boundary and evaluates the declared responses.
         </p>
         <ErrorMessage error={create.error} />
         <button
           disabled={
             create.isPending ||
             !target.data ||
-            !assessmentUrl.trim() ||
-            !selectedPlugins.length ||
-            !runtime.data ||
+            (usePlan ? !routes.length || routes.some(route => !route.url.trim() || !(route.plugins ?? selectedPlugins).length)
+              : !assessmentUrl.trim() || !selectedPlugins.length) ||
+
             !project.data
           }
           onClick={() => {

@@ -21,6 +21,10 @@ NormalizedMediaType = Annotated[
     str, Field(max_length=MEDIA_TYPE_MAX_LENGTH, pattern=rf"^{MEDIA_TYPE_PATTERN}$")
 ]
 
+PluginVersion = Annotated[
+    str, Field(max_length=50, pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
+]
+
 TargetImage = Annotated[
     str,
     Field(

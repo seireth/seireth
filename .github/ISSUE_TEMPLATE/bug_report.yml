@@ -20,7 +20,7 @@ body:
     id: reproduction
     attributes:
       label: Reproduction steps
-      description: Provide the smallest safe, synthetic reproduction.
+      description: Provide the smallest safe, synthetic reproduction, including selected plugins and the request or route plan where relevant.
     validations:
       required: true
   - type: input
@@ -33,6 +33,6 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Include relevant operating system, runtime, and deployment details.
+      description: Include relevant operating system and runtime versions, deployment mode (native API or Docker Compose), and target kind (Docker or website).
     validations:
       required: true

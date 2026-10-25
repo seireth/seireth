@@ -1,14 +1,29 @@
 import type { ReactNode } from "react";
-import type { Assessment, Finding, Result, Status } from "../api/types";
+import type { Assessment, Finding, Result, RouteResult, Status } from "../api/types";
 import { Empty } from "./common";
+
+export function ExecutionMetadata({ result }: { result: Result | null }) {
+  const execution = result?.execution;
+  if (!execution) return null;
+  return <>
+    <dt>Started at (UTC)</dt><dd>{new Date(execution.started_at).toISOString()}</dd>
+    <dt>Execution deadline (UTC)</dt><dd>{new Date(execution.deadline_at).toISOString()}</dd>
+    <dt>Plugin versions</dt><dd>{execution.plugins.map((plugin) => `${plugin.id} ${plugin.version}`).join(" · ")}</dd>
+  </>;
+}
+
+export function IncompleteExecution({ status }: { status: Status }) {
+  if (status !== "failed" && status !== "cancelled") return null;
+  return <p>Execution was incomplete. No clean assessment can be inferred from this result.</p>;
+}
 
 export function AssessmentRequestFields({ assessment, targetUrl }: {
   assessment: Pick<Assessment, "url" | "plugins">;
-  targetUrl?: string;
+  targetUrl: string;
 }) {
   return (
     <>
-      <dt>Target URL</dt><dd>{targetUrl || "Loading…"}</dd>
+      <dt>Target URL</dt><dd>{targetUrl}</dd>
       <dt>Assessment URL</dt><dd>{assessment.url}</dd>
       <dt>Checks</dt><dd>{assessment.plugins.join(", ")}</dd>
     </>
@@ -40,21 +55,21 @@ export function AssessmentSummary({ assessment, findingCount }: {
   );
 }
 
-export function ResponseChecks({ result }: { result: Result | null }) {
-  if (!result?.response) return null;
-  return (
-    <section className="panel" aria-label="Response and check outcomes">
-      <h2>Response and check outcomes</h2>
+export function ResponseDetails({ response, plugins }: {
+  response: NonNullable<RouteResult["response"]>;
+  plugins: RouteResult["plugins"];
+}) {
+  return <>
       <dl>
-        <dt>HTTP status</dt><dd>{result.response.status_code}</dd>
-        <dt>Declared media type</dt><dd>{result.response.media_type ?? "Unknown"}</dd>
+        <dt>HTTP status</dt><dd>{response.status_code}</dd>
+        <dt>Declared media type</dt><dd>{response.media_type ?? "Unknown"}</dd>
       </dl>
       <p>Outcomes cover only the listed rules and declared response metadata.</p>
-      {result.plugins?.filter((plugin) => plugin.checks?.length).map((plugin) => (
+      {plugins.filter((plugin) => plugin.checks.length).map((plugin) => (
         <div key={plugin.id}>
           <h3>{plugin.id}</h3>
           <ul className="check-outcomes">
-            {plugin.checks?.map((check) => (
+            {plugin.checks.map((check) => (
               <li key={check.rule_id}>
                 <span className={`badge check-${check.status}`}>{check.status}</span>{" "}
                 <strong>{check.rule_id}</strong><p>{check.reason}</p>
@@ -63,8 +78,7 @@ export function ResponseChecks({ result }: { result: Result | null }) {
           </ul>
         </div>
       ))}
-    </section>
-  );
+  </>;
 }
 
 export function EmptyFindings({ status }: { status: Status }) {
@@ -73,9 +87,10 @@ export function EmptyFindings({ status }: { status: Status }) {
     : "This assessment produced no persisted findings."}</Empty>;
 }
 
-export function FindingDetails({ finding, children, expanded = false }: {
+export function FindingDetails({ finding, children, routes, expanded = false }: {
   finding: Finding;
   children: ReactNode;
+  routes?: Result["routes"];
   expanded?: boolean;
 }) {
   return (
@@ -87,7 +102,9 @@ export function FindingDetails({ finding, children, expanded = false }: {
       <h3>{finding.title}</h3><p>{finding.description}</p>
       <h4>Remediation</h4><p>{finding.remediation}</p>
       <details open={expanded || undefined}>
-        <summary>Evidence</summary>{children}
+        <summary>Evidence</summary>
+        <p>Route: {routes?.find(route => route.id === finding.route_result_id)?.key ?? finding.route_result_id}</p>
+        {children}
       </details>
     </article>
   );
